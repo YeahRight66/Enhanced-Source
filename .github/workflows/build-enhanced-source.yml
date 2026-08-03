@@ -684,6 +684,7 @@ jobs:
           exit /b 0
 
       - name: Validate generated shader combo headers
+        if: steps.shader_changes.outputs.compile != 'true'
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
