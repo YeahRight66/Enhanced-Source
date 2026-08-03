@@ -652,17 +652,32 @@ jobs:
           del /f /q "makefile.deferred_shaders" 2>nul
           del /f /q "makefile.deferred_shaders.copy" 2>nul
 
+          rem First pass: generate the native VS20/PS20/PS20b headers
+          rem required by deferred_decalModulate.cpp.
+          call buildshaders.bat ^
+            deferred_shaders ^
+            -game "%GAMEDIR%" ^
+            -source "%SOURCEDIR%" ^
+            -dx9_30 ^
+            > "%GITHUB_WORKSPACE%\%ARTIFACT_DIR%\shader-headers-sm2.log" 2>&1
+
+          rem Second pass: generate the forced VS30/PS30 headers. Do not delete
+          rem fxctmp9 between passes; both header families are required.
           call buildshaders.bat ^
             deferred_shaders ^
             -game "%GAMEDIR%" ^
             -source "%SOURCEDIR%" ^
             -dx9_30 ^
             -force30 ^
-            > "%GITHUB_WORKSPACE%\%ARTIFACT_DIR%\shader-headers.log" 2>&1
+            > "%GITHUB_WORKSPACE%\%ARTIFACT_DIR%\shader-headers-sm3.log" 2>&1
 
           popd
 
-          type "%GITHUB_WORKSPACE%\%ARTIFACT_DIR%\shader-headers.log"
+          echo === Native SM2 header generation ===
+          type "%GITHUB_WORKSPACE%\%ARTIFACT_DIR%\shader-headers-sm2.log"
+
+          echo === Forced SM3 header generation ===
+          type "%GITHUB_WORKSPACE%\%ARTIFACT_DIR%\shader-headers-sm3.log"
 
           rem Valve's batch file does not reliably return failures.
           rem The next step validates the generated headers exactly.
@@ -675,7 +690,33 @@ jobs:
 
           $root = "src\materialsystem\deferredshaders\fxctmp9"
 
+          $headerLogs = @(
+              "$env:ARTIFACT_DIR\shader-headers-sm2.log",
+              "$env:ARTIFACT_DIR\shader-headers-sm3.log"
+          )
+
+          foreach ($log in $headerLogs) {
+              if (!(Test-Path $log)) {
+                  throw "Shader header-generation log is missing: $log"
+              }
+
+              $logText = Get-Content $log -Raw
+
+              if ($logText -match '(?im)Running distributed shader compilation') {
+                  throw "Header-only mode unexpectedly launched shadercompile.exe: $log"
+              }
+
+              if ($logText -match '(?im)\bfatal error\b|NMAKE\s*:\s*fatal error|Can''t locate') {
+                  throw "Header generation failed; inspect $log"
+              }
+          }
+
           $requiredFiles = @(
+              "decalmodulate_vs20.inc",
+              "decalmodulate_ps20.inc",
+              "decalmodulate_ps20b.inc",
+              "decalmodulate_vs30.inc",
+              "decalmodulate_ps30.inc",
               "radiosity_blend_ps30.inc",
               "radiosity_gen_global_ps30.inc",
               "radiosity_propagate_ps30.inc",
