@@ -26,19 +26,25 @@ jobs:
   build:
     name: ${{ inputs.configuration || 'Debug' }} Win32
     runs-on: windows-2022
-    timeout-minutes: 60
+    timeout-minutes: 90
 
     env:
       BUILD_CONFIGURATION: ${{ inputs.configuration || 'Debug' }}
-      SOLUTION_PATH: src\Game_Deferred-2019.sln
       ARTIFACT_DIR: artifacts
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Add MSBuild to PATH
-        uses: microsoft/setup-msbuild@v2
+        uses: microsoft/setup-msbuild@v3
+        with:
+          msbuild-architecture: x64
+
+      - name: Prepare artifact directory
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:ARTIFACT_DIR | Out-Null
 
       - name: Verify v142 toolset
         shell: powershell
@@ -46,144 +52,132 @@ jobs:
           $ErrorActionPreference = "Stop"
 
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          if (!(Test-Path $vswhere)) {
-              throw "vswhere.exe was not found."
-          }
-
           $vsPath = & $vswhere `
               -latest `
               -products * `
-              -requires Microsoft.VisualStudio.ComponentGroup.VC.Tools.142.x86.x64 `
+              -requires Microsoft.VisualStudio.Component.VC.v142.x86.x64 `
               -property installationPath
 
           if (!$vsPath) {
-              throw "The MSVC v142 x86/x64 toolset is not installed on this runner."
+              $vsPath = & $vswhere `
+                  -latest `
+                  -products * `
+                  -requires Microsoft.VisualStudio.ComponentGroup.VC.Tools.142.x86.x64 `
+                  -property installationPath
           }
 
-          Write-Host "Visual Studio installation: $vsPath"
-          Write-Host "Available MSVC toolsets:"
+          if (!$vsPath) {
+              throw "MSVC v142 x86/x64 was not found on the runner."
+          }
+
+          Write-Host "Visual Studio: $vsPath"
+          Write-Host "MSBuild:"
+          Get-Command msbuild.exe | Format-List Source
+          Write-Host "Installed MSVC versions:"
           Get-ChildItem "$vsPath\VC\Tools\MSVC" -Directory |
               Select-Object -ExpandProperty Name
 
-          Write-Host "MSBuild:"
-          Get-Command msbuild.exe | Format-List Source
-          msbuild.exe -version
-
       - name: Generate Deferred solution with VPC
-        shell: powershell
+        shell: cmd
+        working-directory: src
         run: |
-          $ErrorActionPreference = "Stop"
-          Push-Location src
+          @echo off
+          echo === VPC output === > "..\%ARTIFACT_DIR%\vpc.log"
 
-          & ".\devtools\bin\vpc.exe" `
-              /deferred `
-              +game `
-              /mksln Game_Deferred-2019.sln `
-              /2013 `
-              /define:VS2019
+          devtools\bin\vpc.exe /deferred +game /mksln Game_Deferred-2019.sln /2013 /define:VS2019 >> "..\%ARTIFACT_DIR%\vpc.log" 2>&1
 
-          if ($LASTEXITCODE -ne 0) {
-              throw "VPC failed with exit code $LASTEXITCODE."
-          }
+          echo. >> "..\%ARTIFACT_DIR%\vpc.log"
+          echo VPC exit code: %ERRORLEVEL% >> "..\%ARTIFACT_DIR%\vpc.log"
+          type "..\%ARTIFACT_DIR%\vpc.log"
 
-          if (!(Test-Path "Game_Deferred-2019.sln")) {
-              throw "VPC did not create Game_Deferred-2019.sln."
-          }
+          rem This old VPC executable returns exit code 1 on modern hosted
+          rem runners after successfully writing the solution because it cannot
+          rem find the old Visual Studio project-file registry association.
+          rem Treat generation as successful only when every required output exists.
 
-          Pop-Location
+          if not exist "Game_Deferred-2019.sln" goto VPC_FAILED
+          if not exist "client_deferred.vcxproj" goto VPC_FAILED
+          if not exist "server_deferred.vcxproj" goto VPC_FAILED
+          if not exist "shaderlib.vcxproj" goto VPC_FAILED
+          if not exist "game_shader_deferred.vcxproj" goto VPC_FAILED
 
-      - name: Remove stale output files
-        shell: powershell
-        run: |
-          $files = @(
-              "game\deferred\bin\client.dll",
-              "game\deferred\bin\client.pdb",
-              "game\deferred\bin\server.dll",
-              "game\deferred\bin\server.pdb",
-              "game\deferred\bin\game_shader_generic_deferred.dll",
-              "game\deferred\bin\game_shader_generic_deferred.pdb"
-          )
+          echo VPC generated the solution and all four projects successfully.
+          copy /y "Game_Deferred-2019.sln" "..\%ARTIFACT_DIR%\Game_Deferred-2019.sln" >nul
+          exit /b 0
 
-          Remove-Item $files -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Force -Path $env:ARTIFACT_DIR | Out-Null
+          :VPC_FAILED
+          echo ERROR: VPC did not generate all required solution/project files.
+          dir /b Game_Deferred-2019.sln *.vcxproj 2>nul
+          exit /b 1
 
       - name: Build Deferred solution
-        shell: powershell
+        shell: cmd
         run: |
-          $ErrorActionPreference = "Stop"
+          @echo off
+          msbuild.exe "src\Game_Deferred-2019.sln" ^
+            /m ^
+            /t:Build ^
+            /p:Configuration=%BUILD_CONFIGURATION% ^
+            /p:Platform=Win32 ^
+            /p:PlatformToolset=v142 ^
+            /p:PreferredToolArchitecture=x64 ^
+            /verbosity:minimal ^
+            /bl:"%ARTIFACT_DIR%\EnhancedSource-%BUILD_CONFIGURATION%.binlog" ^
+            /fl ^
+            /flp:"logfile=%ARTIFACT_DIR%\EnhancedSource-%BUILD_CONFIGURATION%.log;verbosity=diagnostic" ^
+            > "%ARTIFACT_DIR%\msbuild-console.log" 2>&1
 
-          msbuild.exe $env:SOLUTION_PATH `
-              /m `
-              /t:Build `
-              /p:Configuration=$env:BUILD_CONFIGURATION `
-              /p:Platform=Win32 `
-              /p:PreferredToolArchitecture=x64 `
-              /verbosity:minimal `
-              /bl:"$env:ARTIFACT_DIR\EnhancedSource-$env:BUILD_CONFIGURATION.binlog" `
-              /fl `
-              /flp:"logfile=$env:ARTIFACT_DIR\EnhancedSource-$env:BUILD_CONFIGURATION.log;verbosity=diagnostic"
-
-          if ($LASTEXITCODE -ne 0) {
-              throw "MSBuild failed with exit code $LASTEXITCODE."
-          }
+          set "BUILD_RESULT=%ERRORLEVEL%"
+          type "%ARTIFACT_DIR%\msbuild-console.log"
+          exit /b %BUILD_RESULT%
 
       - name: Collect compiled binaries
+        if: success()
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
 
-          $outputDir = "game\deferred\bin"
-          $packageDir = "$env:ARTIFACT_DIR\Enhanced-Source-$env:BUILD_CONFIGURATION-Win32"
+          $source = "game\deferred\bin"
+          $destination = "$env:ARTIFACT_DIR\Enhanced-Source-$env:BUILD_CONFIGURATION-Win32"
 
           $required = @(
-              "$outputDir\client.dll",
-              "$outputDir\server.dll",
-              "$outputDir\game_shader_generic_deferred.dll"
+              "$source\client.dll",
+              "$source\server.dll",
+              "$source\game_shader_generic_deferred.dll"
           )
 
           $missing = $required | Where-Object { !(Test-Path $_) }
           if ($missing) {
-              throw "Missing expected build outputs: $($missing -join ', ')"
+              throw "Missing expected outputs: $($missing -join ', ')"
           }
 
-          New-Item -ItemType Directory -Force -Path $packageDir | Out-Null
+          New-Item -ItemType Directory -Force -Path $destination | Out-Null
 
-          $files = @(
-              "$outputDir\client.dll",
-              "$outputDir\client.pdb",
-              "$outputDir\server.dll",
-              "$outputDir\server.pdb",
-              "$outputDir\game_shader_generic_deferred.dll",
-              "$outputDir\game_shader_generic_deferred.pdb"
-          )
+          Get-ChildItem $source -File |
+              Where-Object { $_.Extension -in ".dll", ".pdb", ".map" } |
+              Copy-Item -Destination $destination -Force
 
-          foreach ($file in $files) {
-              if (Test-Path $file) {
-                  Copy-Item $file $packageDir -Force
-              }
-          }
-
-          Get-ChildItem $packageDir |
+          Get-ChildItem $destination |
               Select-Object Name, Length, LastWriteTime |
               Format-Table -AutoSize
 
-      - name: Upload compiled DLLs
+      - name: Upload compiled binaries
         if: success()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: Enhanced-Source-${{ env.BUILD_CONFIGURATION }}-Win32
-          path: artifacts/Enhanced-Source-${{ env.BUILD_CONFIGURATION }}-Win32/*
+          path: artifacts/Enhanced-Source-${{ env.BUILD_CONFIGURATION }}-Win32/**
           if-no-files-found: error
           retention-days: 30
 
-      - name: Upload build logs
+      - name: Upload diagnostic logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
-          name: Enhanced-Source-${{ env.BUILD_CONFIGURATION }}-Build-Logs
+          name: Enhanced-Source-${{ env.BUILD_CONFIGURATION }}-Diagnostic-Logs
           path: |
-            artifacts/*.log
-            artifacts/*.binlog
+            artifacts/**
             src/Game_Deferred-2019.sln
+            src/*.vcxproj
           if-no-files-found: warn
           retention-days: 30
