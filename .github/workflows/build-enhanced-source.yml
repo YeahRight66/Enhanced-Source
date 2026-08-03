@@ -1,22 +1,27 @@
-name: Build Enhanced Source
+name: Build Enhanced Source With Deferred Shaders
 
 on:
   workflow_dispatch:
     inputs:
       configuration:
-        description: Build configuration
+        description: C++ build configuration
         required: true
         default: Debug
         type: choice
         options:
           - Debug
           - Release
+
   push:
     branches:
       - master
       - main
     paths:
       - "src/**"
+      - "game/bin/shadercompile.exe"
+      - "game/bin/shadercompile_dll.dll"
+      - "game/bin/tier0.dll"
+      - "game/bin/vstdlib.dll"
       - ".github/workflows/build-enhanced-source.yml"
 
 permissions:
@@ -24,9 +29,9 @@ permissions:
 
 jobs:
   build:
-    name: ${{ inputs.configuration || 'Debug' }} Win32
+    name: Deferred shaders + ${{ inputs.configuration || 'Debug' }} Win32
     runs-on: windows-2022
-    timeout-minutes: 90
+    timeout-minutes: 120
 
     env:
       BUILD_CONFIGURATION: ${{ inputs.configuration || 'Debug' }}
@@ -34,22 +39,19 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Add MSBuild to PATH
-        uses: microsoft/setup-msbuild@v2
+        uses: microsoft/setup-msbuild@v3
         with:
           msbuild-architecture: x64
 
-      - name: Prepare artifact directory
-        shell: powershell
-        run: |
-          New-Item -ItemType Directory -Force -Path $env:ARTIFACT_DIR | Out-Null
-
-      - name: Verify MSVC v142
+      - name: Prepare build environment
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
+
+          New-Item -ItemType Directory -Force -Path $env:ARTIFACT_DIR | Out-Null
 
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
 
@@ -68,14 +70,24 @@ jobs:
           }
 
           if (!$vsPath) {
-              throw "MSVC v142 x86/x64 was not found on the runner."
+              throw "MSVC v142 x86/x64 was not found on the windows-2022 runner."
           }
 
+          $vsDevCmd = Join-Path $vsPath "Common7\Tools\VsDevCmd.bat"
+
+          if (!(Test-Path $vsDevCmd)) {
+              throw "VsDevCmd.bat was not found: $vsDevCmd"
+          }
+
+          "VS_PATH=$vsPath" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          "VSDEVCMD=$vsDevCmd" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+
           Write-Host "Visual Studio: $vsPath"
+          Write-Host "Developer environment: $vsDevCmd"
           Write-Host "MSBuild:"
           Get-Command msbuild.exe | Format-List Source
 
-          Write-Host "Installed MSVC versions:"
+          Write-Host "Installed MSVC toolsets:"
           Get-ChildItem "$vsPath\VC\Tools\MSVC" -Directory |
               Select-Object -ExpandProperty Name
 
@@ -119,10 +131,217 @@ jobs:
             /reg:32
           if errorlevel 1 exit /b 1
 
-          echo === Verify legacy Visual C++ project entry ===
           reg query "HKLM\SOFTWARE\Microsoft\VisualStudio\10.0\Projects\%CPP_GUID%" ^
             /v DefaultProjectExtension ^
             /reg:32
+
+      - name: Verify shader compiler files
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $required = @(
+              "game\bin\shadercompile.exe",
+              "game\bin\shadercompile_dll.dll",
+              "game\bin\tier0.dll",
+              "game\bin\vstdlib.dll",
+              "game\deferred\gameinfo.txt",
+              "src\devtools\bin\updateshaders.pl",
+              "src\devtools\bin\fxc_prep.pl",
+              "src\devtools\bin\copyshaderincfiles.pl",
+              "src\devtools\bin\d3dx9_33.dll",
+              "src\dx10sdk\utilities\dx9_30\dx_proxy.dll",
+              "src\materialsystem\deferredshaders\buildshaders.bat",
+              "src\materialsystem\deferredshaders\deferred_shaders.txt"
+          )
+
+          foreach ($file in $required) {
+              if (!(Test-Path $file)) {
+                  throw "Required shader build file is missing: $file"
+              }
+
+              $item = Get-Item $file
+              Write-Host "$file  [$($item.Length) bytes]"
+          }
+
+      - name: Remove stale deferred shader outputs
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $patterns = @(
+              "src\materialsystem\deferredshaders\shaders\fxc\*.vcs",
+              "src\materialsystem\deferredshaders\fxctmp9\*.inc",
+              "src\materialsystem\deferredshaders\fxctmp9_tmp\*.inc",
+              "game\deferred\shaders\fxc\*.vcs"
+          )
+
+          foreach ($pattern in $patterns) {
+              Remove-Item $pattern -Force -ErrorAction SilentlyContinue
+          }
+
+          $temporaryFiles = @(
+              "src\materialsystem\deferredshaders\filelist.txt",
+              "src\materialsystem\deferredshaders\filelistgen.txt",
+              "src\materialsystem\deferredshaders\filestocopy.txt",
+              "src\materialsystem\deferredshaders\uniquefilestocopy.txt",
+              "src\materialsystem\deferredshaders\inclist.txt",
+              "src\materialsystem\deferredshaders\vcslist.txt"
+          )
+
+          Remove-Item $temporaryFiles -Force -ErrorAction SilentlyContinue
+
+          New-Item -ItemType Directory -Force `
+              -Path "src\materialsystem\deferredshaders\shaders\fxc" |
+              Out-Null
+
+          New-Item -ItemType Directory -Force `
+              -Path "game\deferred\shaders\fxc" |
+              Out-Null
+
+      - name: Compile all Deferred HLSL shaders
+        shell: cmd
+        run: |
+          @echo off
+          setlocal EnableExtensions
+
+          call "%VSDEVCMD%" -no_logo -arch=x86 -host_arch=x64
+          if errorlevel 1 (
+              echo ERROR: Failed to initialize the Visual Studio developer environment.
+              exit /b 1
+          )
+
+          where nmake.exe
+          if errorlevel 1 (
+              echo ERROR: nmake.exe is not available.
+              exit /b 1
+          )
+
+          where perl.exe
+          if errorlevel 1 (
+              echo ERROR: perl.exe is not available.
+              exit /b 1
+          )
+
+          set "GAMEDIR=%GITHUB_WORKSPACE%\game\deferred"
+          set "SDKBINDIR=%GITHUB_WORKSPACE%\game\bin"
+          set "SOURCEDIR=%GITHUB_WORKSPACE%\src"
+          set "SHADER_LOG=%GITHUB_WORKSPACE%\%ARTIFACT_DIR%\shader-build.log"
+          set "dynamic_shaders=0"
+
+          pushd "%GITHUB_WORKSPACE%\src\materialsystem\deferredshaders"
+
+          echo Shader source: %CD%
+          echo Game directory: %GAMEDIR%
+          echo SDK binary directory: %SDKBINDIR%
+          echo Source root: %SOURCEDIR%
+
+          call buildshaders.bat ^
+            deferred_shaders ^
+            -game "%GAMEDIR%" ^
+            -source "%SOURCEDIR%" ^
+            -dx9_30 ^
+            -force30 ^
+            > "%SHADER_LOG%" 2>&1
+
+          set "SHADER_SCRIPT_RESULT=%ERRORLEVEL%"
+          popd
+
+          type "%SHADER_LOG%"
+          echo buildshaders.bat exit code: %SHADER_SCRIPT_RESULT%
+
+          rem The old Valve batch file does not reliably propagate failures.
+          rem The next PowerShell step validates every expected .vcs file and
+          rem scans the complete shader log for actual compiler errors.
+          exit /b 0
+
+      - name: Validate compiled Deferred shaders
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $shaderRoot = "src\materialsystem\deferredshaders"
+          $sourceOutput = Join-Path $shaderRoot "shaders\fxc"
+          $gameOutput = "game\deferred\shaders\fxc"
+          $shaderList = Join-Path $shaderRoot "deferred_shaders.txt"
+          $logPath = Join-Path $env:ARTIFACT_DIR "shader-build.log"
+
+          if (!(Test-Path $logPath)) {
+              throw "Shader build log was not produced."
+          }
+
+          $logText = Get-Content $logPath -Raw
+
+          $fatalPatterns = @(
+              '(?im)\bfatal error\b',
+              '(?im)\berror\s+X\d+\b',
+              '(?im)\berror\s+C\d+\b',
+              '(?im)\bERROR\(S\):\s*[1-9]\d*\b',
+              '(?im)\bshader compile failed\b'
+          )
+
+          foreach ($pattern in $fatalPatterns) {
+              if ($logText -match $pattern) {
+                  throw "Shader compiler errors were found in shader-build.log. First match: $($Matches[0])"
+              }
+          }
+
+          $shaderSources = Get-Content $shaderList |
+              ForEach-Object { $_.Trim() } |
+              Where-Object { $_ -and !$_.StartsWith("//") -and !$_.StartsWith("#") }
+
+          $expected = New-Object System.Collections.Generic.List[string]
+
+          foreach ($source in $shaderSources) {
+              if ($source -match '^(.*)_ps2x\.fxc$') {
+                  $base = $Matches[1]
+                  $expected.Add("${base}_ps20.vcs")
+                  $expected.Add("${base}_ps20b.vcs")
+                  $expected.Add("${base}_ps30.vcs")
+              }
+              elseif ($source -match '\.fxc$') {
+                  $expected.Add([System.IO.Path]::ChangeExtension($source, ".vcs"))
+              }
+              else {
+                  throw "Unsupported shader-list entry: $source"
+              }
+          }
+
+          $expected = $expected | Sort-Object -Unique
+
+          $missing = New-Object System.Collections.Generic.List[string]
+          $empty = New-Object System.Collections.Generic.List[string]
+
+          foreach ($name in $expected) {
+              foreach ($directory in @($sourceOutput, $gameOutput)) {
+                  $path = Join-Path $directory $name
+
+                  if (!(Test-Path $path)) {
+                      $missing.Add($path)
+                      continue
+                  }
+
+                  if ((Get-Item $path).Length -le 0) {
+                      $empty.Add($path)
+                  }
+              }
+          }
+
+          if ($missing.Count -gt 0) {
+              throw "Missing compiled shader files:`n$($missing -join "`n")"
+          }
+
+          if ($empty.Count -gt 0) {
+              throw "Zero-byte compiled shader files:`n$($empty -join "`n")"
+          }
+
+          Write-Host "Compiled shader files:"
+          Get-ChildItem $gameOutput -Filter *.vcs |
+              Sort-Object Name |
+              Select-Object Name, Length, LastWriteTime |
+              Format-Table -AutoSize
+
+          Write-Host "Validated $($expected.Count) expected VCS files in both output directories."
 
       - name: Generate Deferred solution with VPC
         shell: cmd
@@ -148,53 +367,23 @@ jobs:
           type "..\%ARTIFACT_DIR%\vpc.log"
 
           if not "%VPC_RESULT%"=="0" (
-              echo ERROR: VPC returned exit code %VPC_RESULT%.
               exit /b %VPC_RESULT%
           )
 
-          rem VPC writes each project beside its source .vpc file.
-          set "CLIENT_PROJECT=game\client\client_deferred.vcxproj"
-          set "SERVER_PROJECT=game\server\server_deferred.vcxproj"
-          set "SHADERLIB_PROJECT=materialsystem\shaderlib\shaderlib.vcxproj"
-          set "DEFERRED_SHADER_PROJECT=materialsystem\deferredshaders\game_shader_deferred.vcxproj"
-
-          if not exist "Game_Deferred-2019.sln" (
-              echo ERROR: Game_Deferred-2019.sln was not generated.
+          for %%F in (
+            "Game_Deferred-2019.sln"
+            "game\client\client_deferred.vcxproj"
+            "game\server\server_deferred.vcxproj"
+            "materialsystem\shaderlib\shaderlib.vcxproj"
+            "materialsystem\deferredshaders\game_shader_deferred.vcxproj"
+          ) do (
+            if not exist %%F (
+              echo ERROR: Required generated file is missing: %%F
               exit /b 1
+            )
           )
 
-          if not exist "%CLIENT_PROJECT%" (
-              echo ERROR: Missing %CLIENT_PROJECT%
-              exit /b 1
-          )
-
-          if not exist "%SERVER_PROJECT%" (
-              echo ERROR: Missing %SERVER_PROJECT%
-              exit /b 1
-          )
-
-          if not exist "%SHADERLIB_PROJECT%" (
-              echo ERROR: Missing %SHADERLIB_PROJECT%
-              exit /b 1
-          )
-
-          if not exist "%DEFERRED_SHADER_PROJECT%" (
-              echo ERROR: Missing %DEFERRED_SHADER_PROJECT%
-              exit /b 1
-          )
-
-          echo === Projects referenced by solution ===
-          findstr /I /C:".vcxproj" Game_Deferred-2019.sln
-
-          echo === Generated project files ===
-          echo %CLIENT_PROJECT%
-          echo %SERVER_PROJECT%
-          echo %SHADERLIB_PROJECT%
-          echo %DEFERRED_SHADER_PROJECT%
-
-          copy /y "Game_Deferred-2019.sln" "..\%ARTIFACT_DIR%\Game_Deferred-2019.sln" >nul
-
-      - name: Build Deferred solution
+      - name: Build Deferred C++ solution
         shell: cmd
         run: |
           @echo off
@@ -217,58 +406,69 @@ jobs:
           type "%ARTIFACT_DIR%\msbuild-console.log"
           exit /b %BUILD_RESULT%
 
-      - name: Collect compiled binaries
+      - name: Create ready-to-copy game patch
         if: success()
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
 
-          $source = "game\deferred\bin"
-          $destination = "$env:ARTIFACT_DIR\Enhanced-Source-$env:BUILD_CONFIGURATION-Win32"
+          $packageRoot = Join-Path `
+              $env:ARTIFACT_DIR `
+              "Enhanced-Source-$env:BUILD_CONFIGURATION-Game-Patch"
 
-          $required = @(
-              "$source\client.dll",
-              "$source\server.dll",
-              "$source\game_shader_generic_deferred.dll"
+          $binTarget = Join-Path $packageRoot "bin"
+          $shaderTarget = Join-Path $packageRoot "shaders"
+
+          New-Item -ItemType Directory -Force -Path $binTarget | Out-Null
+          New-Item -ItemType Directory -Force -Path $shaderTarget | Out-Null
+
+          $requiredDlls = @(
+              "game\deferred\bin\client.dll",
+              "game\deferred\bin\server.dll",
+              "game\deferred\bin\game_shader_generic_deferred.dll"
           )
 
-          $missing = $required | Where-Object { !(Test-Path $_) }
+          $missingDlls = $requiredDlls |
+              Where-Object { !(Test-Path $_) }
 
-          if ($missing) {
-              throw "Missing expected outputs: $($missing -join ', ')"
+          if ($missingDlls) {
+              throw "Missing compiled DLLs: $($missingDlls -join ', ')"
           }
 
-          New-Item -ItemType Directory -Force -Path $destination | Out-Null
-
-          Get-ChildItem $source -File |
+          Get-ChildItem "game\deferred\bin" -File |
               Where-Object { $_.Extension -in ".dll", ".pdb", ".map" } |
-              Copy-Item -Destination $destination -Force
+              Copy-Item -Destination $binTarget -Force
 
-          Get-ChildItem $destination |
-              Select-Object Name, Length, LastWriteTime |
+          Copy-Item `
+              "game\deferred\shaders\*" `
+              $shaderTarget `
+              -Recurse `
+              -Force
+
+          Write-Host "Ready-to-copy package:"
+          Get-ChildItem $packageRoot -Recurse -File |
+              Select-Object FullName, Length |
               Format-Table -AutoSize
 
-      - name: Upload compiled binaries
+      - name: Upload game patch
         if: success()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
-          name: Enhanced-Source-${{ env.BUILD_CONFIGURATION }}-Win32
-          path: artifacts/Enhanced-Source-${{ env.BUILD_CONFIGURATION }}-Win32/**
+          name: Enhanced-Source-${{ env.BUILD_CONFIGURATION }}-With-Deferred-Shaders
+          path: artifacts/Enhanced-Source-${{ env.BUILD_CONFIGURATION }}-Game-Patch/**
           if-no-files-found: error
           retention-days: 30
 
       - name: Upload diagnostic logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
-          name: Enhanced-Source-${{ env.BUILD_CONFIGURATION }}-Diagnostic-Logs
+          name: Enhanced-Source-${{ env.BUILD_CONFIGURATION }}-Build-Logs
           path: |
-            artifacts/**
+            artifacts/*.log
+            artifacts/*.binlog
             src/Game_Deferred-2019.sln
-            src/game/client/client_deferred.vcxproj
-            src/game/server/server_deferred.vcxproj
-            src/materialsystem/shaderlib/shaderlib.vcxproj
-            src/materialsystem/deferredshaders/game_shader_deferred.vcxproj
-            src/**/*.vcxproj.filters
+            src/materialsystem/deferredshaders/fxctmp9/*.inc
+            src/materialsystem/deferredshaders/fxctmp9_tmp/*.inc
           if-no-files-found: warn
           retention-days: 30
