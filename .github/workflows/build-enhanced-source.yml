@@ -135,6 +135,32 @@ jobs:
             /v DefaultProjectExtension ^
             /reg:32
 
+      - name: Install required Perl CRC32 module
+        shell: cmd
+        run: |
+          @echo off
+          setlocal EnableExtensions
+
+          perl -MString::CRC32 -e "print qq(String::CRC32 already installed\n)" >nul 2>&1
+          if not errorlevel 1 goto CRC_READY
+
+          echo Installing String::CRC32 from CPAN...
+          set "PERL_MM_USE_DEFAULT=1"
+          set "NONINTERACTIVE_TESTING=1"
+
+          cpan -T -i String::CRC32
+          if errorlevel 1 (
+              echo ERROR: CPAN failed to install String::CRC32.
+              exit /b 1
+          )
+
+          :CRC_READY
+          perl -MString::CRC32 -e "print qq(String::CRC32 is available\n)"
+          if errorlevel 1 (
+              echo ERROR: Perl still cannot load String::CRC32.
+              exit /b 1
+          )
+
       - name: Verify shader compiler files
         shell: powershell
         run: |
@@ -164,21 +190,73 @@ jobs:
               Write-Host "$file  [$($item.Length) bytes]"
           }
 
-      - name: Remove stale deferred shader outputs
+      - name: Force rebuild of every Deferred shader
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
 
-          $patterns = @(
-              "src\materialsystem\deferredshaders\shaders\fxc\*.vcs",
-              "src\materialsystem\deferredshaders\fxctmp9\*.inc",
-              "src\materialsystem\deferredshaders\fxctmp9_tmp\*.inc",
-              "game\deferred\shaders\fxc\*.vcs"
+          $shaderRoot = "src\materialsystem\deferredshaders"
+          $shaderList = Join-Path $shaderRoot "deferred_shaders.txt"
+
+          $shaderSources = Get-Content $shaderList |
+              ForEach-Object { $_.Trim() } |
+              Where-Object {
+                  $_ -and
+                  !$_.StartsWith("//") -and
+                  !$_.StartsWith("#")
+              }
+
+          $expected = New-Object System.Collections.Generic.List[string]
+
+          foreach ($source in $shaderSources) {
+              if ($source -match '^(.*)_ps2x\.fxc$') {
+                  $base = $Matches[1]
+                  $expected.Add("${base}_ps20.vcs")
+                  $expected.Add("${base}_ps20b.vcs")
+                  $expected.Add("${base}_ps30.vcs")
+              }
+              elseif ($source -match '\.fxc$') {
+                  $expected.Add(
+                      [System.IO.Path]::ChangeExtension($source, ".vcs")
+                  )
+              }
+              else {
+                  throw "Unsupported shader-list entry: $source"
+              }
+          }
+
+          $expected = $expected | Sort-Object -Unique
+
+          # updateshaders.pl compares CRCs against game\platform\shaders.
+          # Delete only this project's expected VCS files there, otherwise
+          # unchanged committed bytecode can make the build skip compilation.
+          $outputDirectories = @(
+              "src\materialsystem\deferredshaders\shaders\fxc",
+              "game\deferred\shaders\fxc",
+              "game\platform\shaders\fxc"
           )
 
-          foreach ($pattern in $patterns) {
-              Remove-Item $pattern -Force -ErrorAction SilentlyContinue
+          foreach ($directory in $outputDirectories) {
+              New-Item -ItemType Directory -Force -Path $directory |
+                  Out-Null
+
+              foreach ($name in $expected) {
+                  Remove-Item `
+                      (Join-Path $directory $name) `
+                      -Force `
+                      -ErrorAction SilentlyContinue
+              }
           }
+
+          Remove-Item `
+              "src\materialsystem\deferredshaders\fxctmp9\*.inc" `
+              -Force `
+              -ErrorAction SilentlyContinue
+
+          Remove-Item `
+              "src\materialsystem\deferredshaders\fxctmp9_tmp\*.inc" `
+              -Force `
+              -ErrorAction SilentlyContinue
 
           $temporaryFiles = @(
               "src\materialsystem\deferredshaders\filelist.txt",
@@ -186,18 +264,14 @@ jobs:
               "src\materialsystem\deferredshaders\filestocopy.txt",
               "src\materialsystem\deferredshaders\uniquefilestocopy.txt",
               "src\materialsystem\deferredshaders\inclist.txt",
-              "src\materialsystem\deferredshaders\vcslist.txt"
+              "src\materialsystem\deferredshaders\vcslist.txt",
+              "src\materialsystem\deferredshaders\makefile.deferred_shaders",
+              "src\materialsystem\deferredshaders\makefile.deferred_shaders.copy"
           )
 
           Remove-Item $temporaryFiles -Force -ErrorAction SilentlyContinue
 
-          New-Item -ItemType Directory -Force `
-              -Path "src\materialsystem\deferredshaders\shaders\fxc" |
-              Out-Null
-
-          New-Item -ItemType Directory -Force `
-              -Path "game\deferred\shaders\fxc" |
-              Out-Null
+          Write-Host "Forced rebuild of $($expected.Count) Deferred VCS files."
 
       - name: Compile all Deferred HLSL shaders
         shell: cmd
@@ -223,13 +297,22 @@ jobs:
               exit /b 1
           )
 
-          set "GAMEDIR=%GITHUB_WORKSPACE%\game\deferred"
-          set "SDKBINDIR=%GITHUB_WORKSPACE%\game\bin"
-          set "SOURCEDIR=%GITHUB_WORKSPACE%\src"
+          perl -MString::CRC32 -e "print qq(String::CRC32 OK\n)"
+          if errorlevel 1 (
+              echo ERROR: String::CRC32 is unavailable.
+              exit /b 1
+          )
+
           set "SHADER_LOG=%GITHUB_WORKSPACE%\%ARTIFACT_DIR%\shader-build.log"
           set "dynamic_shaders=0"
 
           pushd "%GITHUB_WORKSPACE%\src\materialsystem\deferredshaders"
+
+          rem These must stay relative. Valve's shadercompile worklist resolves
+          rem them against the shader source directory.
+          set "GAMEDIR=..\..\..\game\deferred"
+          set "SDKBINDIR=..\..\..\game\bin"
+          set "SOURCEDIR=..\.."
 
           echo Shader source: %CD%
           echo Game directory: %GAMEDIR%
@@ -250,9 +333,8 @@ jobs:
           type "%SHADER_LOG%"
           echo buildshaders.bat exit code: %SHADER_SCRIPT_RESULT%
 
-          rem The old Valve batch file does not reliably propagate failures.
-          rem The next PowerShell step validates every expected .vcs file and
-          rem scans the complete shader log for actual compiler errors.
+          rem Valve's old batch file does not reliably propagate failures.
+          rem Validation below checks logs and every expected VCS output.
           exit /b 0
 
       - name: Validate compiled Deferred shaders
@@ -277,7 +359,12 @@ jobs:
               '(?im)\berror\s+X\d+\b',
               '(?im)\berror\s+C\d+\b',
               '(?im)\bERROR\(S\):\s*[1-9]\d*\b',
-              '(?im)\bshader compile failed\b'
+              '(?im)\bshader compile failed\b',
+              '(?im)^Can''t locate .+$',
+              '(?im)^Can''t find .+$',
+              '(?im)^The system cannot find the file specified\.$',
+              '(?im)^NMAKE\s*:\s*fatal error\b',
+              '(?im)^No such file or directory\b'
           )
 
           foreach ($pattern in $fatalPatterns) {
