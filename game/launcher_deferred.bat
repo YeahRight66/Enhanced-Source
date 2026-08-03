@@ -1,1 +1,1 @@
-@start swarm.exe -game deferred
+@start swarm.exe -game deferred -fullscreen

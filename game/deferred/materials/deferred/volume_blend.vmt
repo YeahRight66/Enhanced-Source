@@ -1,0 +1,4 @@
+"VOLUME_BLEND"
+{
+	"$BASETEXTURE"		"_rt_volumaccum_00"
+}
