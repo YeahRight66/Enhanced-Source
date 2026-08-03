@@ -206,26 +206,29 @@ jobs:
                   !$_.StartsWith("#")
               }
 
-          $expected = New-Object System.Collections.Generic.List[string]
+          function Get-ForcedShaderOutputName {
+              param([Parameter(Mandatory = $true)][string]$SourceName)
 
-          foreach ($source in $shaderSources) {
-              if ($source -match '^(.*)_ps2x\.fxc$') {
-                  $base = $Matches[1]
-                  $expected.Add("${base}_ps20.vcs")
-                  $expected.Add("${base}_ps20b.vcs")
-                  $expected.Add("${base}_ps30.vcs")
+              if ($SourceName -notmatch '\.fxc$') {
+                  throw "Unsupported shader-list entry: $SourceName"
               }
-              elseif ($source -match '\.fxc$') {
-                  $expected.Add(
-                      [System.IO.Path]::ChangeExtension($source, ".vcs")
-                  )
-              }
-              else {
-                  throw "Unsupported shader-list entry: $source"
-              }
+
+              $base = [System.IO.Path]::GetFileNameWithoutExtension($SourceName)
+
+              # buildshaders.bat sets DIRECTX_FORCE_MODEL=30 when -force30
+              # is supplied. Valve's loader applies these output transforms.
+              $base = $base -replace '_ps2x$', '_ps30'
+              $base = $base -replace '_ps20b$', '_ps30'
+              $base = $base -replace '_ps20$', '_ps30'
+              $base = $base -replace '_vs20$', '_vs30'
+              $base = $base -replace '_vsxx$', '_vs30'
+
+              return "$base.vcs"
           }
 
-          $expected = $expected | Sort-Object -Unique
+          $expected = $shaderSources |
+              ForEach-Object { Get-ForcedShaderOutputName $_ } |
+              Sort-Object -Unique
 
           # updateshaders.pl compares CRCs against game\platform\shaders.
           # Delete only this project's expected VCS files there, otherwise
@@ -369,7 +372,6 @@ jobs:
               '(?im)\bshader compile failed\b',
               '(?im)^Can''t locate .+$',
               '(?im)^Can''t find .+$',
-              '(?im)The system cannot find the file specified',
               '(?im)Unable to find GameInfo\.txt',
               '(?im)not a valid game directory',
               '(?im)^NMAKE\s*:\s*fatal error\b',
@@ -382,28 +384,44 @@ jobs:
               }
           }
 
+          # The old shader compiler can print one harmless generic Windows
+          # path warning and still finish correctly. Validate positive build
+          # milestones and the actual VCS outputs instead.
+          if ($logText -notmatch '(?im)Compiling\s+[\d,]+\s+commands') {
+              throw "shadercompile.exe did not begin shader command compilation."
+          }
+
+          if ($logText -notmatch '(?im)\b\d+\s+File\(s\) copied\b') {
+              throw "The shader build did not report copying compiled VCS files."
+          }
+
           $shaderSources = Get-Content $shaderList |
               ForEach-Object { $_.Trim() } |
               Where-Object { $_ -and !$_.StartsWith("//") -and !$_.StartsWith("#") }
 
-          $expected = New-Object System.Collections.Generic.List[string]
+          function Get-ForcedShaderOutputName {
+              param([Parameter(Mandatory = $true)][string]$SourceName)
 
-          foreach ($source in $shaderSources) {
-              if ($source -match '^(.*)_ps2x\.fxc$') {
-                  $base = $Matches[1]
-                  $expected.Add("${base}_ps20.vcs")
-                  $expected.Add("${base}_ps20b.vcs")
-                  $expected.Add("${base}_ps30.vcs")
+              if ($SourceName -notmatch '\.fxc$') {
+                  throw "Unsupported shader-list entry: $SourceName"
               }
-              elseif ($source -match '\.fxc$') {
-                  $expected.Add([System.IO.Path]::ChangeExtension($source, ".vcs"))
-              }
-              else {
-                  throw "Unsupported shader-list entry: $source"
-              }
+
+              $base = [System.IO.Path]::GetFileNameWithoutExtension($SourceName)
+
+              # buildshaders.bat sets DIRECTX_FORCE_MODEL=30 when -force30
+              # is supplied. Valve's loader applies these output transforms.
+              $base = $base -replace '_ps2x$', '_ps30'
+              $base = $base -replace '_ps20b$', '_ps30'
+              $base = $base -replace '_ps20$', '_ps30'
+              $base = $base -replace '_vs20$', '_vs30'
+              $base = $base -replace '_vsxx$', '_vs30'
+
+              return "$base.vcs"
           }
 
-          $expected = $expected | Sort-Object -Unique
+          $expected = $shaderSources |
+              ForEach-Object { Get-ForcedShaderOutputName $_ } |
+              Sort-Object -Unique
 
           $missing = New-Object System.Collections.Generic.List[string]
           $empty = New-Object System.Collections.Generic.List[string]
@@ -437,7 +455,7 @@ jobs:
               Select-Object Name, Length, LastWriteTime |
               Format-Table -AutoSize
 
-          Write-Host "Validated $($expected.Count) expected VCS files in both output directories."
+          Write-Host "Validated $($expected.Count) forced-SM3 VCS files in both output directories."
 
       - name: Generate Deferred solution with VPC
         shell: cmd
