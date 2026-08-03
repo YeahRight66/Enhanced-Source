@@ -34,10 +34,10 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
 
       - name: Add MSBuild to PATH
-        uses: microsoft/setup-msbuild@v3
+        uses: microsoft/setup-msbuild@v2
         with:
           msbuild-architecture: x64
 
@@ -87,33 +87,60 @@ jobs:
 
           set "CPP_GUID={8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}"
 
-          rem Old Source SDK 2013 VPC searches the 32-bit Visual Studio
-          rem registry view for the Visual C++ project type.
-          reg add "HKLM\SOFTWARE\Microsoft\VisualStudio\10.0\VC\Projects\%CPP_GUID%" ^
+          rem IMPORTANT:
+          rem VPC searches VisualStudio\10.0\Projects, not
+          rem VisualStudio\10.0\VC\Projects.
+
+          reg add "HKLM\SOFTWARE\Microsoft\VisualStudio\10.0\Projects\%CPP_GUID%" ^
             /v DefaultProjectExtension ^
             /t REG_SZ ^
             /d vcproj ^
             /f ^
             /reg:32
-
           if errorlevel 1 exit /b 1
 
-          rem Also expose a VS2013-compatible entry. This is harmless and
-          rem matches the /2013 project-generation mode.
-          reg add "HKLM\SOFTWARE\Microsoft\VisualStudio\12.0\VC\Projects\%CPP_GUID%" ^
+          reg add "HKCU\Software\Microsoft\VisualStudio\10.0_Config\Projects\%CPP_GUID%" ^
+            /v DefaultProjectExtension ^
+            /t REG_SZ ^
+            /d vcproj ^
+            /f ^
+            /reg:32
+          if errorlevel 1 exit /b 1
+
+          rem Add VS2013 variants too because VPC is invoked with /2013.
+          reg add "HKLM\SOFTWARE\Microsoft\VisualStudio\12.0\Projects\%CPP_GUID%" ^
             /v DefaultProjectExtension ^
             /t REG_SZ ^
             /d vcxproj ^
             /f ^
             /reg:32
-
           if errorlevel 1 exit /b 1
 
-          echo === VS 10 compatibility key ===
-          reg query "HKLM\SOFTWARE\Microsoft\VisualStudio\10.0\VC\Projects\%CPP_GUID%" /reg:32
+          reg add "HKCU\Software\Microsoft\VisualStudio\12.0_Config\Projects\%CPP_GUID%" ^
+            /v DefaultProjectExtension ^
+            /t REG_SZ ^
+            /d vcxproj ^
+            /f ^
+            /reg:32
+          if errorlevel 1 exit /b 1
 
-          echo === VS 12 compatibility key ===
-          reg query "HKLM\SOFTWARE\Microsoft\VisualStudio\12.0\VC\Projects\%CPP_GUID%" /reg:32
+          echo === Verify HKLM VS10 entry ===
+          reg query "HKLM\SOFTWARE\Microsoft\VisualStudio\10.0\Projects\%CPP_GUID%" ^
+            /v DefaultProjectExtension ^
+            /reg:32
+          if errorlevel 1 exit /b 1
+
+          echo === Verify HKCU VS10_Config entry ===
+          reg query "HKCU\Software\Microsoft\VisualStudio\10.0_Config\Projects\%CPP_GUID%" ^
+            /v DefaultProjectExtension ^
+            /reg:32
+          if errorlevel 1 exit /b 1
+
+          echo === Verify HKLM VS12 entry ===
+          reg query "HKLM\SOFTWARE\Microsoft\VisualStudio\12.0\Projects\%CPP_GUID%" ^
+            /v DefaultProjectExtension ^
+            /reg:32
+          if errorlevel 1 exit /b 1
 
       - name: Generate Deferred solution with VPC
         shell: cmd
@@ -143,29 +170,17 @@ jobs:
               exit /b %VPC_RESULT%
           )
 
-          if not exist "Game_Deferred-2019.sln" (
-              echo ERROR: Game_Deferred-2019.sln was not generated.
+          for %%F in (
+            Game_Deferred-2019.sln
+            client_deferred.vcxproj
+            server_deferred.vcxproj
+            shaderlib.vcxproj
+            game_shader_deferred.vcxproj
+          ) do (
+            if not exist "%%F" (
+              echo ERROR: Required generated file is missing: %%F
               exit /b 1
-          )
-
-          if not exist "client_deferred.vcxproj" (
-              echo ERROR: client_deferred.vcxproj was not generated.
-              exit /b 1
-          )
-
-          if not exist "server_deferred.vcxproj" (
-              echo ERROR: server_deferred.vcxproj was not generated.
-              exit /b 1
-          )
-
-          if not exist "shaderlib.vcxproj" (
-              echo ERROR: shaderlib.vcxproj was not generated.
-              exit /b 1
-          )
-
-          if not exist "game_shader_deferred.vcxproj" (
-              echo ERROR: game_shader_deferred.vcxproj was not generated.
-              exit /b 1
+            )
           )
 
           echo === Generated project files ===
@@ -229,7 +244,7 @@ jobs:
 
       - name: Upload compiled binaries
         if: success()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v4
         with:
           name: Enhanced-Source-${{ env.BUILD_CONFIGURATION }}-Win32
           path: artifacts/Enhanced-Source-${{ env.BUILD_CONFIGURATION }}-Win32/**
@@ -238,7 +253,7 @@ jobs:
 
       - name: Upload diagnostic logs
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v4
         with:
           name: Enhanced-Source-${{ env.BUILD_CONFIGURATION }}-Diagnostic-Logs
           path: |
