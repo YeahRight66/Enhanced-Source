@@ -840,12 +840,12 @@ jobs:
               Remove-Item $shaderTarget -Recurse -Force
 
               @"
-Deferred shaders were NOT rebuilt in this workflow run.
+          Deferred shaders were NOT rebuilt in this workflow run.
 
-Copy only the bin folder from this artifact.
-Keep the existing game\deferred\shaders folder from your previous successful
-shader build.
-"@ |
+          Copy only the bin folder from this artifact.
+          Keep the existing game\deferred\shaders folder from your previous successful
+          shader build.
+          "@ |
                   Set-Content `
                       (Join-Path $packageRoot "SHADERS_NOT_REBUILT.txt") `
                       -Encoding utf8
