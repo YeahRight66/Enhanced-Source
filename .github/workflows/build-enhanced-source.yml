@@ -167,6 +167,12 @@ jobs:
               $env:GITHUB_STEP_SUMMARY `
               "- Reason: $reason"
 
+          if (!$compileShaders) {
+              Add-Content `
+                  $env:GITHUB_STEP_SUMMARY `
+                  "- Important: enable shader compilation whenever FXC combo declarations or generated fxctmp9 headers changed."
+          }
+
       - name: Add MSBuild to PATH
         uses: microsoft/setup-msbuild@v3
         with:
@@ -216,6 +222,15 @@ jobs:
           Write-Host "Installed MSVC toolsets:"
           Get-ChildItem "$vsPath\VC\Tools\MSVC" -Directory |
               Select-Object -ExpandProperty Name
+
+          $sdkVersion = "10.0.19041.0"
+          $sdkInclude = "${env:ProgramFiles(x86)}\Windows Kits\10\Include\$sdkVersion"
+
+          if (!(Test-Path $sdkInclude)) {
+              throw "Required Windows SDK $sdkVersion is not installed on this runner."
+          }
+
+          Write-Host "Using Windows SDK: $sdkVersion"
 
       - name: Add legacy VPC registry compatibility
         shell: cmd
@@ -663,7 +678,7 @@ jobs:
           @echo off
           setlocal EnableExtensions EnableDelayedExpansion
 
-          set "COMMON_ARGS=/m /t:Rebuild /p:Configuration=%BUILD_CONFIGURATION% /p:Platform=Win32 /p:PlatformToolset=v142 /p:PreferredToolArchitecture=x64 /verbosity:minimal"
+          set "COMMON_ARGS=/m /t:Rebuild /p:Configuration=%BUILD_CONFIGURATION% /p:Platform=Win32 /p:PlatformToolset=v142 /p:WindowsTargetPlatformVersion=10.0.19041.0 /p:PreferredToolArchitecture=x64 /verbosity:minimal"
           set "MASTER_LOG=%ARTIFACT_DIR%\msbuild-console.log"
 
           echo === Real Enhanced Source C++ build === > "%MASTER_LOG%"
