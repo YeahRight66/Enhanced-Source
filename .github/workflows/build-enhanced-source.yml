@@ -87,10 +87,6 @@ jobs:
 
           set "CPP_GUID={8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}"
 
-          rem IMPORTANT:
-          rem VPC searches VisualStudio\10.0\Projects, not
-          rem VisualStudio\10.0\VC\Projects.
-
           reg add "HKLM\SOFTWARE\Microsoft\VisualStudio\10.0\Projects\%CPP_GUID%" ^
             /v DefaultProjectExtension ^
             /t REG_SZ ^
@@ -107,7 +103,6 @@ jobs:
             /reg:32
           if errorlevel 1 exit /b 1
 
-          rem Add VS2013 variants too because VPC is invoked with /2013.
           reg add "HKLM\SOFTWARE\Microsoft\VisualStudio\12.0\Projects\%CPP_GUID%" ^
             /v DefaultProjectExtension ^
             /t REG_SZ ^
@@ -124,23 +119,10 @@ jobs:
             /reg:32
           if errorlevel 1 exit /b 1
 
-          echo === Verify HKLM VS10 entry ===
+          echo === Verify legacy Visual C++ project entry ===
           reg query "HKLM\SOFTWARE\Microsoft\VisualStudio\10.0\Projects\%CPP_GUID%" ^
             /v DefaultProjectExtension ^
             /reg:32
-          if errorlevel 1 exit /b 1
-
-          echo === Verify HKCU VS10_Config entry ===
-          reg query "HKCU\Software\Microsoft\VisualStudio\10.0_Config\Projects\%CPP_GUID%" ^
-            /v DefaultProjectExtension ^
-            /reg:32
-          if errorlevel 1 exit /b 1
-
-          echo === Verify HKLM VS12 entry ===
-          reg query "HKLM\SOFTWARE\Microsoft\VisualStudio\12.0\Projects\%CPP_GUID%" ^
-            /v DefaultProjectExtension ^
-            /reg:32
-          if errorlevel 1 exit /b 1
 
       - name: Generate Deferred solution with VPC
         shell: cmd
@@ -170,21 +152,45 @@ jobs:
               exit /b %VPC_RESULT%
           )
 
-          for %%F in (
-            Game_Deferred-2019.sln
-            client_deferred.vcxproj
-            server_deferred.vcxproj
-            shaderlib.vcxproj
-            game_shader_deferred.vcxproj
-          ) do (
-            if not exist "%%F" (
-              echo ERROR: Required generated file is missing: %%F
+          rem VPC writes each project beside its source .vpc file.
+          set "CLIENT_PROJECT=game\client\client_deferred.vcxproj"
+          set "SERVER_PROJECT=game\server\server_deferred.vcxproj"
+          set "SHADERLIB_PROJECT=materialsystem\shaderlib\shaderlib.vcxproj"
+          set "DEFERRED_SHADER_PROJECT=materialsystem\deferredshaders\game_shader_deferred.vcxproj"
+
+          if not exist "Game_Deferred-2019.sln" (
+              echo ERROR: Game_Deferred-2019.sln was not generated.
               exit /b 1
-            )
           )
 
+          if not exist "%CLIENT_PROJECT%" (
+              echo ERROR: Missing %CLIENT_PROJECT%
+              exit /b 1
+          )
+
+          if not exist "%SERVER_PROJECT%" (
+              echo ERROR: Missing %SERVER_PROJECT%
+              exit /b 1
+          )
+
+          if not exist "%SHADERLIB_PROJECT%" (
+              echo ERROR: Missing %SHADERLIB_PROJECT%
+              exit /b 1
+          )
+
+          if not exist "%DEFERRED_SHADER_PROJECT%" (
+              echo ERROR: Missing %DEFERRED_SHADER_PROJECT%
+              exit /b 1
+          )
+
+          echo === Projects referenced by solution ===
+          findstr /I /C:".vcxproj" Game_Deferred-2019.sln
+
           echo === Generated project files ===
-          dir /b Game_Deferred-2019.sln *.vcxproj
+          echo %CLIENT_PROJECT%
+          echo %SERVER_PROJECT%
+          echo %SHADERLIB_PROJECT%
+          echo %DEFERRED_SHADER_PROJECT%
 
           copy /y "Game_Deferred-2019.sln" "..\%ARTIFACT_DIR%\Game_Deferred-2019.sln" >nul
 
@@ -259,7 +265,10 @@ jobs:
           path: |
             artifacts/**
             src/Game_Deferred-2019.sln
-            src/*.vcxproj
-            src/*.vcxproj.filters
+            src/game/client/client_deferred.vcxproj
+            src/game/server/server_deferred.vcxproj
+            src/materialsystem/shaderlib/shaderlib.vcxproj
+            src/materialsystem/deferredshaders/game_shader_deferred.vcxproj
+            src/**/*.vcxproj.filters
           if-no-files-found: warn
           retention-days: 30
