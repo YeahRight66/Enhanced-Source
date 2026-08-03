@@ -17,6 +17,8 @@ ITexture *GetDefRT_Lightaccum();
 ITexture *GetDefRT_VolumePrepass();
 ITexture *GetDefRT_VolumetricsBuffer( int index );
 
+ITexture *GetDefRT_RadianceHints( int setIndex, int channelIndex );
+// Compatibility aliases used by the existing deferred extension/debug code.
 ITexture *GetDefRT_RadiosityBuffer( int index );
 ITexture *GetDefRT_RadiosityNormal( int index );
 

@@ -59,12 +59,12 @@ private:
 
 	void RenderCascadedShadows( const CViewSetup &view, const bool bEnableRadiosity );
 
-	IMesh *GetRadiosityScreenGrid( const int iCascade );
-	IMesh *CreateRadiosityScreenGrid( const Vector2D &vecViewportBase, const float flWorldStepSize );
+	IMesh *GetRadianceHintsVolumeMesh();
+	IMesh *CreateRadianceHintsVolumeMesh();
 
 	Vector m_vecRadiosityOrigin[2];
-	IMesh *m_pMesh_RadiosityScreenGrid[2];
-	CUtlVector< IMesh* > m_hRadiosityDebugMeshList[2];
+	IMesh *m_pMesh_RadianceHintsVolume;
+	bool m_bRadianceHintsInjected;
 };
 
 

@@ -1,67 +1,63 @@
-
-// STATIC:		"ALPHATEST"				"0..1"
-// STATIC:		"MULTITEXTURE"			"0..2"
-
-// DYNAMIC:		"SHADOW_MODE"			"0..2"
-// DYNAMIC:		"RADIOSITY"				"0..1"
+// STATIC:  "ALPHATEST"    "0..1"
+// STATIC:  "MULTITEXTURE" "0..2"
+// DYNAMIC: "SHADOW_MODE"  "0..2"
+// DYNAMIC: "RADIOSITY"    "0..1"
 
 #include "common_ps_fxc.h"
 #include "common_deferred_fxc.h"
 
-
 #if ALPHATEST || RADIOSITY
-sampler sAlbedo							: register( s0 );
+sampler sAlbedo : register( s0 );
 #if MULTITEXTURE != 0
-sampler sAlbedo2						: register( s1 );
+sampler sAlbedo2 : register( s1 );
 #if MULTITEXTURE == 2
-sampler sAlbedo3						: register( s2 );
-sampler sAlbedo4						: register( s3 );
+sampler sAlbedo3 : register( s2 );
+sampler sAlbedo4 : register( s3 );
 #endif
 #endif
 #endif
 
 #if ALPHATEST
-const float g_flAlphaRef				: register( c0 );
+const float g_flAlphaRef : register( c0 );
 #endif
-
+#if RADIOSITY
+const float3 g_vecRHLightDirection : register( c1 );
+const float3 g_vecRHLightDiffuse   : register( c2 );
+#endif
 
 struct PS_INPUT
 {
-	float2 vTexCoord				: TEXCOORD0;
-
+	float2 vTexCoord : TEXCOORD0;
 #if SHADOWMAPPING_USE_COLOR
-#	if SHADOW_MODE == DEFERRED_SHADOW_MODE_PROJECTED
-	float2 flProjZW					: TEXCOORD1;
-#	else
-	float flDepth					: TEXCOORD1;
-#	endif
+# if SHADOW_MODE == DEFERRED_SHADOW_MODE_PROJECTED
+	float2 flProjZW : TEXCOORD1;
+# else
+	float flDepth : TEXCOORD1;
+# endif
 #endif
-
 #if SHADOW_MODE == DEFERRED_SHADOW_MODE_DPSM
-	float flBack					: TEXCOORD2;
+	float flBack : TEXCOORD2;
 #endif
-
 #if RADIOSITY
-	float3 vecNormal				: TEXCOORD3;
+	float3 vecNormal : TEXCOORD3;
 #endif
-
 #if MULTITEXTURE == 1
-	float4 vColor_0					: COLOR0;
+	float4 vColor_0 : COLOR0;
 #elif MULTITEXTURE == 2
-	float3 vAlphaBlend				: TEXCOORD5;
-	float4 vColorBlend1				: COLOR0;
-	float4 vColorBlend2				: COLOR1;
-	float4 vColorBlend3				: TEXCOORD6;
-	float3 vColorBlend4				: TEXCOORD7;
+	float3 vAlphaBlend : TEXCOORD5;
+	float4 vColorBlend1 : COLOR0;
+	float4 vColorBlend2 : COLOR1;
+	float4 vColorBlend3 : TEXCOORD6;
+	float3 vColorBlend4 : TEXCOORD7;
 #endif
 };
 
 struct PS_OUTPUT
 {
-	float4 vColor_0				:	COLOR0;
+	float4 vColor_0 : COLOR0;
 #if RADIOSITY
-	float4 vColor_1				:	COLOR1;
-	float4 vColor_2				:	COLOR2;
+	float4 vColor_1 : COLOR1;
+	float4 vColor_2 : COLOR2;
 #endif
 };
 
@@ -70,54 +66,53 @@ PS_OUTPUT main( const PS_INPUT In )
 #if SHADOW_MODE == DEFERRED_SHADOW_MODE_DPSM
 	clip( In.flBack );
 #endif
-
 #if DEFCFG_BILATERAL_DEPTH_TEST
-	clip( ShadowColor_Raw( sCameraDepth, In.vCameraDepthTexPos.xyz ) == 0  ); 
+	clip( ShadowColor_Raw( sCameraDepth, In.vCameraDepthTexPos.xyz ) == 0 );
 #endif
 
 	PS_OUTPUT Out;
 
 #if RADIOSITY
 	float4 albedo = tex2D( sAlbedo, In.vTexCoord );
-
 #if MULTITEXTURE == 1
 	float4 albedo2 = tex2D( sAlbedo2, In.vTexCoord );
-	float flBlendfactor = In.vColor_0.w;
-	albedo = lerp( albedo, albedo2, flBlendfactor );
+	albedo = lerp( albedo, albedo2, In.vColor_0.w );
 #elif MULTITEXTURE == 2
-	float remaining = 1;
-	float4 flBlendFactors;
-	flBlendFactors.x = GetMultiBlend( In.vColorBlend1.a, remaining );
-	flBlendFactors.y = GetMultiBlend( In.vColorBlend2.a, remaining );
-	flBlendFactors.z = GetMultiBlend( In.vColorBlend3.a, remaining );
-	flBlendFactors.w = remaining;
-
-	albedo = albedo * flBlendFactors.x
-		+ tex2D( sAlbedo2, In.vTexCoord ) * flBlendFactors.y
-		+ tex2D( sAlbedo3, In.vTexCoord ) * flBlendFactors.z
-		+ tex2D( sAlbedo4, In.vTexCoord ) * flBlendFactors.w;
+	float remaining = 1.0f;
+	float4 blendFactors;
+	blendFactors.x = GetMultiBlend( In.vColorBlend1.a, remaining );
+	blendFactors.y = GetMultiBlend( In.vColorBlend2.a, remaining );
+	blendFactors.z = GetMultiBlend( In.vColorBlend3.a, remaining );
+	blendFactors.w = remaining;
+	albedo = albedo * blendFactors.x
+		+ tex2D( sAlbedo2, In.vTexCoord ) * blendFactors.y
+		+ tex2D( sAlbedo3, In.vTexCoord ) * blendFactors.z
+		+ tex2D( sAlbedo4, In.vTexCoord ) * blendFactors.w;
 #endif
 
-	Out.vColor_1 = albedo;
-	Out.vColor_2 = float4( In.vecNormal * 0.5f + 0.5f, 0 );
+	float3 normal = normalize( In.vecNormal );
+	float directCosine = saturate( dot( normal, normalize( g_vecRHLightDirection ) ) );
+	// RSM target 1 now stores directly lit diffuse flux rather than plain albedo.
+	Out.vColor_1 = float4( albedo.rgb * g_vecRHLightDiffuse * directCosine, albedo.a );
+	Out.vColor_2 = float4( normal * 0.5f + 0.5f, 1.0f );
 #endif
 
 #if ALPHATEST
-#if RADIOSITY
+# if RADIOSITY
 	float alpha = albedo.a;
-#else
+# else
 	float alpha = tex2D( sAlbedo, In.vTexCoord ).a;
-#endif
+# endif
 	clip( alpha - g_flAlphaRef );
 #endif
 
 #if SHADOWMAPPING_USE_COLOR
-#	if SHADOW_MODE == DEFERRED_SHADOW_MODE_PROJECTED
+# if SHADOW_MODE == DEFERRED_SHADOW_MODE_PROJECTED
 	float depth = In.flProjZW.x / In.flProjZW.y;
-	Out.vColor_0 = float4( depth.xxx, 1 );
-#	else
-	Out.vColor_0 = float4( In.flDepth.xxx, 1 );
-#	endif
+	Out.vColor_0 = float4( depth.xxx, 1.0f );
+# else
+	Out.vColor_0 = float4( In.flDepth.xxx, 1.0f );
+# endif
 #else
 	Out.vColor_0 = float4( 1, 1, 1, 1 );
 #endif

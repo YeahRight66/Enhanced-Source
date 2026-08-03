@@ -104,8 +104,10 @@
 
 #define DEFRTNAME_PROJECTABLE_VGUI "_rt_projvgui_"				// + %02i
 
-#define DEFRTNAME_RADIOSITY_BUFFER "_rt_radBuffer_"				// + %02i
-#define DEFRTNAME_RADIOSITY_NORMAL "_rt_radNormal_"				// + %02i
+#define DEFRTNAME_RH_SH_R "_rt_RH_SH_R_"                         // + set index
+#define DEFRTNAME_RH_SH_G "_rt_RH_SH_G_"                         // + set index
+#define DEFRTNAME_RH_SH_B "_rt_RH_SH_B_"                         // + set index
+#define DEFRTNAME_RH_AUX  "_rt_RH_AUX_"                          // + set index
 
 
 /* One physical shadowmap for multiple cascades
@@ -121,29 +123,46 @@
 #endif
 
 
-/* Radiosity stuff
+/* Radiance Hints diffuse GI.
+ * The volume is stored as a horizontal 2D atlas of Z slices.
+ * Two four-MRT sets are allocated: first bounce and optional second bounce.
  */
 #define DEFCFG_ENABLE_RADIOSITY 1
 
-#ifdef DEFCFG_ENABLE_RADIOSITY
-#	define RADIOSITY_SMOOTH_TRANSITION 1
+#if DEFCFG_ENABLE_RADIOSITY
+#	define RH_VOLUME_SIZE 32
+#	define RH_VOLUME_SIZE_F 32.0f
+#	define RH_ATLAS_WIDTH (RH_VOLUME_SIZE * RH_VOLUME_SIZE)
+#	define RH_ATLAS_HEIGHT RH_VOLUME_SIZE
+#	define RH_ATLAS_WIDTH_F 1024.0f
+#	define RH_ATLAS_HEIGHT_F 32.0f
 
-#	define RADIOSITY_BUFFER_SAMPLES_XY 42
-#	define RADIOSITY_BUFFER_SAMPLES_Z 36
+#	define RH_SET_COUNT 2
+#	define RH_CHANNEL_COUNT 4
+#	define RH_CHANNEL_SH_R 0
+#	define RH_CHANNEL_SH_G 1
+#	define RH_CHANNEL_SH_B 2
+#	define RH_CHANNEL_AUX 3
 
-#	define RADIOSITY_BUFFER_RES_X 256
-#	define RADIOSITY_BUFFER_RES_Y 512
-#	define RADIOSITY_BUFFER_VIEWPORT_SX 252
-#	define RADIOSITY_BUFFER_VIEWPORT_SY 252
+// Fixed compile-time kernels keep ps_3_0 instruction/register pressure predictable.
+#	define RH_RSM_SAMPLE_COUNT 8
+#	define RH_BOUNCE_SAMPLE_COUNT 4
 
-#	define RADIOSITY_BUFFER_GRID_STEP_SIZE_CLOSE 20.0f
-#	define RADIOSITY_BUFFER_GRID_STEP_DISTANCEMULT_CLOSE 0.3f
-#	define RADIOSITY_BUFFER_GRID_STEP_SIZE_FAR 72.0f
-#	define RADIOSITY_BUFFER_GRID_STEP_DISTANCEMULT_FAR 0.5f
-#	define RADIOSITY_BUFFER_GRIDS_PER_AXIS 6
-
-#	define RADIOSITY_UVRATIO_X (RADIOSITY_BUFFER_VIEWPORT_SX/(float)RADIOSITY_BUFFER_RES_X)
-#	define RADIOSITY_UVRATIO_Y (RADIOSITY_BUFFER_VIEWPORT_SY/(float)RADIOSITY_BUFFER_RES_Y)
+// Compile-only aliases for the legacy debug-radiosity shader still present in
+// Enhanced Source's shader list. The RH renderer itself does not use them.
+#	define RADIOSITY_BUFFER_SAMPLES_XY RH_VOLUME_SIZE
+#	define RADIOSITY_BUFFER_SAMPLES_Z RH_VOLUME_SIZE
+#	define RADIOSITY_BUFFER_RES_X RH_ATLAS_WIDTH
+#	define RADIOSITY_BUFFER_RES_Y RH_ATLAS_HEIGHT
+#	define RADIOSITY_BUFFER_VIEWPORT_SX RH_ATLAS_WIDTH
+#	define RADIOSITY_BUFFER_VIEWPORT_SY RH_ATLAS_HEIGHT
+#	define RADIOSITY_BUFFER_GRID_STEP_SIZE_CLOSE 48.0f
+#	define RADIOSITY_BUFFER_GRID_STEP_SIZE_FAR 48.0f
+#	define RADIOSITY_BUFFER_GRID_STEP_DISTANCEMULT_CLOSE 0.0f
+#	define RADIOSITY_BUFFER_GRID_STEP_DISTANCEMULT_FAR 0.0f
+#	define RADIOSITY_BUFFER_GRIDS_PER_AXIS 1
+#	define RADIOSITY_UVRATIO_X 1.0f
+#	define RADIOSITY_UVRATIO_Y 1.0f
 #endif
 
 

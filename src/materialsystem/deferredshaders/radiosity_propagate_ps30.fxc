@@ -1,99 +1,94 @@
-
-// STATIC:		"BLUR"			"0..1"
-
 #include "common_ps_fxc.h"
 #include "common_deferred_fxc.h"
+#include "radiance_hints_common_fxc.h"
 
+sampler sSH_R : register( s0 );
+sampler sSH_G : register( s1 );
+sampler sSH_B : register( s2 );
+sampler sAux  : register( s3 );
 
-static const float2 flTexelSize = float2( 1.0f / RADIOSITY_BUFFER_RES_X, 1.0f / RADIOSITY_BUFFER_RES_Y );
-
-sampler sRadiosity						: register( s0 );
-sampler sNormals						: register( s1 );
-
-
-static const float3 vecPropagationDirection[6] = {
-	float3( 1, 0, 0 ),
-	float3( -1, 0, 0 ),
-	float3( 0, 1, 0 ),
-	float3( 0, -1, 0 ),
-	float3( 0, 0, 1 ),
-	float3( 0, 0, -1 ),
-};
+// x = stochastic sampling radius in normalized volume coordinates
+// y = bounce gain
+// z = minimum visibility
+// w = reserved
+const float4 g_vecRHBounceSettings : register( c0 );
 
 struct PS_INPUT
 {
-	float4 vGOrig_Cur				: TEXCOORD0;
-	float4 vGOrig_One				: TEXCOORD1;
+	float3 vVolumeUVW : TEXCOORD0;
+	float2 vAtlasUV   : TEXCOORD1;
 };
-
 
 struct PS_OUTPUT
 {
-	float4 vColor_0				:	COLOR0;
-	float4 vColor_1				:	COLOR1;
+	float4 vSH_R : COLOR0;
+	float4 vSH_G : COLOR1;
+	float4 vSH_B : COLOR2;
+	float4 vAux  : COLOR3;
 };
 
-void DoPropagate( inout float3 color, inout float3 normal, const float2 uvbase, const int index )
+void RH_AccumulateBounce(
+	float3 destinationUVW,
+	float3 sampleDirection,
+	float distanceScale,
+	inout float4 outSH_R,
+	inout float4 outSH_G,
+	inout float4 outSH_B,
+	inout float totalWeight )
 {
-	float3 n = tex2D( sNormals, uvbase ).xyz * 2 - 1;
-	float amt = step( dot( n, vecPropagationDirection[index] ), 0.01f );
+	float3 sourceUVW = destinationUVW + sampleDirection * ( g_vecRHBounceSettings.x * distanceScale );
+	float inside = RH_InsideVolume( sourceUVW );
 
-	color = max( color, tex2D( sRadiosity, uvbase ).rgb
-		* amt );
+	float4 sourceAux = RH_SampleAtlas( sAux, sourceUVW );
+	float4 sourceSH_R = RH_SampleAtlas( sSH_R, sourceUVW );
+	float4 sourceSH_G = RH_SampleAtlas( sSH_G, sourceUVW );
+	float4 sourceSH_B = RH_SampleAtlas( sSH_B, sourceUVW );
 
-	normal = lerp( normal, n * amt, step( abs(normal), 0.01 ) );
-}
+	// The source cell stores the distance interval over which it saw RSM emitters.
+	// Use the same normalized distance convention for the stochastic cell transfer.
+	float transferDistance = g_vecRHBounceSettings.x * distanceScale;
+	float intervalWidth = max( sourceAux.y - sourceAux.x, 0.05f );
+	float intervalWeight = 1.0f - saturate( abs( transferDistance - 0.5f * ( sourceAux.x + sourceAux.y ) ) / intervalWidth );
+	float visibility = inside * sourceAux.z * max( intervalWeight, g_vecRHBounceSettings.z );
 
-void DoBlur( inout float3 color, inout float3 normal, inout float sampleAmount, const float2 uvbase, const int index )
-{
-	float3 n = tex2D( sNormals, uvbase ).xyz * 2 - 1;
-	float amt = step( dot( n, vecPropagationDirection[index] ), 0.01f );
+	// sampleDirection points from the destination toward the source.  Light arriving
+	// at the destination therefore travels in the opposite direction.
+	float3 travelDirection = -normalize( sampleDirection );
+	float3 transported = RH_EvaluateRadiance( sourceSH_R, sourceSH_G, sourceSH_B, travelDirection );
 
-	color += tex2D( sRadiosity, uvbase ).rgb * amt;
-	normal += n * amt;
-	sampleAmount += amt;
+	// A conservative inverse-square-like falloff in normalized volume space.
+	float attenuation = visibility / ( 1.0f + 6.0f * transferDistance * transferDistance );
+	float4 destinationBasis = RH_ProjectDirection( travelDirection );
+
+	outSH_R += destinationBasis * ( transported.r * attenuation );
+	outSH_G += destinationBasis * ( transported.g * attenuation );
+	outSH_B += destinationBasis * ( transported.b * attenuation );
+	totalWeight += visibility;
 }
 
 PS_OUTPUT main( const PS_INPUT In )
 {
-#if VENDOR == VENDOR_FXC_AMD
-	AMD_PRE_5K_NON_COMPLIANT
-#else
-	clip( 0 - any( floor( In.vGOrig_Cur.zw ) ) );
-#endif
-
 	PS_OUTPUT Out;
+	float4 bouncedSH_R = 0.0f;
+	float4 bouncedSH_G = 0.0f;
+	float4 bouncedSH_B = 0.0f;
+	float totalWeight = 0.0f;
 
-	float3 color = tex2D( sRadiosity, In.vGOrig_Cur.xy ).rgb;
-	float3 normal = tex2D( sNormals, In.vGOrig_Cur.xy ).rgb * 2 - 1;
+	// Fixed low-discrepancy directions.  Keeping these explicit avoids dynamic-loop
+	// gradient restrictions and keeps Shader Model 3.0 register pressure predictable.
+	RH_AccumulateBounce( In.vVolumeUVW, normalize( float3( 1.000f,  0.180f, -0.120f ) ), 0.72f, bouncedSH_R, bouncedSH_G, bouncedSH_B, totalWeight );
+	RH_AccumulateBounce( In.vVolumeUVW, normalize( float3(-0.850f,  0.390f,  0.260f ) ), 0.91f, bouncedSH_R, bouncedSH_G, bouncedSH_B, totalWeight );
+	RH_AccumulateBounce( In.vVolumeUVW, normalize( float3( 0.210f,  0.970f, -0.300f ) ), 1.12f, bouncedSH_R, bouncedSH_G, bouncedSH_B, totalWeight );
+	RH_AccumulateBounce( In.vVolumeUVW, normalize( float3(-0.330f, -0.910f,  0.440f ) ), 1.31f, bouncedSH_R, bouncedSH_G, bouncedSH_B, totalWeight );
 
-#if BLUR
+	float normalization = RH_FOUR_PI / max( totalWeight * RH_BOUNCE_SAMPLE_COUNT, 1.0f );
+	float gain = g_vecRHBounceSettings.y * normalization;
 
-	float flFactor = 1;
-	DoBlur( color, normal, flFactor, In.vGOrig_Cur.xy + float2( flTexelSize.x, 0 ), 0 );
-	DoBlur( color, normal, flFactor, In.vGOrig_Cur.xy + float2( -flTexelSize.x, 0 ), 1 );
-	DoBlur( color, normal, flFactor, In.vGOrig_Cur.xy + float2( 0, flTexelSize.y ), 2 );
-	DoBlur( color, normal, flFactor, In.vGOrig_Cur.xy + float2( 0, -flTexelSize.y ), 3 );
-
-	DoBlur( color, normal, flFactor, In.vGOrig_One.xy, 4 );
-	DoBlur( color, normal, flFactor, In.vGOrig_One.zw, 5 );
-
-	color /= flFactor;
-	normal /= flFactor;
-
-#else
-
-	DoPropagate( color, normal, In.vGOrig_Cur.xy + float2( flTexelSize.x, 0 ), 0 );
-	DoPropagate( color, normal, In.vGOrig_Cur.xy + float2( -flTexelSize.x, 0 ), 1 );
-	DoPropagate( color, normal, In.vGOrig_Cur.xy + float2( 0, flTexelSize.y ), 2 );
-	DoPropagate( color, normal, In.vGOrig_Cur.xy + float2( 0, -flTexelSize.y ), 3 );
-	DoPropagate( color, normal, In.vGOrig_One.xy, 4 );
-	DoPropagate( color, normal, In.vGOrig_One.zw, 5 );
-
-#endif
-
-	Out.vColor_0 = float4( color, 1 );
-	Out.vColor_1 = float4( normal * 0.5f + 0.5f, 1 );
-
+	// This target contains only the newly generated bounce.  The first bounce is
+	// retained in the other ping-pong set and both are combined during reconstruction.
+	Out.vSH_R = bouncedSH_R * gain;
+	Out.vSH_G = bouncedSH_G * gain;
+	Out.vSH_B = bouncedSH_B * gain;
+	Out.vAux = RH_SampleAtlas( sAux, In.vVolumeUVW );
 	return Out;
 }

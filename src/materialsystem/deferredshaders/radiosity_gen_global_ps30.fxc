@@ -1,80 +1,133 @@
-
-// DYNAMIC:		"CASCADE"		"0..1"
-
 #include "common_ps_fxc.h"
 #include "common_deferred_fxc.h"
+#include "radiance_hints_common_fxc.h"
 
+const float3 g_vecGridOrigin              : register( c0 );
+const float4x3 g_matOrtho                 : register( c1 );
+const float4 g_vecUVTransform             : register( c4 );
+const float4 g_vecSlopeSettings           : register( c5 );
+const float3 g_vecShadowOrigin            : register( c6 );
+const float3 g_vecShadowForward           : register( c7 );
+// x = volume extent, y = cell size, z = world spread distance, w = injection gain
+const float4 g_vecRHSettings              : register( c8 );
 
-const float3 g_vecGridOrigin				: register( c0 );
-
-const float4x3 g_matOrtho					: register( c1 ); // up to 3
-const float4 g_vecUVTransform				: register( c4 );
-const float4 g_vecSlopeSettings				: register( c5 );
-const float3 g_vecShadowOrigin				: register( c6 );
-const float3 g_vecShadowForward				: register( c7 );
-
-sampler sShadowAlbedo						: register( s0 );
-sampler sShadowNormal						: register( s1 );
-sampler sShadowDepth						: register( s2 );
+sampler sShadowFlux                       : register( s0 );
+sampler sShadowNormal                     : register( s1 );
+sampler sShadowDepth                      : register( s2 );
 
 struct PS_INPUT
 {
-	float3 vWorldPos				: TEXCOORD0;
+	float3 vVolumeUVW : TEXCOORD0;
+	float2 vAtlasUV   : TEXCOORD1;
 };
-
 
 struct PS_OUTPUT
 {
-	float4 vColor_0				:	COLOR0;
-	float4 vColor_1				:	COLOR1;
+	float4 vSH_R : COLOR0;
+	float4 vSH_G : COLOR1;
+	float4 vSH_B : COLOR2;
+	float4 vAux  : COLOR3;
 };
 
+float3 RH_ReconstructRSMWorldPosition( float2 localUV, float depth )
+{
+	// Solve the three linear equations formed by projected X, projected Y and linear light depth.
+	float3 rowX = float3( g_matOrtho[0][0], g_matOrtho[1][0], g_matOrtho[2][0] );
+	float3 rowY = float3( g_matOrtho[0][1], g_matOrtho[1][1], g_matOrtho[2][1] );
+	float3 rowZ = g_vecShadowForward * g_vecSlopeSettings.w;
+
+	float3 rhs;
+	rhs.x = localUV.x - g_matOrtho[3][0];
+	rhs.y = localUV.y - g_matOrtho[3][1];
+	rhs.z = depth + dot( g_vecShadowOrigin, rowZ );
+
+	float3 crossYZ = cross( rowY, rowZ );
+	float determinant = dot( rowX, crossYZ );
+	float safeDeterminant = determinant + ( determinant >= 0.0f ? 1.0e-8f : -1.0e-8f );
+
+	return ( rhs.x * crossYZ + rhs.y * cross( rowZ, rowX ) + rhs.z * cross( rowX, rowY ) ) / safeDeterminant;
+}
+
+void RH_AccumulateRSM(
+	float2 localCenterUV,
+	float2 diskOffset,
+	float3 cellJitter,
+	float3 cellCenterWS,
+	float2 worldToLocalUV,
+	inout float4 shR,
+	inout float4 shG,
+	inout float4 shB,
+	inout float minDistance,
+	inout float maxDistance,
+	inout float validCount )
+{
+	float2 localUV = localCenterUV + diskOffset * worldToLocalUV * g_vecRHSettings.z;
+	float inside = step( 0.0f, localUV.x ) * step( localUV.x, 1.0f )
+		* step( 0.0f, localUV.y ) * step( localUV.y, 1.0f );
+	localUV = saturate( localUV );
+
+	float2 atlasUV = localUV * g_vecUVTransform.zw + g_vecUVTransform.xy;
+	float depth = tex2D( sShadowDepth, atlasUV ).r;
+	float3 flux = tex2D( sShadowFlux, atlasUV ).rgb;
+	float3 emitterNormal = normalize( tex2D( sShadowNormal, atlasUV ).xyz * 2.0f - 1.0f );
+
+	float valid = inside * step( depth, 0.9999f ) * step( 1.0e-6f, dot( flux, flux ) );
+	float3 emitterPosition = RH_ReconstructRSMWorldPosition( localUV, depth );
+	float3 receiverPosition = cellCenterWS + cellJitter * ( g_vecRHSettings.y * 0.45f );
+
+	float3 ray = receiverPosition - emitterPosition;
+	float distanceWS = max( length( ray ), 0.001f );
+	float3 rayDirection = ray / distanceWS;
+	float distanceNormalized = distanceWS / max( g_vecRHSettings.z, 1.0f );
+
+	valid *= step( 0.01f, distanceNormalized );
+	float geometric = saturate( dot( rayDirection, emitterNormal ) );
+	float attenuation = valid * geometric / ( 0.01f + distanceNormalized * distanceNormalized );
+	float3 transported = flux * ( attenuation * g_vecRHSettings.w );
+	float4 basis = RH_ProjectDirection( rayDirection );
+
+	shR += basis * transported.r;
+	shG += basis * transported.g;
+	shB += basis * transported.b;
+	minDistance = lerp( minDistance, min( minDistance, distanceNormalized ), valid );
+	maxDistance = max( maxDistance, distanceNormalized * valid );
+	validCount += valid;
+}
 
 PS_OUTPUT main( const PS_INPUT In )
 {
 	PS_OUTPUT Out;
+	float3 cellCenterWS = g_vecGridOrigin + In.vVolumeUVW * g_vecRHSettings.x;
+	float3 projected = mul( float4( cellCenterWS, 1.0f ), g_matOrtho );
+	float2 localCenterUV = projected.xy;
 
-	float3 worldPos = g_vecGridOrigin + In.vWorldPos;
+	float centerInside = step( 0.0f, localCenterUV.x ) * step( localCenterUV.x, 1.0f )
+		* step( 0.0f, localCenterUV.y ) * step( localCenterUV.y, 1.0f );
 
-	float3 shadowPos = mul( float4( worldPos, 1 ), g_matOrtho );
-#if VENDOR == VENDOR_FXC_AMD
-	AMD_PRE_5K_NON_COMPLIANT
-#else
-	float flMask = 1.0f - any( floor( shadowPos.xy ) );
-#endif
+	float3 rowX = float3( g_matOrtho[0][0], g_matOrtho[1][0], g_matOrtho[2][0] );
+	float3 rowY = float3( g_matOrtho[0][1], g_matOrtho[1][1], g_matOrtho[2][1] );
+	float2 worldToLocalUV = float2( length( rowX ), length( rowY ) );
 
-	shadowPos.xy = shadowPos.xy * g_vecUVTransform.zw + g_vecUVTransform.xy;
-	float flShadowDepth = dot( worldPos - g_vecShadowOrigin, g_vecShadowForward ) * g_vecSlopeSettings.w;
+	float4 shR = 0.0f;
+	float4 shG = 0.0f;
+	float4 shB = 0.0f;
+	float minDistance = 1.0f;
+	float maxDistance = 0.0f;
+	float validCount = 0.0f;
 
-	float3 flNormalSample = tex2D( sShadowNormal, shadowPos.xy ).xyz;
-	float flDepthSample = tex2D( sShadowDepth, shadowPos.xy ).r;
-	float flDepthDelta = flDepthSample - flShadowDepth;
+	RH_AccumulateRSM( localCenterUV, float2( 0.000f,  0.000f ), float3( 0.17f, -0.31f,  0.23f ), cellCenterWS, worldToLocalUV, shR, shG, shB, minDistance, maxDistance, validCount );
+	RH_AccumulateRSM( localCenterUV, float2( 0.527f,  0.143f ), float3(-0.36f,  0.11f, -0.19f ), cellCenterWS, worldToLocalUV, shR, shG, shB, minDistance, maxDistance, validCount );
+	RH_AccumulateRSM( localCenterUV, float2(-0.401f,  0.388f ), float3( 0.28f,  0.37f, -0.27f ), cellCenterWS, worldToLocalUV, shR, shG, shB, minDistance, maxDistance, validCount );
+	RH_AccumulateRSM( localCenterUV, float2( 0.118f, -0.591f ), float3(-0.12f, -0.22f,  0.39f ), cellCenterWS, worldToLocalUV, shR, shG, shB, minDistance, maxDistance, validCount );
+	RH_AccumulateRSM( localCenterUV, float2(-0.684f, -0.104f ), float3( 0.41f, -0.08f, -0.33f ), cellCenterWS, worldToLocalUV, shR, shG, shB, minDistance, maxDistance, validCount );
+	RH_AccumulateRSM( localCenterUV, float2( 0.632f, -0.477f ), float3(-0.29f,  0.32f,  0.07f ), cellCenterWS, worldToLocalUV, shR, shG, shB, minDistance, maxDistance, validCount );
+	RH_AccumulateRSM( localCenterUV, float2(-0.214f,  0.779f ), float3( 0.06f, -0.44f, -0.11f ), cellCenterWS, worldToLocalUV, shR, shG, shB, minDistance, maxDistance, validCount );
+	RH_AccumulateRSM( localCenterUV, float2( 0.806f,  0.326f ), float3(-0.43f,  0.19f,  0.31f ), cellCenterWS, worldToLocalUV, shR, shG, shB, minDistance, maxDistance, validCount );
 
-#if 0
-	clip( step( 0, flDepthDelta )
-		* step( flDepthDelta,
-#if CASCADE == 0
-		RADIOSITY_BUFFER_GRID_STEP_SIZE_CLOSE
-#else
-		RADIOSITY_BUFFER_GRID_STEP_SIZE_FAR
-#endif
-		* ( 3.0f + dot( flNormalSample * 2 - 1, g_vecShadowForward ) * 2.5f ) * g_vecSlopeSettings.w
-		) - 0.5f );
-#else
-	flMask *= step( 0, flDepthDelta ) * step( flDepthDelta,
-#if CASCADE == 0
-		RADIOSITY_BUFFER_GRID_STEP_SIZE_CLOSE
-#else
-		RADIOSITY_BUFFER_GRID_STEP_SIZE_FAR
-#endif
-		* ( 3.0f + dot( flNormalSample * 2 - 1, g_vecShadowForward ) * 2.5f ) * g_vecSlopeSettings.w
-		);
-#endif
-
-	float3 flRadiositySample = tex2D( sShadowAlbedo, shadowPos.xy ).rgb;
-
-	Out.vColor_0 = float4( flRadiositySample * flMask, 1 );
-	Out.vColor_1 = float4( flNormalSample, 1 );
-
+	float normalization = centerInside / ( RH_PI * RH_RSM_SAMPLE_COUNT );
+	Out.vSH_R = shR * normalization;
+	Out.vSH_G = shG * normalization;
+	Out.vSH_B = shB * normalization;
+	Out.vAux = float4( minDistance, maxDistance, saturate( validCount / RH_RSM_SAMPLE_COUNT ) * centerInside, 1.0f );
 	return Out;
 }

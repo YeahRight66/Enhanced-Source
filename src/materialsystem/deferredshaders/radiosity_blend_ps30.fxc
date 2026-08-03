@@ -1,45 +1,65 @@
-
+// DYNAMIC: "SECOND_BOUNCE" "0..1"
 
 #include "common_ps_fxc.h"
 #include "common_deferred_fxc.h"
+#include "radiance_hints_common_fxc.h"
 
+sampler sDepth       : register( s0 );
+sampler sNormals     : register( s1 );
+sampler sFirstSH_R   : register( s2 );
+sampler sFirstSH_G   : register( s3 );
+sampler sFirstSH_B   : register( s4 );
+sampler sFirstAux    : register( s5 );
+sampler sSecondSH_R  : register( s6 );
+sampler sSecondSH_G  : register( s7 );
+sampler sSecondSH_B  : register( s8 );
 
-sampler sDepth							: register( s0 );
-sampler sRadiosity						: register( s1 );
-
-
-const float3 g_vecViewOrigin				: register( c0 );
-const float3 g_vecRadiosityOrigin			: register( c1 );
-const float3 g_vecRadiosityOrigin_Far		: register( c2 );
-const float g_flRadiositySettings			: register( c3 );
-
+const float3 g_vecViewOrigin : register( c0 );
+const float3 g_vecRHOrigin   : register( c1 );
+// x = volume extent, y = receiver normal offset, z = total intensity, w = second-bounce scale
+const float4 g_vecRHSettings : register( c2 );
 
 struct PS_INPUT
 {
-	float2 vTexCoord				: TEXCOORD0;
-	float3 vecWorldRay				: TEXCOORD1;
+	float2 vTexCoord   : TEXCOORD0;
+	float3 vecWorldRay : TEXCOORD1;
 };
-
 
 struct PS_OUTPUT
 {
-	float4 vColor_0				:	COLOR0;
+	float4 vColor_0 : COLOR0;
 };
 
 PS_OUTPUT main( const PS_INPUT In )
 {
 	PS_OUTPUT Out;
+	float depth = tex2D( sDepth, In.vTexCoord ).x;
+	clip( min( depth - 0.1f, DEPTH_RECONSTRUCTION_LIMIT - depth ) );
 
-	float flDepth = tex2D( sDepth, In.vTexCoord ).x;
+	float3 worldPosition = g_vecViewOrigin + In.vecWorldRay * depth;
+	float3 worldNormal = DecodeDirectionVectorXYZFromSphericalST( tex2D( sNormals, In.vTexCoord ).xy );
+	worldNormal = normalize( worldNormal );
 
-	clip( min( flDepth - 0.1f, DEPTH_RECONSTRUCTION_LIMIT - flDepth ) );
+	float3 samplePosition = worldPosition + worldNormal * g_vecRHSettings.y;
+	float3 volumeUVW = ( samplePosition - g_vecRHOrigin ) / max( g_vecRHSettings.x, 1.0f );
+	float inside = RH_InsideVolume( volumeUVW );
+	float edgeFade = RH_BoundaryFade( volumeUVW );
 
-	float3 worldPos = g_vecViewOrigin + In.vecWorldRay * flDepth;
+	float4 firstSH_R = RH_SampleAtlas( sFirstSH_R, volumeUVW );
+	float4 firstSH_G = RH_SampleAtlas( sFirstSH_G, volumeUVW );
+	float4 firstSH_B = RH_SampleAtlas( sFirstSH_B, volumeUVW );
+	float firstValidity = RH_SampleAtlas( sFirstAux, volumeUVW ).z;
 
-	float3 color = DoRadiosity( worldPos, sRadiosity,
-		g_vecRadiosityOrigin, g_vecRadiosityOrigin_Far, g_flRadiositySettings );
+	float3 indirect = RH_EvaluateDiffuse( firstSH_R, firstSH_G, firstSH_B, worldNormal ) * firstValidity;
 
-	Out.vColor_0 = float4( color , 1 );
+#if SECOND_BOUNCE
+	float4 secondSH_R = RH_SampleAtlas( sSecondSH_R, volumeUVW );
+	float4 secondSH_G = RH_SampleAtlas( sSecondSH_G, volumeUVW );
+	float4 secondSH_B = RH_SampleAtlas( sSecondSH_B, volumeUVW );
+	indirect += RH_EvaluateDiffuse( secondSH_R, secondSH_G, secondSH_B, worldNormal ) * g_vecRHSettings.w;
+#endif
 
+	indirect *= inside * edgeFade * g_vecRHSettings.z;
+	Out.vColor_0 = WriteLighting( float4( indirect, 0.0f ) );
 	return Out;
 }

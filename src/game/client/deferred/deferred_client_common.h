@@ -21,11 +21,15 @@ extern ConVar deferred_override_globalLight_ambient_high;
 extern ConVar deferred_override_globalLight_ambient_low;
 
 extern ConVar deferred_radiosity_enable;
-extern ConVar deferred_radiosity_propagate_count;
-extern ConVar deferred_radiosity_propagate_count_far;
-extern ConVar deferred_radiosity_blur_count;
-extern ConVar deferred_radiosity_blur_count_far;
 extern ConVar deferred_radiosity_debug;
+
+extern ConVar deferred_rh_cell_size;
+extern ConVar deferred_rh_world_spread;
+extern ConVar deferred_rh_injection_gain;
+extern ConVar deferred_rh_bounce_count;
+extern ConVar deferred_rh_bounce_gain;
+extern ConVar deferred_rh_receiver_offset;
+extern ConVar deferred_rh_intensity;
 
 
 #define PROFILER_DECLARE CFastTimer __pft; __pft.Start()
