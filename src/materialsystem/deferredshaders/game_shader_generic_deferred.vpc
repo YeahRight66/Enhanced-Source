@@ -90,6 +90,7 @@ $Project "Shaders (Deferred)"
 		$File	"lighting_pass_volum.h"
 		$File	"shader_constant_register_map.h"
 		$File	"radiance_hints_common_fxc.h"
+		$File	"radiance_hints_config.h"
 	}
 
 	$Folder "Source Files"

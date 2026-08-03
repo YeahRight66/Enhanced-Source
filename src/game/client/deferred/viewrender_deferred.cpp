@@ -60,6 +60,7 @@
 #include "shadereditor/shadereditorsystem.h"
 #endif
 #include "deferred/deferred_shared_common.h"
+#include "../../../materialsystem/deferredshaders/radiance_hints_config.h"
 
 
 // memdbgon must be the last include file in a .cpp file!!!
@@ -606,6 +607,8 @@ CDeferredViewRender::CDeferredViewRender()
 {
 	m_pMesh_RadianceHintsVolume = NULL;
 	m_bRadianceHintsInjected = false;
+	m_bRadianceHintsOriginValid = false;
+	m_flRadianceHintsCellSize = 0.0f;
 }
 
 void CDeferredViewRender::Init()
@@ -627,11 +630,15 @@ void CDeferredViewRender::Shutdown()
 
 void CDeferredViewRender::LevelInit()
 {
+	m_bRadianceHintsOriginValid = false;
+	m_flRadianceHintsCellSize = 0.0f;
 	BaseClass::LevelInit();
 }
 
 void CDeferredViewRender::LevelShutdown()
 {
+	m_bRadianceHintsOriginValid = false;
+	m_flRadianceHintsCellSize = 0.0f;
 	BaseClass::LevelShutdown();
 }
 
@@ -977,15 +984,35 @@ void CDeferredViewRender::BeginRadiosity( const CViewSetup &view )
 {
 	Vector forward;
 	AngleVectors( view.angles, &forward );
+	forward.z = 0.0f;
+	if ( forward.LengthSqr() < 1.0e-4f )
+		forward.Init( 1.0f, 0.0f, 0.0f );
+	else
+		VectorNormalize( forward );
 
 	const float cellSize = MAX( deferred_rh_cell_size.GetFloat(), 1.0f );
 	const float extent = cellSize * RH_VOLUME_SIZE;
 	Vector center = view.origin + forward * ( extent * 0.20f );
-	Vector origin = center - Vector( extent, extent, extent ) * 0.5f;
+	Vector desiredOrigin = center - Vector( extent, extent, extent ) * 0.5f;
 
 	for ( int axis = 0; axis < 3; ++axis )
-		origin[axis] = floor( origin[axis] / cellSize ) * cellSize;
+		desiredOrigin[axis] = floor( desiredOrigin[axis] / cellSize ) * cellSize;
 
+	Vector origin = desiredOrigin;
+	const bool cellSizeChanged = fabs( m_flRadianceHintsCellSize - cellSize ) > 0.01f;
+	if ( m_bRadianceHintsOriginValid && !cellSizeChanged )
+	{
+		origin = m_vecRadiosityOrigin[0];
+		const float hysteresis = MAX( deferred_rh_origin_hysteresis.GetFloat(), 0.0f ) * cellSize;
+		for ( int axis = 0; axis < 3; ++axis )
+		{
+			if ( fabs( desiredOrigin[axis] - origin[axis] ) > hysteresis )
+				origin[axis] = desiredOrigin[axis];
+		}
+	}
+
+	m_bRadianceHintsOriginValid = true;
+	m_flRadianceHintsCellSize = cellSize;
 	m_vecRadiosityOrigin[0] = origin;
 	m_vecRadiosityOrigin[1] = origin; // Kept for the existing extension ABI.
 	m_bRadianceHintsInjected = false;

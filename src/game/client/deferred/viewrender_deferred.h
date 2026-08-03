@@ -65,6 +65,8 @@ private:
 	Vector m_vecRadiosityOrigin[2];
 	IMesh *m_pMesh_RadianceHintsVolume;
 	bool m_bRadianceHintsInjected;
+	bool m_bRadianceHintsOriginValid;
+	float m_flRadianceHintsCellSize;
 };
 
 

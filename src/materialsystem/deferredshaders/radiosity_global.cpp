@@ -1,9 +1,10 @@
 #include "deferred_includes.h"
+#include "radiance_hints_config.h"
 
 #include "radiosity_gen_global_ps30.inc"
 #include "radiosity_gen_vs30.inc"
 
-BEGIN_VS_SHADER( RADIOSITY_GLOBAL, "Radiance Hints RSM injection" )
+BEGIN_VS_SHADER( RADIOSITY_GLOBAL, "Radiance Hints RSM injection and geometry occupancy" )
 	BEGIN_SHADER_PARAMS
 	END_SHADER_PARAMS
 
@@ -33,10 +34,7 @@ BEGIN_VS_SHADER( RADIOSITY_GLOBAL, "Radiance Hints RSM injection" )
 
 			int texCoordDimensions[] = { 2 };
 			pShaderShadow->VertexShaderVertexFormat(
-				VERTEX_POSITION | VERTEX_TANGENT_S,
-				1,
-				texCoordDimensions,
-				0 );
+				VERTEX_POSITION | VERTEX_TANGENT_S, 1, texCoordDimensions, 0 );
 
 			DECLARE_STATIC_VERTEX_SHADER( radiosity_gen_vs30 );
 			SET_STATIC_VERTEX_SHADER( radiosity_gen_vs30 );
@@ -71,6 +69,13 @@ BEGIN_VS_SHADER( RADIOSITY_GLOBAL, "Radiance Hints RSM injection" )
 			ConVarRef cellSize( "deferred_rh_cell_size" );
 			ConVarRef worldSpread( "deferred_rh_world_spread" );
 			ConVarRef injectionGain( "deferred_rh_injection_gain" );
+			ConVarRef edgeFade( "deferred_rh_rsm_edge_fade" );
+			ConVarRef maxRadiance( "deferred_rh_max_radiance" );
+			ConVarRef geometryEnable( "deferred_rh_geometry_enable" );
+			ConVarRef geometryInner( "deferred_rh_geometry_inner" );
+			ConVarRef geometryOuter( "deferred_rh_geometry_outer" );
+			ConVarRef geometryOccupancy( "deferred_rh_geometry_occupancy" );
+
 			const float cell = MAX( cellSize.GetFloat(), 1.0f );
 			float settings[4] = {
 				cell * RH_VOLUME_SIZE,
@@ -79,6 +84,23 @@ BEGIN_VS_SHADER( RADIOSITY_GLOBAL, "Radiance Hints RSM injection" )
 				MAX( injectionGain.GetFloat(), 0.0f )
 			};
 			pShaderAPI->SetPixelShaderConstant( 8, settings );
+
+			float qualitySettings[4] = {
+				clamp( edgeFade.GetFloat(), 0.001f, 0.25f ),
+				MAX( maxRadiance.GetFloat(), 0.25f ),
+				0.0f,
+				0.0f
+			};
+			pShaderAPI->SetPixelShaderConstant( 9, qualitySettings );
+
+			const float innerRadius = clamp( geometryInner.GetFloat(), 0.0f, 2.0f );
+			float geometrySettings[4] = {
+				geometryEnable.GetBool() ? 1.0f : 0.0f,
+				innerRadius,
+				clamp( geometryOuter.GetFloat(), innerRadius + 0.01f, 3.0f ),
+				clamp( geometryOccupancy.GetFloat(), 0.0f, 2.0f )
+			};
+			pShaderAPI->SetPixelShaderConstant( 10, geometrySettings );
 		}
 
 		Draw();

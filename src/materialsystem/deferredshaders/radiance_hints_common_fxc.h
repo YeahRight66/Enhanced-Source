@@ -1,23 +1,61 @@
 #ifndef RADIANCE_HINTS_COMMON_FXC_H
 #define RADIANCE_HINTS_COMMON_FXC_H
 
-#include "deferred_global_common.h"
+#include "radiance_hints_config.h"
 
 #define RH_PI 3.14159265358979323846f
-#define RH_FOUR_PI 12.56637061435917295385f
+#define RH_EPSILON 1.0e-8f
+#define RH_FP16_SAFE_MAX 60000.0f
 
-// L1 real spherical harmonics. Coefficient order is X, Y, Z, DC.
+static const float RH_VOLUME_SIZE_F = (float)RH_VOLUME_SIZE;
+static const float RH_ATLAS_WIDTH_F = (float)RH_ATLAS_WIDTH;
+
+float3 RH_SafeNormalize( float3 value, float3 fallbackDirection )
+{
+	float lengthSquared = dot( value, value );
+	float valid = step( RH_EPSILON, lengthSquared );
+	float3 normalizedValue = value * rsqrt( max( lengthSquared, RH_EPSILON ) );
+	return lerp( fallbackDirection, normalizedValue, valid );
+}
+
+float2 RH_Rotate2D( float2 value, float sineValue, float cosineValue )
+{
+	return float2(
+		value.x * cosineValue - value.y * sineValue,
+		value.x * sineValue + value.y * cosineValue );
+}
+
+float RH_Hash13( float3 value )
+{
+	value = frac( value * 0.1031f );
+	value += dot( value, value.yzx + 33.33f );
+	return frac( ( value.x + value.y ) * value.z );
+}
+
+float3 RH_ClampRadiance( float3 value, float maximumValue )
+{
+	return min( max( value, 0.0f ), maximumValue );
+}
+
+float4 RH_DeringSH( float4 sh )
+{
+	sh.w = max( sh.w, 0.0f );
+	float directionalLength = length( sh.xyz );
+	float maximumDirectionalLength = sh.w * 1.55f + 1.0e-5f;
+	sh.xyz *= min( 1.0f, maximumDirectionalLength / max( directionalLength, 1.0e-5f ) );
+	return clamp( sh, -RH_FP16_SAFE_MAX, RH_FP16_SAFE_MAX );
+}
+
+// L1 real spherical harmonics. Coefficient order: X, Y, Z, DC.
 float4 RH_ProjectDirection( float3 direction )
 {
-	direction = normalize( direction );
+	direction = RH_SafeNormalize( direction, float3( 0.0f, 0.0f, 1.0f ) );
 	return float4( direction * 0.4886025119f, 0.2820947918f );
 }
 
-// Convolution of L1 SH radiance with the clamped-cosine diffuse kernel.
-// Our volume stores ray travel direction, therefore callers normally pass -normal.
 float4 RH_DiffuseBasis( float3 direction )
 {
-	direction = normalize( direction );
+	direction = RH_SafeNormalize( direction, float3( 0.0f, 0.0f, 1.0f ) );
 	return float4( direction * 1.0233267079f, 0.8862269255f );
 }
 
@@ -33,6 +71,21 @@ float3 RH_EvaluateDiffuse( float4 shR, float4 shG, float4 shB, float3 surfaceNor
 	return max( float3( dot( shR, basis ), dot( shG, basis ), dot( shB, basis ) ), 0.0f );
 }
 
+// Returns the direction in which the dominant radiance ray travels.
+float3 RH_DominantTravelDirection( float4 shR, float4 shG, float4 shB, float3 fallbackDirection )
+{
+	float3 directional = shR.xyz * 0.2126f + shG.xyz * 0.7152f + shB.xyz * 0.0722f;
+	return RH_SafeNormalize( directional, fallbackDirection );
+}
+
+// 0 = nearly isotropic field, 1 = strongly directional field.
+float RH_DirectionalConfidence( float4 shR, float4 shG, float4 shB )
+{
+	float3 directional = shR.xyz * 0.2126f + shG.xyz * 0.7152f + shB.xyz * 0.0722f;
+	float dc = abs( shR.w * 0.2126f + shG.w * 0.7152f + shB.w * 0.0722f );
+	return saturate( length( directional ) / max( dc * 1.7320508f, 1.0e-5f ) );
+}
+
 float RH_InsideVolume( float3 uvw )
 {
 	float3 lowMask = step( 0.0f, uvw );
@@ -44,11 +97,11 @@ float RH_BoundaryFade( float3 uvw )
 {
 	float3 edgeDistance = min( uvw, 1.0f - uvw );
 	float nearestEdge = min( edgeDistance.x, min( edgeDistance.y, edgeDistance.z ) );
-	return saturate( nearestEdge * RH_VOLUME_SIZE_F * 0.75f );
+	float fade = saturate( nearestEdge * RH_VOLUME_SIZE_F * 0.75f );
+	return fade * fade * ( 3.0f - 2.0f * fade );
 }
 
-// Emulates trilinear filtering on a 2D atlas containing Z slices from left to right.
-// Hardware bilinear filtering is used inside each XY slice, followed by manual Z lerp.
+// Hardware bilinear filtering inside XY slices plus manual interpolation in Z.
 float4 RH_SampleAtlas( sampler volumeSampler, float3 uvw )
 {
 	uvw = saturate( uvw );

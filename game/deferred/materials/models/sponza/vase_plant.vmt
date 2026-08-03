@@ -1,0 +1,7 @@
+VertexLitGeneric
+{
+	$basetexture "models/sponza/vase_plant"
+
+	$alphatest 1
+	$phong 1
+}

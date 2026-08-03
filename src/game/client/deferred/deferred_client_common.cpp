@@ -24,14 +24,7 @@ ConVar deferred_override_globalLight_ambient_low( "deferred_override_globalLight
 ConVar deferred_radiosity_enable( "deferred_radiosity_enable", "0" );
 ConVar deferred_radiosity_debug( "deferred_radiosity_debug", "0" );
 
-// Radiance Hints controls. The legacy enable/multiplier names remain valid.
-ConVar deferred_rh_cell_size( "deferred_rh_cell_size", "48", FCVAR_ARCHIVE, "World-space RH cell size." );
-ConVar deferred_rh_world_spread( "deferred_rh_world_spread", "320", FCVAR_ARCHIVE, "Maximum RSM/RH transfer distance in world units." );
-ConVar deferred_rh_injection_gain( "deferred_rh_injection_gain", "1.0", FCVAR_ARCHIVE, "First-bounce RSM injection gain." );
-ConVar deferred_rh_bounce_count( "deferred_rh_bounce_count", "1", FCVAR_ARCHIVE, "Secondary RH bounces. SM3 package supports 0 or 1." );
-ConVar deferred_rh_bounce_gain( "deferred_rh_bounce_gain", "0.45", FCVAR_ARCHIVE, "Secondary bounce transport gain." );
-ConVar deferred_rh_receiver_offset( "deferred_rh_receiver_offset", "18", FCVAR_ARCHIVE, "Normal offset used while reconstructing indirect light." );
-ConVar deferred_rh_intensity( "deferred_rh_intensity", "1.0", FCVAR_ARCHIVE, "Final RH indirect-light intensity." );
+#include "deferred/deferred_radiance_hints_convars.inc"
 
 void OnCookieTableChanged( void *object, INetworkStringTable *stringTable, int stringNumber, const char *newString, void const *newData )
 {

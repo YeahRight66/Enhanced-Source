@@ -1,0 +1,16 @@
+LightmappedGeneric
+{
+	$basetexture "models/sponza/sponza_floor_a_diff"
+	$bumpmap "models/sponza/sponza_floor_a_ddn"
+	$surfaceprop Tile
+	
+	$phong 1
+	$phongbasetint 0.5
+	$phongexponent 30
+	$phongamount "[1 1 0.7 0.6]"
+
+	$envmap "env_cubemap"
+	"$envmaptint" "[0.05 0.05 0.01]"
+	"$normalmapalphaenvmapmask" "1"
+
+}

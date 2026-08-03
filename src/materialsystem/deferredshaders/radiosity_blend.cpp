@@ -1,14 +1,15 @@
 #include "deferred_includes.h"
+#include "radiance_hints_config.h"
 
 #include "defconstruct_vs30.inc"
 #include "radiosity_blend_ps30.inc"
 
-BEGIN_VS_SHADER( RADIOSITY_BLEND, "Radiance Hints deferred reconstruction" )
+BEGIN_VS_SHADER( RADIOSITY_BLEND, "Radiance Hints reconstruction with soft indirect shadows" )
 	BEGIN_SHADER_PARAMS
 		SHADER_PARAM( SHR0, SHADER_PARAM_TYPE_TEXTURE, "", "First-bounce red SH" )
 		SHADER_PARAM( SHG0, SHADER_PARAM_TYPE_TEXTURE, "", "First-bounce green SH" )
 		SHADER_PARAM( SHB0, SHADER_PARAM_TYPE_TEXTURE, "", "First-bounce blue SH" )
-		SHADER_PARAM( AUX0, SHADER_PARAM_TYPE_TEXTURE, "", "First-bounce distance/validity" )
+		SHADER_PARAM( AUX0, SHADER_PARAM_TYPE_TEXTURE, "", "First-bounce distance, validity and occupancy" )
 		SHADER_PARAM( SHR1, SHADER_PARAM_TYPE_TEXTURE, "", "Second-bounce red SH" )
 		SHADER_PARAM( SHG1, SHADER_PARAM_TYPE_TEXTURE, "", "Second-bounce green SH" )
 		SHADER_PARAM( SHB1, SHADER_PARAM_TYPE_TEXTURE, "", "Second-bounce blue SH" )
@@ -96,14 +97,41 @@ BEGIN_VS_SHADER( RADIOSITY_BLEND, "Radiance Hints deferred reconstruction" )
 			ConVarRef cellSize( "deferred_rh_cell_size" );
 			ConVarRef receiverOffset( "deferred_rh_receiver_offset" );
 			ConVarRef intensity( "deferred_rh_intensity" );
+			ConVarRef validityBoost( "deferred_rh_validity_boost" );
+			ConVarRef saturation( "deferred_rh_saturation" );
+			ConVarRef maxRadiance( "deferred_rh_max_radiance" );
 			ConVarRef legacyMultiplier( "deferred_radiosity_multiplier" );
+			ConVarRef geometryEnable( "deferred_rh_geometry_enable" );
+			ConVarRef softShadowStrength( "deferred_rh_soft_shadow_strength" );
+			ConVarRef softShadowDistance( "deferred_rh_soft_shadow_distance" );
+			ConVarRef softShadowSoftness( "deferred_rh_soft_shadow_softness" );
+			ConVarRef softShadowMinVisibility( "deferred_rh_soft_shadow_min_visibility" );
+
+			const float safeCellSize = MAX( cellSize.GetFloat(), 1.0f );
 			float settings[4] = {
-				MAX( cellSize.GetFloat(), 1.0f ) * RH_VOLUME_SIZE,
-				MAX( receiverOffset.GetFloat(), 0.0f ),
+				safeCellSize * RH_VOLUME_SIZE,
+				clamp( receiverOffset.GetFloat(), 0.0f, safeCellSize * 0.45f ),
 				MAX( intensity.GetFloat(), 0.0f ) * MAX( legacyMultiplier.GetFloat(), 0.0f ),
 				1.0f
 			};
 			pShaderAPI->SetPixelShaderConstant( 2, settings );
+
+			float quality[4] = {
+				MAX( validityBoost.GetFloat(), 1.0f ),
+				clamp( saturation.GetFloat(), 0.0f, 2.0f ),
+				MAX( maxRadiance.GetFloat(), 0.25f ),
+				0.0f
+			};
+			pShaderAPI->SetPixelShaderConstant( 3, quality );
+
+			const float geometryScale = geometryEnable.GetBool() ? 1.0f : 0.0f;
+			float softShadowSettings[4] = {
+				clamp( softShadowStrength.GetFloat(), 0.0f, 4.0f ) * geometryScale,
+				clamp( softShadowDistance.GetFloat(), 0.75f, 12.0f ),
+				clamp( softShadowSoftness.GetFloat(), 0.0f, 1.0f ),
+				clamp( softShadowMinVisibility.GetFloat(), 0.0f, 1.0f )
+			};
+			pShaderAPI->SetPixelShaderConstant( 4, softShadowSettings );
 		}
 
 		Draw();

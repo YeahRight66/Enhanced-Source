@@ -18,6 +18,11 @@ const float3 g_vecViewOrigin : register( c0 );
 const float3 g_vecRHOrigin   : register( c1 );
 // x = volume extent, y = receiver normal offset, z = total intensity, w = second-bounce scale
 const float4 g_vecRHSettings : register( c2 );
+// x = validity boost, y = colour saturation, z = maximum output radiance
+const float4 g_vecRHQuality  : register( c3 );
+// x = soft-shadow strength, y = trace distance in cells,
+// z = softness (0 preserves max blocker, 1 averages taps), w = minimum visibility
+const float4 g_vecRHSoftShadow : register( c4 );
 
 struct PS_INPUT
 {
@@ -30,6 +35,56 @@ struct PS_OUTPUT
 	float4 vColor_0 : COLOR0;
 };
 
+float RH_TraceSoftIndirectVisibility(
+	float3 volumeUVW,
+	float3 towardSource,
+	float directionalConfidence )
+{
+	float cellUVW = 1.0f / RH_VOLUME_SIZE_F;
+	float traceDistance = max( g_vecRHSoftShadow.y, 0.75f );
+	float maximumOccupancy = 0.0f;
+	float summedOccupancy = 0.0f;
+	float sampleWeight = 0.0f;
+
+#if RH_SOFT_SHADOW_TAP_COUNT >= 1
+	float distanceCells0 = lerp( 0.70f, traceDistance, 0.38f );
+	float3 traceUVW0 = volumeUVW + towardSource * ( distanceCells0 * cellUVW );
+	float inside0 = RH_InsideVolume( traceUVW0 );
+	float occupancy0 = RH_SampleAtlas( sFirstAux, traceUVW0 ).w * inside0;
+	maximumOccupancy = max( maximumOccupancy, occupancy0 );
+	summedOccupancy += occupancy0;
+	sampleWeight += inside0;
+#endif
+#if RH_SOFT_SHADOW_TAP_COUNT >= 2
+	float distanceCells1 = traceDistance;
+	float3 traceUVW1 = volumeUVW + towardSource * ( distanceCells1 * cellUVW );
+	float inside1 = RH_InsideVolume( traceUVW1 );
+	float occupancy1 = RH_SampleAtlas( sFirstAux, traceUVW1 ).w * inside1;
+	maximumOccupancy = max( maximumOccupancy, occupancy1 );
+	summedOccupancy += occupancy1;
+	sampleWeight += inside1;
+#endif
+#if RH_SOFT_SHADOW_TAP_COUNT >= 3
+	float distanceCells2 = lerp( 0.70f, traceDistance, 0.70f );
+	float3 traceUVW2 = volumeUVW + towardSource * ( distanceCells2 * cellUVW );
+	float inside2 = RH_InsideVolume( traceUVW2 );
+	float occupancy2 = RH_SampleAtlas( sFirstAux, traceUVW2 ).w * inside2;
+	maximumOccupancy = max( maximumOccupancy, occupancy2 );
+	summedOccupancy += occupancy2;
+	sampleWeight += inside2;
+#endif
+
+	float averageOccupancy = summedOccupancy / max( sampleWeight, 1.0f );
+	float softness = saturate( g_vecRHSoftShadow.z );
+	float blocker = lerp( maximumOccupancy, averageOccupancy, softness );
+	// Small bias prevents the receiver's own coarse occupancy cell from darkening itself.
+	blocker = saturate( ( blocker - 0.06f ) / 0.94f );
+
+	float tracedVisibility = exp2( -4.0f * max( g_vecRHSoftShadow.x, 0.0f ) * blocker );
+	tracedVisibility = max( tracedVisibility, saturate( g_vecRHSoftShadow.w ) );
+	return lerp( 1.0f, tracedVisibility, saturate( directionalConfidence ) );
+}
+
 PS_OUTPUT main( const PS_INPUT In )
 {
 	PS_OUTPUT Out;
@@ -37,29 +92,54 @@ PS_OUTPUT main( const PS_INPUT In )
 	clip( min( depth - 0.1f, DEPTH_RECONSTRUCTION_LIMIT - depth ) );
 
 	float3 worldPosition = g_vecViewOrigin + In.vecWorldRay * depth;
-	float3 worldNormal = DecodeDirectionVectorXYZFromSphericalST( tex2D( sNormals, In.vTexCoord ).xy );
-	worldNormal = normalize( worldNormal );
+	float3 decodedNormal = DecodeDirectionVectorXYZFromSphericalST( tex2D( sNormals, In.vTexCoord ).xy );
+	float3 worldNormal = RH_SafeNormalize( decodedNormal, float3( 0.0f, 0.0f, 1.0f ) );
 
 	float3 samplePosition = worldPosition + worldNormal * g_vecRHSettings.y;
 	float3 volumeUVW = ( samplePosition - g_vecRHOrigin ) / max( g_vecRHSettings.x, 1.0f );
 	float inside = RH_InsideVolume( volumeUVW );
 	float edgeFade = RH_BoundaryFade( volumeUVW );
 
-	float4 firstSH_R = RH_SampleAtlas( sFirstSH_R, volumeUVW );
-	float4 firstSH_G = RH_SampleAtlas( sFirstSH_G, volumeUVW );
-	float4 firstSH_B = RH_SampleAtlas( sFirstSH_B, volumeUVW );
-	float firstValidity = RH_SampleAtlas( sFirstAux, volumeUVW ).z;
+	float4 firstSH_R = RH_DeringSH( RH_SampleAtlas( sFirstSH_R, volumeUVW ) );
+	float4 firstSH_G = RH_DeringSH( RH_SampleAtlas( sFirstSH_G, volumeUVW ) );
+	float4 firstSH_B = RH_DeringSH( RH_SampleAtlas( sFirstSH_B, volumeUVW ) );
+	float4 firstAux = RH_SampleAtlas( sFirstAux, volumeUVW );
+	float firstValidity = firstAux.z;
 
-	float3 indirect = RH_EvaluateDiffuse( firstSH_R, firstSH_G, firstSH_B, worldNormal ) * firstValidity;
+	float confidence = saturate( firstValidity * max( g_vecRHQuality.x, 1.0f ) );
+	confidence = confidence * confidence * ( 3.0f - 2.0f * confidence );
+
+	float3 indirect = RH_EvaluateDiffuse( firstSH_R, firstSH_G, firstSH_B, worldNormal );
 
 #if SECOND_BOUNCE
-	float4 secondSH_R = RH_SampleAtlas( sSecondSH_R, volumeUVW );
-	float4 secondSH_G = RH_SampleAtlas( sSecondSH_G, volumeUVW );
-	float4 secondSH_B = RH_SampleAtlas( sSecondSH_B, volumeUVW );
+	float4 secondSH_R = RH_DeringSH( RH_SampleAtlas( sSecondSH_R, volumeUVW ) );
+	float4 secondSH_G = RH_DeringSH( RH_SampleAtlas( sSecondSH_G, volumeUVW ) );
+	float4 secondSH_B = RH_DeringSH( RH_SampleAtlas( sSecondSH_B, volumeUVW ) );
 	indirect += RH_EvaluateDiffuse( secondSH_R, secondSH_G, secondSH_B, worldNormal ) * g_vecRHSettings.w;
 #endif
 
+	// Trace toward the dominant emitter direction through the smooth RH occupancy
+	// field. This creates broad, stable indirect penumbrae without an AO texture.
+	[branch]
+	if ( g_vecRHSoftShadow.x > 1.0e-4f && confidence > 1.0e-3f )
+	{
+		float3 dominantTravelDirection = RH_DominantTravelDirection(
+			firstSH_R, firstSH_G, firstSH_B, -worldNormal );
+		float3 towardSource = -dominantTravelDirection;
+		float directionalConfidence = RH_DirectionalConfidence(
+			firstSH_R, firstSH_G, firstSH_B );
+		float hemisphereWeight = 0.35f + 0.65f * saturate( dot( towardSource, worldNormal ) );
+		float softVisibility = RH_TraceSoftIndirectVisibility(
+			volumeUVW, towardSource, directionalConfidence * hemisphereWeight * confidence );
+		indirect *= softVisibility;
+	}
+
+	indirect *= confidence;
+	float luminance = dot( indirect, float3( 0.2126f, 0.7152f, 0.0722f ) );
+	indirect = lerp( luminance.xxx, indirect, max( g_vecRHQuality.y, 0.0f ) );
+	indirect = RH_ClampRadiance( indirect, max( g_vecRHQuality.z, 0.25f ) );
 	indirect *= inside * edgeFade * g_vecRHSettings.z;
+
 	Out.vColor_0 = WriteLighting( float4( indirect, 0.0f ) );
 	return Out;
 }

@@ -1,0 +1,13 @@
+VertexLitGeneric
+{
+	$basetexture "models/sponza/sponza_arch_diff"
+	$bumpmap "models/sponza/sponza_arch_ddn"
+	$phong 1
+
+	"$phongboost" "0.3"
+    	"$phongalbedotint" "1"
+    	"$phongalbedoboost" "1"
+    	"$phongfresnelranges" "[1 0.1 0]"
+
+
+}

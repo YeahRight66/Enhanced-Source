@@ -1,0 +1,6 @@
+VertexLitGeneric
+{
+	$basetexture "models/sponza/vase_hanging"
+	$bumpmap "models/sponza/vase_hanging_ddn"
+	$phong 1
+}

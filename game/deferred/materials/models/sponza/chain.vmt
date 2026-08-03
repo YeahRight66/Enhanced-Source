@@ -1,0 +1,10 @@
+VertexLitGeneric
+{
+	$basetexture "models/sponza/chain_texture"
+	$bumpmap "models/sponza/chain_texture_ddn"
+
+	$alphatest 1
+	$nocull 1
+	$phong 1
+
+}

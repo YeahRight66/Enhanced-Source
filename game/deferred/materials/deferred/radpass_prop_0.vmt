@@ -1,5 +1,7 @@
 "RADIOSITY_PROPAGATE"
 {
-	"$BASETEXTURE"		"_rt_radbuffer_00"
-	"$NORMALMAP"		"_rt_radnormal_00"
+	"$SHR"		"_rt_rh_sh_r_00"
+	"$SHG"		"_rt_rh_sh_g_00"
+	"$SHB"		"_rt_rh_sh_b_00"
+	"$AUX"		"_rt_rh_aux_00"
 }

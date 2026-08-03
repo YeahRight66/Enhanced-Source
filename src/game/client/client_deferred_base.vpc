@@ -79,6 +79,7 @@ $Project
 				$File	"deferred\materialsystem_passthru.h"
 				$File	"deferred\viewrender_deferred.cpp"
 				$File	"deferred\viewrender_deferred.h"
+				$File	"deferred\deferred_radiance_hints.h"
 			}
 		}
 	}

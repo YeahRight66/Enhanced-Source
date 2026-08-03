@@ -5,6 +5,7 @@
 #include "materialsystem/imaterialvar.h"
 #include "filesystem.h"
 #include "deferred/deferred_shared_common.h"
+#include "../../../materialsystem/deferredshaders/radiance_hints_config.h"
 
 #include "vgui_controls/messagebox.h"
 
