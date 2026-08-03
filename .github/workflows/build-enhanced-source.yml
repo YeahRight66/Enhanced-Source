@@ -12,6 +12,12 @@ on:
           - Debug
           - Release
 
+      compile_shaders:
+        description: Compile Deferred HLSL shaders in this manual run
+        required: true
+        default: false
+        type: boolean
+
   push:
     branches:
       - master
@@ -29,7 +35,7 @@ permissions:
 
 jobs:
   build:
-    name: Deferred shaders + ${{ inputs.configuration || 'Debug' }} Win32
+    name: ${{ inputs.configuration || 'Debug' }} Win32
     runs-on: windows-2022
     timeout-minutes: 120
 
@@ -40,6 +46,126 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Decide whether shaders need compilation
+        id: shader_changes
+        shell: powershell
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_BEFORE: ${{ github.event.before }}
+          EVENT_SHA: ${{ github.sha }}
+          MANUAL_COMPILE_SHADERS: ${{ inputs.compile_shaders }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $compileShaders = $false
+          $reason = ""
+
+          if ($env:EVENT_NAME -eq "workflow_dispatch") {
+              $compileShaders =
+                  $env:MANUAL_COMPILE_SHADERS.ToLowerInvariant() -eq "true"
+
+              if ($compileShaders) {
+                  $reason = "Enabled manually"
+              }
+              else {
+                  $reason = "Disabled for this manual run"
+              }
+          }
+          elseif ($env:EVENT_NAME -eq "push") {
+              $before = $env:EVENT_BEFORE
+              $after = $env:EVENT_SHA
+
+              if (!$before -or $before -match '^0+$') {
+                  $changedFiles = @(
+                      git show `
+                          --format="" `
+                          --name-only `
+                          $after
+                  )
+              }
+              else {
+                  $changedFiles = @(
+                      git diff `
+                          --name-only `
+                          $before `
+                          $after
+                  )
+              }
+
+              $changedFiles = $changedFiles |
+                  ForEach-Object { $_.Trim().Replace('\', '/') } |
+                  Where-Object { $_ }
+
+              Write-Host "Files changed in this push:"
+              $changedFiles | ForEach-Object { Write-Host "  $_" }
+
+              $shaderPatterns = @(
+                  '^src/materialsystem/deferredshaders/.*\.(fxc|fxh|h|inc|txt|bat|pl)$',
+                  '^src/materialsystem/stdshaders/.*\.(fxc|fxh|h|inc)$',
+                  '^src/devtools/bin/(updateshaders|fxc_prep|copyshaderincfiles|valve_perl_helpers)\.pl$',
+                  '^src/dx10sdk/utilities/dx9_30/',
+                  '^game/bin/(shadercompile\.exe|shadercompile_dll\.dll|tier0\.dll|vstdlib\.dll)$'
+              )
+
+              $matchingFiles = foreach ($file in $changedFiles) {
+                  foreach ($pattern in $shaderPatterns) {
+                      if ($file -match $pattern) {
+                          $file
+                          break
+                      }
+                  }
+              }
+
+              $matchingFiles = $matchingFiles | Sort-Object -Unique
+              $compileShaders = @($matchingFiles).Count -gt 0
+
+              if ($compileShaders) {
+                  $reason =
+                      "Shader-related files changed: " +
+                      ($matchingFiles -join ", ")
+              }
+              else {
+                  $reason = "No shader-related files changed"
+              }
+          }
+          else {
+              $reason = "Unsupported trigger; shaders disabled"
+          }
+
+          $compileValue = $compileShaders.ToString().ToLowerInvariant()
+          $artifactMode = if ($compileShaders) {
+              "With-Shaders"
+          }
+          else {
+              "DLL-Only"
+          }
+
+          "compile=$compileValue" |
+              Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+          "artifact_mode=$artifactMode" |
+              Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+          "reason=$reason" |
+              Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+          Write-Host "Compile shaders: $compileValue"
+          Write-Host "Reason: $reason"
+
+          Add-Content `
+              $env:GITHUB_STEP_SUMMARY `
+              "## Shader compilation decision"
+
+          Add-Content `
+              $env:GITHUB_STEP_SUMMARY `
+              "- Compile shaders: **$compileValue**"
+
+          Add-Content `
+              $env:GITHUB_STEP_SUMMARY `
+              "- Reason: $reason"
 
       - name: Add MSBuild to PATH
         uses: microsoft/setup-msbuild@v3
@@ -136,6 +262,7 @@ jobs:
             /reg:32
 
       - name: Install required Perl CRC32 module
+        if: steps.shader_changes.outputs.compile == 'true'
         shell: cmd
         run: |
           @echo off
@@ -162,6 +289,7 @@ jobs:
           )
 
       - name: Verify shader compiler files
+        if: steps.shader_changes.outputs.compile == 'true'
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
@@ -191,6 +319,7 @@ jobs:
           }
 
       - name: Force rebuild of every Deferred shader
+        if: steps.shader_changes.outputs.compile == 'true'
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
@@ -277,6 +406,7 @@ jobs:
           Write-Host "Forced rebuild of $($expected.Count) Deferred VCS files."
 
       - name: Compile all Deferred HLSL shaders
+        if: steps.shader_changes.outputs.compile == 'true'
         shell: cmd
         run: |
           @echo off
@@ -348,6 +478,7 @@ jobs:
           exit /b 0
 
       - name: Validate compiled Deferred shaders
+        if: steps.shader_changes.outputs.compile == 'true'
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
@@ -497,32 +628,172 @@ jobs:
             )
           )
 
-      - name: Build Deferred C++ solution
+      - name: Delete stale C++ outputs
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $staleOutputs = @(
+              "game\deferred\bin\client.dll",
+              "game\deferred\bin\client.pdb",
+              "game\deferred\bin\server.dll",
+              "game\deferred\bin\server.pdb",
+              "game\deferred\bin\game_shader_generic_deferred.dll",
+              "game\deferred\bin\game_shader_generic_deferred.pdb"
+          )
+
+          foreach ($file in $staleOutputs) {
+              Remove-Item $file -Force -ErrorAction SilentlyContinue
+
+              if (Test-Path $file) {
+                  throw "Unable to remove stale output: $file"
+              }
+          }
+
+          $stamp = (Get-Date).ToUniversalTime().ToString("o")
+          "CPP_BUILD_START=$stamp" |
+              Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+
+          Write-Host "Removed all stale client/server/shader DLL outputs."
+          Write-Host "C++ build start: $stamp"
+
+      - name: Build generated C++ projects directly
         shell: cmd
         run: |
           @echo off
-          setlocal EnableExtensions
+          setlocal EnableExtensions EnableDelayedExpansion
 
-          msbuild.exe "src\Game_Deferred-2019.sln" ^
-            /m ^
-            /t:Build ^
-            /p:Configuration=%BUILD_CONFIGURATION% ^
-            /p:Platform=Win32 ^
-            /p:PlatformToolset=v142 ^
-            /p:PreferredToolArchitecture=x64 ^
-            /verbosity:minimal ^
-            /bl:"%ARTIFACT_DIR%\EnhancedSource-%BUILD_CONFIGURATION%.binlog" ^
+          set "COMMON_ARGS=/m /t:Rebuild /p:Configuration=%BUILD_CONFIGURATION% /p:Platform=Win32 /p:PlatformToolset=v142 /p:PreferredToolArchitecture=x64 /verbosity:minimal"
+          set "MASTER_LOG=%ARTIFACT_DIR%\msbuild-console.log"
+
+          echo === Real Enhanced Source C++ build === > "%MASTER_LOG%"
+          echo Configuration: %BUILD_CONFIGURATION% >> "%MASTER_LOG%"
+          echo Platform: Win32 >> "%MASTER_LOG%"
+          echo. >> "%MASTER_LOG%"
+
+          rem The VPC-generated solution has no active Build.0 mappings on this
+          rem hosted runner, so MSBuild reports success without building anything.
+          rem Build each generated project explicitly in dependency order.
+
+          call :BUILD_PROJECT ^
+            "ShaderLib" ^
+            "src\materialsystem\shaderlib\shaderlib.vcxproj" ^
+            "%ARTIFACT_DIR%\shaderlib-%BUILD_CONFIGURATION%"
+          if errorlevel 1 exit /b 1
+
+          call :BUILD_PROJECT ^
+            "Shaders (Deferred)" ^
+            "src\materialsystem\deferredshaders\game_shader_deferred.vcxproj" ^
+            "%ARTIFACT_DIR%\game-shader-%BUILD_CONFIGURATION%"
+          if errorlevel 1 exit /b 1
+
+          call :BUILD_PROJECT ^
+            "Client (Deferred)" ^
+            "src\game\client\client_deferred.vcxproj" ^
+            "%ARTIFACT_DIR%\client-%BUILD_CONFIGURATION%"
+          if errorlevel 1 exit /b 1
+
+          call :BUILD_PROJECT ^
+            "Server (Deferred)" ^
+            "src\game\server\server_deferred.vcxproj" ^
+            "%ARTIFACT_DIR%\server-%BUILD_CONFIGURATION%"
+          if errorlevel 1 exit /b 1
+
+          echo.>> "%MASTER_LOG%"
+          echo All four generated projects built successfully.>> "%MASTER_LOG%"
+          type "%MASTER_LOG%"
+          exit /b 0
+
+          :BUILD_PROJECT
+          set "PROJECT_NAME=%~1"
+          set "PROJECT_PATH=%~2"
+          set "LOG_BASE=%~3"
+
+          echo ==================================================>> "%MASTER_LOG%"
+          echo Building !PROJECT_NAME!>> "%MASTER_LOG%"
+          echo Project: !PROJECT_PATH!>> "%MASTER_LOG%"
+          echo ==================================================>> "%MASTER_LOG%"
+
+          if not exist "!PROJECT_PATH!" (
+              echo ERROR: Generated project is missing: !PROJECT_PATH!>> "%MASTER_LOG%"
+              type "%MASTER_LOG%"
+              exit /b 1
+          )
+
+          msbuild.exe "!PROJECT_PATH!" ^
+            %COMMON_ARGS% ^
+            /bl:"!LOG_BASE!.binlog" ^
             /fl ^
-            /flp:"logfile=%ARTIFACT_DIR%\EnhancedSource-%BUILD_CONFIGURATION%.log;verbosity=diagnostic" ^
-            > "%ARTIFACT_DIR%\msbuild-console.log" 2>&1
+            /flp:"logfile=!LOG_BASE!.log;verbosity=diagnostic" ^
+            >> "%MASTER_LOG%" 2>&1
 
-          set "BUILD_RESULT=%ERRORLEVEL%"
-          type "%ARTIFACT_DIR%\msbuild-console.log"
-          exit /b %BUILD_RESULT%
+          set "PROJECT_RESULT=!ERRORLEVEL!"
+
+          if not "!PROJECT_RESULT!"=="0" (
+              echo ERROR: !PROJECT_NAME! failed with exit code !PROJECT_RESULT!.>> "%MASTER_LOG%"
+              type "%MASTER_LOG%"
+              exit /b !PROJECT_RESULT!
+          )
+
+          echo SUCCESS: !PROJECT_NAME!>> "%MASTER_LOG%"
+          echo.>> "%MASTER_LOG%"
+          exit /b 0
+
+      - name: Verify newly compiled DLLs
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $buildStart = [DateTime]::Parse(
+              $env:CPP_BUILD_START,
+              [Globalization.CultureInfo]::InvariantCulture,
+              [Globalization.DateTimeStyles]::RoundtripKind
+          ).ToUniversalTime()
+
+          $required = @(
+              "game\deferred\bin\client.dll",
+              "game\deferred\bin\server.dll",
+              "game\deferred\bin\game_shader_generic_deferred.dll"
+          )
+
+          $results = foreach ($file in $required) {
+              if (!(Test-Path $file)) {
+                  throw "The project build did not create: $file"
+              }
+
+              $item = Get-Item $file
+
+              if ($item.Length -le 0) {
+                  throw "The compiled output is empty: $file"
+              }
+
+              if ($item.LastWriteTimeUtc -lt $buildStart.AddMinutes(-1)) {
+                  throw "The output is stale rather than newly compiled: $file"
+              }
+
+              $hash = Get-FileHash $file -Algorithm SHA256
+
+              [pscustomobject]@{
+                  File = $file
+                  Size = $item.Length
+                  ModifiedUtc = $item.LastWriteTimeUtc
+                  SHA256 = $hash.Hash
+              }
+          }
+
+          $results | Format-Table -AutoSize
+
+          $results |
+              ConvertTo-Json -Depth 3 |
+              Set-Content `
+                  "$env:ARTIFACT_DIR\compiled-dll-manifest.json" `
+                  -Encoding utf8
 
       - name: Create ready-to-copy game patch
         if: success()
         shell: powershell
+        env:
+          COMPILE_SHADERS: ${{ steps.shader_changes.outputs.compile }}
         run: |
           $ErrorActionPreference = "Stop"
 
@@ -553,11 +824,32 @@ jobs:
               Where-Object { $_.Extension -in ".dll", ".pdb", ".map" } |
               Copy-Item -Destination $binTarget -Force
 
-          Copy-Item `
-              "game\deferred\shaders\*" `
-              $shaderTarget `
-              -Recurse `
-              -Force
+          if ($env:COMPILE_SHADERS -eq "true") {
+              Copy-Item `
+                  "game\deferred\shaders\*" `
+                  $shaderTarget `
+                  -Recurse `
+                  -Force
+
+              "Deferred shaders were rebuilt in this workflow run." |
+                  Set-Content `
+                      (Join-Path $packageRoot "SHADERS_REBUILT.txt") `
+                      -Encoding utf8
+          }
+          else {
+              Remove-Item $shaderTarget -Recurse -Force
+
+              @"
+Deferred shaders were NOT rebuilt in this workflow run.
+
+Copy only the bin folder from this artifact.
+Keep the existing game\deferred\shaders folder from your previous successful
+shader build.
+"@ |
+                  Set-Content `
+                      (Join-Path $packageRoot "SHADERS_NOT_REBUILT.txt") `
+                      -Encoding utf8
+          }
 
           Write-Host "Ready-to-copy package:"
           Get-ChildItem $packageRoot -Recurse -File |
@@ -568,7 +860,7 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v6
         with:
-          name: Enhanced-Source-${{ env.BUILD_CONFIGURATION }}-With-Deferred-Shaders
+          name: Enhanced-Source-${{ env.BUILD_CONFIGURATION }}-${{ steps.shader_changes.outputs.artifact_mode }}
           path: artifacts/Enhanced-Source-${{ env.BUILD_CONFIGURATION }}-Game-Patch/**
           if-no-files-found: error
           retention-days: 30
@@ -579,9 +871,12 @@ jobs:
         with:
           name: Enhanced-Source-${{ env.BUILD_CONFIGURATION }}-Build-Logs
           path: |
-            artifacts/*.log
-            artifacts/*.binlog
+            artifacts/**
             src/Game_Deferred-2019.sln
+            src/game/client/client_deferred.vcxproj
+            src/game/server/server_deferred.vcxproj
+            src/materialsystem/shaderlib/shaderlib.vcxproj
+            src/materialsystem/deferredshaders/game_shader_deferred.vcxproj
             src/materialsystem/deferredshaders/fxctmp9/*.inc
             src/materialsystem/deferredshaders/fxctmp9_tmp/*.inc
           if-no-files-found: warn
