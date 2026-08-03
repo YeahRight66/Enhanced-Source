@@ -46,12 +46,13 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path $env:ARTIFACT_DIR | Out-Null
 
-      - name: Verify v142 toolset
+      - name: Verify MSVC v142
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
 
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+
           $vsPath = & $vswhere `
               -latest `
               -products * `
@@ -73,47 +74,111 @@ jobs:
           Write-Host "Visual Studio: $vsPath"
           Write-Host "MSBuild:"
           Get-Command msbuild.exe | Format-List Source
+
           Write-Host "Installed MSVC versions:"
           Get-ChildItem "$vsPath\VC\Tools\MSVC" -Directory |
               Select-Object -ExpandProperty Name
+
+      - name: Add legacy VPC registry compatibility
+        shell: cmd
+        run: |
+          @echo off
+          setlocal EnableExtensions
+
+          set "CPP_GUID={8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}"
+
+          rem Old Source SDK 2013 VPC searches the 32-bit Visual Studio
+          rem registry view for the Visual C++ project type.
+          reg add "HKLM\SOFTWARE\Microsoft\VisualStudio\10.0\VC\Projects\%CPP_GUID%" ^
+            /v DefaultProjectExtension ^
+            /t REG_SZ ^
+            /d vcproj ^
+            /f ^
+            /reg:32
+
+          if errorlevel 1 exit /b 1
+
+          rem Also expose a VS2013-compatible entry. This is harmless and
+          rem matches the /2013 project-generation mode.
+          reg add "HKLM\SOFTWARE\Microsoft\VisualStudio\12.0\VC\Projects\%CPP_GUID%" ^
+            /v DefaultProjectExtension ^
+            /t REG_SZ ^
+            /d vcxproj ^
+            /f ^
+            /reg:32
+
+          if errorlevel 1 exit /b 1
+
+          echo === VS 10 compatibility key ===
+          reg query "HKLM\SOFTWARE\Microsoft\VisualStudio\10.0\VC\Projects\%CPP_GUID%" /reg:32
+
+          echo === VS 12 compatibility key ===
+          reg query "HKLM\SOFTWARE\Microsoft\VisualStudio\12.0\VC\Projects\%CPP_GUID%" /reg:32
 
       - name: Generate Deferred solution with VPC
         shell: cmd
         working-directory: src
         run: |
           @echo off
+          setlocal EnableExtensions
+
           echo === VPC output === > "..\%ARTIFACT_DIR%\vpc.log"
 
-          devtools\bin\vpc.exe /deferred +game /mksln Game_Deferred-2019.sln /2013 /define:VS2019 >> "..\%ARTIFACT_DIR%\vpc.log" 2>&1
+          devtools\bin\vpc.exe ^
+            /deferred ^
+            +game ^
+            /mksln Game_Deferred-2019.sln ^
+            /2013 ^
+            /define:VS2019 ^
+            >> "..\%ARTIFACT_DIR%\vpc.log" 2>&1
+
+          set "VPC_RESULT=%ERRORLEVEL%"
 
           echo. >> "..\%ARTIFACT_DIR%\vpc.log"
-          echo VPC exit code: %ERRORLEVEL% >> "..\%ARTIFACT_DIR%\vpc.log"
+          echo VPC exit code: %VPC_RESULT% >> "..\%ARTIFACT_DIR%\vpc.log"
           type "..\%ARTIFACT_DIR%\vpc.log"
 
-          rem This old VPC executable returns exit code 1 on modern hosted
-          rem runners after successfully writing the solution because it cannot
-          rem find the old Visual Studio project-file registry association.
-          rem Treat generation as successful only when every required output exists.
+          if not "%VPC_RESULT%"=="0" (
+              echo ERROR: VPC returned exit code %VPC_RESULT%.
+              exit /b %VPC_RESULT%
+          )
 
-          if not exist "Game_Deferred-2019.sln" goto VPC_FAILED
-          if not exist "client_deferred.vcxproj" goto VPC_FAILED
-          if not exist "server_deferred.vcxproj" goto VPC_FAILED
-          if not exist "shaderlib.vcxproj" goto VPC_FAILED
-          if not exist "game_shader_deferred.vcxproj" goto VPC_FAILED
+          if not exist "Game_Deferred-2019.sln" (
+              echo ERROR: Game_Deferred-2019.sln was not generated.
+              exit /b 1
+          )
 
-          echo VPC generated the solution and all four projects successfully.
+          if not exist "client_deferred.vcxproj" (
+              echo ERROR: client_deferred.vcxproj was not generated.
+              exit /b 1
+          )
+
+          if not exist "server_deferred.vcxproj" (
+              echo ERROR: server_deferred.vcxproj was not generated.
+              exit /b 1
+          )
+
+          if not exist "shaderlib.vcxproj" (
+              echo ERROR: shaderlib.vcxproj was not generated.
+              exit /b 1
+          )
+
+          if not exist "game_shader_deferred.vcxproj" (
+              echo ERROR: game_shader_deferred.vcxproj was not generated.
+              exit /b 1
+          )
+
+          echo === Generated project files ===
+          dir /b Game_Deferred-2019.sln *.vcxproj
+
           copy /y "Game_Deferred-2019.sln" "..\%ARTIFACT_DIR%\Game_Deferred-2019.sln" >nul
-          exit /b 0
-
-          :VPC_FAILED
-          echo ERROR: VPC did not generate all required solution/project files.
-          dir /b Game_Deferred-2019.sln *.vcxproj 2>nul
-          exit /b 1
 
       - name: Build Deferred solution
         shell: cmd
         run: |
           @echo off
+          setlocal EnableExtensions
+
           msbuild.exe "src\Game_Deferred-2019.sln" ^
             /m ^
             /t:Build ^
@@ -147,6 +212,7 @@ jobs:
           )
 
           $missing = $required | Where-Object { !(Test-Path $_) }
+
           if ($missing) {
               throw "Missing expected outputs: $($missing -join ', ')"
           }
@@ -179,5 +245,6 @@ jobs:
             artifacts/**
             src/Game_Deferred-2019.sln
             src/*.vcxproj
+            src/*.vcxproj.filters
           if-no-files-found: warn
           retention-days: 30
