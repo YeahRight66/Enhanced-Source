@@ -277,7 +277,6 @@ jobs:
             /reg:32
 
       - name: Install required Perl CRC32 module
-        if: steps.shader_changes.outputs.compile == 'true'
         shell: cmd
         run: |
           @echo off
@@ -304,7 +303,6 @@ jobs:
           )
 
       - name: Verify shader compiler files
-        if: steps.shader_changes.outputs.compile == 'true'
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
@@ -602,6 +600,141 @@ jobs:
               Format-Table -AutoSize
 
           Write-Host "Validated $($expected.Count) forced-SM3 VCS files in both output directories."
+
+      - name: Regenerate Deferred shader C++ headers only
+        if: steps.shader_changes.outputs.compile != 'true'
+        shell: cmd
+        run: |
+          @echo off
+          setlocal EnableExtensions
+
+          call "%VSDEVCMD%" -no_logo -arch=x86 -host_arch=x64
+          if errorlevel 1 (
+              echo ERROR: Failed to initialize the Visual Studio developer environment.
+              exit /b 1
+          )
+
+          where nmake.exe
+          if errorlevel 1 (
+              echo ERROR: nmake.exe is not available.
+              exit /b 1
+          )
+
+          where perl.exe
+          if errorlevel 1 (
+              echo ERROR: perl.exe is not available.
+              exit /b 1
+          )
+
+          perl -MString::CRC32 -e "print qq(String::CRC32 OK\n)"
+          if errorlevel 1 (
+              echo ERROR: String::CRC32 is unavailable.
+              exit /b 1
+          )
+
+          if not exist "%GITHUB_WORKSPACE%\game\deferred\GameInfo.txt" (
+              echo ERROR: Missing game\deferred\GameInfo.txt
+              exit /b 1
+          )
+
+          pushd "%GITHUB_WORKSPACE%\src\materialsystem\deferredshaders"
+
+          rem dynamic_shaders=1 makes fxc_prep generate only the C++ combo
+          rem headers with -novcs. shadercompile.exe is not launched.
+          set "dynamic_shaders=1"
+          set "GAMEDIR=%GITHUB_WORKSPACE%\game\deferred"
+          set "SDKBINDIR=..\..\..\game\bin"
+          set "SOURCEDIR=..\.."
+
+          del /f /q "fxctmp9\*.inc" 2>nul
+          del /f /q "fxctmp9_tmp\*.inc" 2>nul
+          del /f /q "inclist.txt" 2>nul
+          del /f /q "makefile.deferred_shaders" 2>nul
+          del /f /q "makefile.deferred_shaders.copy" 2>nul
+
+          call buildshaders.bat ^
+            deferred_shaders ^
+            -game "%GAMEDIR%" ^
+            -source "%SOURCEDIR%" ^
+            -dx9_30 ^
+            -force30 ^
+            > "%GITHUB_WORKSPACE%\%ARTIFACT_DIR%\shader-headers.log" 2>&1
+
+          popd
+
+          type "%GITHUB_WORKSPACE%\%ARTIFACT_DIR%\shader-headers.log"
+
+          rem Valve's batch file does not reliably return failures.
+          rem The next step validates the generated headers exactly.
+          exit /b 0
+
+      - name: Validate generated shader combo headers
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $root = "src\materialsystem\deferredshaders\fxctmp9"
+
+          $requiredFiles = @(
+              "radiosity_blend_ps30.inc",
+              "radiosity_gen_global_ps30.inc",
+              "radiosity_propagate_ps30.inc",
+              "screenspace_shading_ps30.inc"
+          )
+
+          foreach ($name in $requiredFiles) {
+              $path = Join-Path $root $name
+
+              if (!(Test-Path $path)) {
+                  throw "Generated shader header is missing: $path"
+              }
+
+              if ((Get-Item $path).Length -le 0) {
+                  throw "Generated shader header is empty: $path"
+              }
+          }
+
+          $blend = Get-Content `
+              (Join-Path $root "radiosity_blend_ps30.inc") `
+              -Raw
+
+          if ($blend -notmatch '\bSetSECOND_BOUNCE\s*\(') {
+              throw "radiosity_blend_ps30.inc is stale: SetSECOND_BOUNCE was not generated."
+          }
+
+          $global = Get-Content `
+              (Join-Path $root "radiosity_gen_global_ps30.inc") `
+              -Raw
+
+          if ($global -match '\bSetCASCADE\s*\(' -or
+              $global -match 'forgot_to_set_dynamic_CASCADE') {
+              throw "radiosity_gen_global_ps30.inc is stale: obsolete CASCADE combo remains."
+          }
+
+          $propagate = Get-Content `
+              (Join-Path $root "radiosity_propagate_ps30.inc") `
+              -Raw
+
+          if ($propagate -match '\bSetBLUR\s*\(' -or
+              $propagate -match 'forgot_to_set_static_BLUR') {
+              throw "radiosity_propagate_ps30.inc is stale: obsolete BLUR combo remains."
+          }
+
+          $screenspace = Get-Content `
+              (Join-Path $root "screenspace_shading_ps30.inc") `
+              -Raw
+
+          if ($screenspace -match '\bSetRADIOSITY\s*\(' -or
+              $screenspace -match 'forgot_to_set_dynamic_RADIOSITY') {
+              throw "screenspace_shading_ps30.inc is stale: obsolete RADIOSITY combo remains."
+          }
+
+          if ($screenspace -notmatch '\bSetPIXELFOGTYPE\s*\(') {
+              throw "screenspace_shading_ps30.inc is invalid: PIXELFOGTYPE combo is missing."
+          }
+
+          Write-Host "Generated shader headers match the current FXC combo declarations."
+          Write-Host "No VCS shader bytecode rebuild was required."
 
       - name: Generate Deferred solution with VPC
         shell: cmd
