@@ -12,6 +12,12 @@ on:
           - Debug
           - Release
 
+      compile_shaders:
+        description: Compile Deferred HLSL shaders in this manual run
+        required: true
+        default: false
+        type: boolean
+
   push:
     branches:
       - master
@@ -29,7 +35,7 @@ permissions:
 
 jobs:
   build:
-    name: Deferred shaders + ${{ inputs.configuration || 'Debug' }} Win32
+    name: ${{ inputs.configuration || 'Debug' }} Win32
     runs-on: windows-2022
     timeout-minutes: 120
 
@@ -40,6 +46,132 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Decide whether shaders need compilation
+        id: shader_changes
+        shell: powershell
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_BEFORE: ${{ github.event.before }}
+          EVENT_SHA: ${{ github.sha }}
+          MANUAL_COMPILE_SHADERS: ${{ inputs.compile_shaders }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $compileShaders = $false
+          $reason = ""
+
+          if ($env:EVENT_NAME -eq "workflow_dispatch") {
+              $compileShaders =
+                  $env:MANUAL_COMPILE_SHADERS.ToLowerInvariant() -eq "true"
+
+              if ($compileShaders) {
+                  $reason = "Enabled manually"
+              }
+              else {
+                  $reason = "Disabled for this manual run"
+              }
+          }
+          elseif ($env:EVENT_NAME -eq "push") {
+              $before = $env:EVENT_BEFORE
+              $after = $env:EVENT_SHA
+
+              if (!$before -or $before -match '^0+$') {
+                  $changedFiles = @(
+                      git show `
+                          --format="" `
+                          --name-only `
+                          $after
+                  )
+              }
+              else {
+                  $changedFiles = @(
+                      git diff `
+                          --name-only `
+                          $before `
+                          $after
+                  )
+              }
+
+              $changedFiles = $changedFiles |
+                  ForEach-Object { $_.Trim().Replace('\', '/') } |
+                  Where-Object { $_ }
+
+              Write-Host "Files changed in this push:"
+              $changedFiles | ForEach-Object { Write-Host "  $_" }
+
+              $shaderPatterns = @(
+                  '^src/materialsystem/deferredshaders/.*\.(fxc|fxh|h|inc|txt|bat|pl)$',
+                  '^src/materialsystem/stdshaders/.*\.(fxc|fxh|h|inc)$',
+                  '^src/devtools/bin/(updateshaders|fxc_prep|copyshaderincfiles|valve_perl_helpers)\.pl$',
+                  '^src/dx10sdk/utilities/dx9_30/',
+                  '^game/bin/(shadercompile\.exe|shadercompile_dll\.dll|tier0\.dll|vstdlib\.dll)$'
+              )
+
+              $matchingFiles = foreach ($file in $changedFiles) {
+                  foreach ($pattern in $shaderPatterns) {
+                      if ($file -match $pattern) {
+                          $file
+                          break
+                      }
+                  }
+              }
+
+              $matchingFiles = $matchingFiles | Sort-Object -Unique
+              $compileShaders = @($matchingFiles).Count -gt 0
+
+              if ($compileShaders) {
+                  $reason =
+                      "Shader-related files changed: " +
+                      ($matchingFiles -join ", ")
+              }
+              else {
+                  $reason = "No shader-related files changed"
+              }
+          }
+          else {
+              $reason = "Unsupported trigger; shaders disabled"
+          }
+
+          $compileValue = $compileShaders.ToString().ToLowerInvariant()
+          $artifactMode = if ($compileShaders) {
+              "With-Shaders"
+          }
+          else {
+              "DLL-Only"
+          }
+
+          "compile=$compileValue" |
+              Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+          "artifact_mode=$artifactMode" |
+              Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+          "reason=$reason" |
+              Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+          Write-Host "Compile shaders: $compileValue"
+          Write-Host "Reason: $reason"
+
+          Add-Content `
+              $env:GITHUB_STEP_SUMMARY `
+              "## Shader compilation decision"
+
+          Add-Content `
+              $env:GITHUB_STEP_SUMMARY `
+              "- Compile shaders: **$compileValue**"
+
+          Add-Content `
+              $env:GITHUB_STEP_SUMMARY `
+              "- Reason: $reason"
+
+          if (!$compileShaders) {
+              Add-Content `
+                  $env:GITHUB_STEP_SUMMARY `
+                  "- Important: enable shader compilation whenever FXC combo declarations or generated fxctmp9 headers changed."
+          }
 
       - name: Add MSBuild to PATH
         uses: microsoft/setup-msbuild@v3
@@ -91,6 +223,15 @@ jobs:
           Get-ChildItem "$vsPath\VC\Tools\MSVC" -Directory |
               Select-Object -ExpandProperty Name
 
+          $sdkVersion = "10.0.19041.0"
+          $sdkInclude = "${env:ProgramFiles(x86)}\Windows Kits\10\Include\$sdkVersion"
+
+          if (!(Test-Path $sdkInclude)) {
+              throw "Required Windows SDK $sdkVersion is not installed on this runner."
+          }
+
+          Write-Host "Using Windows SDK: $sdkVersion"
+
       - name: Add legacy VPC registry compatibility
         shell: cmd
         run: |
@@ -135,6 +276,32 @@ jobs:
             /v DefaultProjectExtension ^
             /reg:32
 
+      - name: Install required Perl CRC32 module
+        shell: cmd
+        run: |
+          @echo off
+          setlocal EnableExtensions
+
+          perl -MString::CRC32 -e "print qq(String::CRC32 already installed\n)" >nul 2>&1
+          if not errorlevel 1 goto CRC_READY
+
+          echo Installing String::CRC32 from CPAN...
+          set "PERL_MM_USE_DEFAULT=1"
+          set "NONINTERACTIVE_TESTING=1"
+
+          cpan -T -i String::CRC32
+          if errorlevel 1 (
+              echo ERROR: CPAN failed to install String::CRC32.
+              exit /b 1
+          )
+
+          :CRC_READY
+          perl -MString::CRC32 -e "print qq(String::CRC32 is available\n)"
+          if errorlevel 1 (
+              echo ERROR: Perl still cannot load String::CRC32.
+              exit /b 1
+          )
+
       - name: Verify shader compiler files
         shell: powershell
         run: |
@@ -164,21 +331,77 @@ jobs:
               Write-Host "$file  [$($item.Length) bytes]"
           }
 
-      - name: Remove stale deferred shader outputs
+      - name: Force rebuild of every Deferred shader
+        if: steps.shader_changes.outputs.compile == 'true'
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
 
-          $patterns = @(
-              "src\materialsystem\deferredshaders\shaders\fxc\*.vcs",
-              "src\materialsystem\deferredshaders\fxctmp9\*.inc",
-              "src\materialsystem\deferredshaders\fxctmp9_tmp\*.inc",
-              "game\deferred\shaders\fxc\*.vcs"
+          $shaderRoot = "src\materialsystem\deferredshaders"
+          $shaderList = Join-Path $shaderRoot "deferred_shaders.txt"
+
+          $shaderSources = Get-Content $shaderList |
+              ForEach-Object { $_.Trim() } |
+              Where-Object {
+                  $_ -and
+                  !$_.StartsWith("//") -and
+                  !$_.StartsWith("#")
+              }
+
+          function Get-ForcedShaderOutputName {
+              param([Parameter(Mandatory = $true)][string]$SourceName)
+
+              if ($SourceName -notmatch '\.fxc$') {
+                  throw "Unsupported shader-list entry: $SourceName"
+              }
+
+              $base = [System.IO.Path]::GetFileNameWithoutExtension($SourceName)
+
+              # buildshaders.bat sets DIRECTX_FORCE_MODEL=30 when -force30
+              # is supplied. Valve's loader applies these output transforms.
+              $base = $base -replace '_ps2x$', '_ps30'
+              $base = $base -replace '_ps20b$', '_ps30'
+              $base = $base -replace '_ps20$', '_ps30'
+              $base = $base -replace '_vs20$', '_vs30'
+              $base = $base -replace '_vsxx$', '_vs30'
+
+              return "$base.vcs"
+          }
+
+          $expected = $shaderSources |
+              ForEach-Object { Get-ForcedShaderOutputName $_ } |
+              Sort-Object -Unique
+
+          # updateshaders.pl compares CRCs against game\platform\shaders.
+          # Delete only this project's expected VCS files there, otherwise
+          # unchanged committed bytecode can make the build skip compilation.
+          $outputDirectories = @(
+              "src\materialsystem\deferredshaders\shaders\fxc",
+              "game\deferred\shaders\fxc",
+              "game\platform\shaders\fxc"
           )
 
-          foreach ($pattern in $patterns) {
-              Remove-Item $pattern -Force -ErrorAction SilentlyContinue
+          foreach ($directory in $outputDirectories) {
+              New-Item -ItemType Directory -Force -Path $directory |
+                  Out-Null
+
+              foreach ($name in $expected) {
+                  Remove-Item `
+                      (Join-Path $directory $name) `
+                      -Force `
+                      -ErrorAction SilentlyContinue
+              }
           }
+
+          Remove-Item `
+              "src\materialsystem\deferredshaders\fxctmp9\*.inc" `
+              -Force `
+              -ErrorAction SilentlyContinue
+
+          Remove-Item `
+              "src\materialsystem\deferredshaders\fxctmp9_tmp\*.inc" `
+              -Force `
+              -ErrorAction SilentlyContinue
 
           $temporaryFiles = @(
               "src\materialsystem\deferredshaders\filelist.txt",
@@ -186,20 +409,17 @@ jobs:
               "src\materialsystem\deferredshaders\filestocopy.txt",
               "src\materialsystem\deferredshaders\uniquefilestocopy.txt",
               "src\materialsystem\deferredshaders\inclist.txt",
-              "src\materialsystem\deferredshaders\vcslist.txt"
+              "src\materialsystem\deferredshaders\vcslist.txt",
+              "src\materialsystem\deferredshaders\makefile.deferred_shaders",
+              "src\materialsystem\deferredshaders\makefile.deferred_shaders.copy"
           )
 
           Remove-Item $temporaryFiles -Force -ErrorAction SilentlyContinue
 
-          New-Item -ItemType Directory -Force `
-              -Path "src\materialsystem\deferredshaders\shaders\fxc" |
-              Out-Null
-
-          New-Item -ItemType Directory -Force `
-              -Path "game\deferred\shaders\fxc" |
-              Out-Null
+          Write-Host "Forced rebuild of $($expected.Count) Deferred VCS files."
 
       - name: Compile all Deferred HLSL shaders
+        if: steps.shader_changes.outputs.compile == 'true'
         shell: cmd
         run: |
           @echo off
@@ -223,13 +443,29 @@ jobs:
               exit /b 1
           )
 
-          set "GAMEDIR=%GITHUB_WORKSPACE%\game\deferred"
-          set "SDKBINDIR=%GITHUB_WORKSPACE%\game\bin"
-          set "SOURCEDIR=%GITHUB_WORKSPACE%\src"
+          perl -MString::CRC32 -e "print qq(String::CRC32 OK\n)"
+          if errorlevel 1 (
+              echo ERROR: String::CRC32 is unavailable.
+              exit /b 1
+          )
+
           set "SHADER_LOG=%GITHUB_WORKSPACE%\%ARTIFACT_DIR%\shader-build.log"
           set "dynamic_shaders=0"
 
+          if not exist "%GITHUB_WORKSPACE%\game\deferred\GameInfo.txt" (
+              echo ERROR: Missing %GITHUB_WORKSPACE%\game\deferred\GameInfo.txt
+              exit /b 1
+          )
+
           pushd "%GITHUB_WORKSPACE%\src\materialsystem\deferredshaders"
+
+          rem GAMEDIR must be absolute because buildshaders.bat changes the
+          rem current directory to game\bin before launching shadercompile.exe.
+          rem SDKBINDIR and SOURCEDIR must remain relative because they are
+          rem written into Valve's shader work/copy lists.
+          set "GAMEDIR=%GITHUB_WORKSPACE%\game\deferred"
+          set "SDKBINDIR=..\..\..\game\bin"
+          set "SOURCEDIR=..\.."
 
           echo Shader source: %CD%
           echo Game directory: %GAMEDIR%
@@ -250,12 +486,12 @@ jobs:
           type "%SHADER_LOG%"
           echo buildshaders.bat exit code: %SHADER_SCRIPT_RESULT%
 
-          rem The old Valve batch file does not reliably propagate failures.
-          rem The next PowerShell step validates every expected .vcs file and
-          rem scans the complete shader log for actual compiler errors.
+          rem Valve's old batch file does not reliably propagate failures.
+          rem Validation below checks logs and every expected VCS output.
           exit /b 0
 
       - name: Validate compiled Deferred shaders
+        if: steps.shader_changes.outputs.compile == 'true'
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
@@ -277,7 +513,13 @@ jobs:
               '(?im)\berror\s+X\d+\b',
               '(?im)\berror\s+C\d+\b',
               '(?im)\bERROR\(S\):\s*[1-9]\d*\b',
-              '(?im)\bshader compile failed\b'
+              '(?im)\bshader compile failed\b',
+              '(?im)^Can''t locate .+$',
+              '(?im)^Can''t find .+$',
+              '(?im)Unable to find GameInfo\.txt',
+              '(?im)not a valid game directory',
+              '(?im)^NMAKE\s*:\s*fatal error\b',
+              '(?im)^No such file or directory\b'
           )
 
           foreach ($pattern in $fatalPatterns) {
@@ -286,28 +528,44 @@ jobs:
               }
           }
 
+          # The old shader compiler can print one harmless generic Windows
+          # path warning and still finish correctly. Validate positive build
+          # milestones and the actual VCS outputs instead.
+          if ($logText -notmatch '(?im)Compiling\s+[\d,]+\s+commands') {
+              throw "shadercompile.exe did not begin shader command compilation."
+          }
+
+          if ($logText -notmatch '(?im)\b\d+\s+File\(s\) copied\b') {
+              throw "The shader build did not report copying compiled VCS files."
+          }
+
           $shaderSources = Get-Content $shaderList |
               ForEach-Object { $_.Trim() } |
               Where-Object { $_ -and !$_.StartsWith("//") -and !$_.StartsWith("#") }
 
-          $expected = New-Object System.Collections.Generic.List[string]
+          function Get-ForcedShaderOutputName {
+              param([Parameter(Mandatory = $true)][string]$SourceName)
 
-          foreach ($source in $shaderSources) {
-              if ($source -match '^(.*)_ps2x\.fxc$') {
-                  $base = $Matches[1]
-                  $expected.Add("${base}_ps20.vcs")
-                  $expected.Add("${base}_ps20b.vcs")
-                  $expected.Add("${base}_ps30.vcs")
+              if ($SourceName -notmatch '\.fxc$') {
+                  throw "Unsupported shader-list entry: $SourceName"
               }
-              elseif ($source -match '\.fxc$') {
-                  $expected.Add([System.IO.Path]::ChangeExtension($source, ".vcs"))
-              }
-              else {
-                  throw "Unsupported shader-list entry: $source"
-              }
+
+              $base = [System.IO.Path]::GetFileNameWithoutExtension($SourceName)
+
+              # buildshaders.bat sets DIRECTX_FORCE_MODEL=30 when -force30
+              # is supplied. Valve's loader applies these output transforms.
+              $base = $base -replace '_ps2x$', '_ps30'
+              $base = $base -replace '_ps20b$', '_ps30'
+              $base = $base -replace '_ps20$', '_ps30'
+              $base = $base -replace '_vs20$', '_vs30'
+              $base = $base -replace '_vsxx$', '_vs30'
+
+              return "$base.vcs"
           }
 
-          $expected = $expected | Sort-Object -Unique
+          $expected = $shaderSources |
+              ForEach-Object { Get-ForcedShaderOutputName $_ } |
+              Sort-Object -Unique
 
           $missing = New-Object System.Collections.Generic.List[string]
           $empty = New-Object System.Collections.Generic.List[string]
@@ -341,7 +599,183 @@ jobs:
               Select-Object Name, Length, LastWriteTime |
               Format-Table -AutoSize
 
-          Write-Host "Validated $($expected.Count) expected VCS files in both output directories."
+          Write-Host "Validated $($expected.Count) forced-SM3 VCS files in both output directories."
+
+      - name: Regenerate Deferred shader C++ headers only
+        if: steps.shader_changes.outputs.compile != 'true'
+        shell: cmd
+        run: |
+          @echo off
+          setlocal EnableExtensions
+
+          call "%VSDEVCMD%" -no_logo -arch=x86 -host_arch=x64
+          if errorlevel 1 (
+              echo ERROR: Failed to initialize the Visual Studio developer environment.
+              exit /b 1
+          )
+
+          where nmake.exe
+          if errorlevel 1 (
+              echo ERROR: nmake.exe is not available.
+              exit /b 1
+          )
+
+          where perl.exe
+          if errorlevel 1 (
+              echo ERROR: perl.exe is not available.
+              exit /b 1
+          )
+
+          perl -MString::CRC32 -e "print qq(String::CRC32 OK\n)"
+          if errorlevel 1 (
+              echo ERROR: String::CRC32 is unavailable.
+              exit /b 1
+          )
+
+          if not exist "%GITHUB_WORKSPACE%\game\deferred\GameInfo.txt" (
+              echo ERROR: Missing game\deferred\GameInfo.txt
+              exit /b 1
+          )
+
+          pushd "%GITHUB_WORKSPACE%\src\materialsystem\deferredshaders"
+
+          rem dynamic_shaders=1 makes fxc_prep generate only the C++ combo
+          rem headers with -novcs. shadercompile.exe is not launched.
+          set "dynamic_shaders=1"
+          set "GAMEDIR=%GITHUB_WORKSPACE%\game\deferred"
+          set "SDKBINDIR=..\..\..\game\bin"
+          set "SOURCEDIR=..\.."
+
+          del /f /q "fxctmp9\*.inc" 2>nul
+          del /f /q "fxctmp9_tmp\*.inc" 2>nul
+          del /f /q "inclist.txt" 2>nul
+          del /f /q "makefile.deferred_shaders" 2>nul
+          del /f /q "makefile.deferred_shaders.copy" 2>nul
+
+          rem First pass: generate the native VS20/PS20/PS20b headers
+          rem required by deferred_decalModulate.cpp.
+          call buildshaders.bat ^
+            deferred_shaders ^
+            -game "%GAMEDIR%" ^
+            -source "%SOURCEDIR%" ^
+            -dx9_30 ^
+            > "%GITHUB_WORKSPACE%\%ARTIFACT_DIR%\shader-headers-sm2.log" 2>&1
+
+          rem Second pass: generate the forced VS30/PS30 headers. Do not delete
+          rem fxctmp9 between passes; both header families are required.
+          call buildshaders.bat ^
+            deferred_shaders ^
+            -game "%GAMEDIR%" ^
+            -source "%SOURCEDIR%" ^
+            -dx9_30 ^
+            -force30 ^
+            > "%GITHUB_WORKSPACE%\%ARTIFACT_DIR%\shader-headers-sm3.log" 2>&1
+
+          popd
+
+          echo === Native SM2 header generation ===
+          type "%GITHUB_WORKSPACE%\%ARTIFACT_DIR%\shader-headers-sm2.log"
+
+          echo === Forced SM3 header generation ===
+          type "%GITHUB_WORKSPACE%\%ARTIFACT_DIR%\shader-headers-sm3.log"
+
+          rem Valve's batch file does not reliably return failures.
+          rem The next step validates the generated headers exactly.
+          exit /b 0
+
+      - name: Validate generated shader combo headers
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $root = "src\materialsystem\deferredshaders\fxctmp9"
+
+          $headerLogs = @(
+              "$env:ARTIFACT_DIR\shader-headers-sm2.log",
+              "$env:ARTIFACT_DIR\shader-headers-sm3.log"
+          )
+
+          foreach ($log in $headerLogs) {
+              if (!(Test-Path $log)) {
+                  throw "Shader header-generation log is missing: $log"
+              }
+
+              $logText = Get-Content $log -Raw
+
+              if ($logText -match '(?im)Running distributed shader compilation') {
+                  throw "Header-only mode unexpectedly launched shadercompile.exe: $log"
+              }
+
+              if ($logText -match '(?im)\bfatal error\b|NMAKE\s*:\s*fatal error|Can''t locate') {
+                  throw "Header generation failed; inspect $log"
+              }
+          }
+
+          $requiredFiles = @(
+              "decalmodulate_vs20.inc",
+              "decalmodulate_ps20.inc",
+              "decalmodulate_ps20b.inc",
+              "decalmodulate_vs30.inc",
+              "decalmodulate_ps30.inc",
+              "radiosity_blend_ps30.inc",
+              "radiosity_gen_global_ps30.inc",
+              "radiosity_propagate_ps30.inc",
+              "screenspace_shading_ps30.inc"
+          )
+
+          foreach ($name in $requiredFiles) {
+              $path = Join-Path $root $name
+
+              if (!(Test-Path $path)) {
+                  throw "Generated shader header is missing: $path"
+              }
+
+              if ((Get-Item $path).Length -le 0) {
+                  throw "Generated shader header is empty: $path"
+              }
+          }
+
+          $blend = Get-Content `
+              (Join-Path $root "radiosity_blend_ps30.inc") `
+              -Raw
+
+          if ($blend -notmatch '\bSetSECOND_BOUNCE\s*\(') {
+              throw "radiosity_blend_ps30.inc is stale: SetSECOND_BOUNCE was not generated."
+          }
+
+          $global = Get-Content `
+              (Join-Path $root "radiosity_gen_global_ps30.inc") `
+              -Raw
+
+          if ($global -match '\bSetCASCADE\s*\(' -or
+              $global -match 'forgot_to_set_dynamic_CASCADE') {
+              throw "radiosity_gen_global_ps30.inc is stale: obsolete CASCADE combo remains."
+          }
+
+          $propagate = Get-Content `
+              (Join-Path $root "radiosity_propagate_ps30.inc") `
+              -Raw
+
+          if ($propagate -match '\bSetBLUR\s*\(' -or
+              $propagate -match 'forgot_to_set_static_BLUR') {
+              throw "radiosity_propagate_ps30.inc is stale: obsolete BLUR combo remains."
+          }
+
+          $screenspace = Get-Content `
+              (Join-Path $root "screenspace_shading_ps30.inc") `
+              -Raw
+
+          if ($screenspace -match '\bSetRADIOSITY\s*\(' -or
+              $screenspace -match 'forgot_to_set_dynamic_RADIOSITY') {
+              throw "screenspace_shading_ps30.inc is stale: obsolete RADIOSITY combo remains."
+          }
+
+          if ($screenspace -notmatch '\bSetPIXELFOGTYPE\s*\(') {
+              throw "screenspace_shading_ps30.inc is invalid: PIXELFOGTYPE combo is missing."
+          }
+
+          Write-Host "Generated shader headers match the current FXC combo declarations."
+          Write-Host "No VCS shader bytecode rebuild was required."
 
       - name: Generate Deferred solution with VPC
         shell: cmd
@@ -383,32 +817,172 @@ jobs:
             )
           )
 
-      - name: Build Deferred C++ solution
+      - name: Delete stale C++ outputs
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $staleOutputs = @(
+              "game\deferred\bin\client.dll",
+              "game\deferred\bin\client.pdb",
+              "game\deferred\bin\server.dll",
+              "game\deferred\bin\server.pdb",
+              "game\deferred\bin\game_shader_generic_deferred.dll",
+              "game\deferred\bin\game_shader_generic_deferred.pdb"
+          )
+
+          foreach ($file in $staleOutputs) {
+              Remove-Item $file -Force -ErrorAction SilentlyContinue
+
+              if (Test-Path $file) {
+                  throw "Unable to remove stale output: $file"
+              }
+          }
+
+          $stamp = (Get-Date).ToUniversalTime().ToString("o")
+          "CPP_BUILD_START=$stamp" |
+              Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+
+          Write-Host "Removed all stale client/server/shader DLL outputs."
+          Write-Host "C++ build start: $stamp"
+
+      - name: Build generated C++ projects directly
         shell: cmd
         run: |
           @echo off
-          setlocal EnableExtensions
+          setlocal EnableExtensions EnableDelayedExpansion
 
-          msbuild.exe "src\Game_Deferred-2019.sln" ^
-            /m ^
-            /t:Build ^
-            /p:Configuration=%BUILD_CONFIGURATION% ^
-            /p:Platform=Win32 ^
-            /p:PlatformToolset=v142 ^
-            /p:PreferredToolArchitecture=x64 ^
-            /verbosity:minimal ^
-            /bl:"%ARTIFACT_DIR%\EnhancedSource-%BUILD_CONFIGURATION%.binlog" ^
+          set "COMMON_ARGS=/m /t:Rebuild /p:Configuration=%BUILD_CONFIGURATION% /p:Platform=Win32 /p:PlatformToolset=v142 /p:WindowsTargetPlatformVersion=10.0.19041.0 /p:PreferredToolArchitecture=x64 /verbosity:minimal"
+          set "MASTER_LOG=%ARTIFACT_DIR%\msbuild-console.log"
+
+          echo === Real Enhanced Source C++ build === > "%MASTER_LOG%"
+          echo Configuration: %BUILD_CONFIGURATION% >> "%MASTER_LOG%"
+          echo Platform: Win32 >> "%MASTER_LOG%"
+          echo. >> "%MASTER_LOG%"
+
+          rem The VPC-generated solution has no active Build.0 mappings on this
+          rem hosted runner, so MSBuild reports success without building anything.
+          rem Build each generated project explicitly in dependency order.
+
+          call :BUILD_PROJECT ^
+            "ShaderLib" ^
+            "src\materialsystem\shaderlib\shaderlib.vcxproj" ^
+            "%ARTIFACT_DIR%\shaderlib-%BUILD_CONFIGURATION%"
+          if errorlevel 1 exit /b 1
+
+          call :BUILD_PROJECT ^
+            "Shaders (Deferred)" ^
+            "src\materialsystem\deferredshaders\game_shader_deferred.vcxproj" ^
+            "%ARTIFACT_DIR%\game-shader-%BUILD_CONFIGURATION%"
+          if errorlevel 1 exit /b 1
+
+          call :BUILD_PROJECT ^
+            "Client (Deferred)" ^
+            "src\game\client\client_deferred.vcxproj" ^
+            "%ARTIFACT_DIR%\client-%BUILD_CONFIGURATION%"
+          if errorlevel 1 exit /b 1
+
+          call :BUILD_PROJECT ^
+            "Server (Deferred)" ^
+            "src\game\server\server_deferred.vcxproj" ^
+            "%ARTIFACT_DIR%\server-%BUILD_CONFIGURATION%"
+          if errorlevel 1 exit /b 1
+
+          echo.>> "%MASTER_LOG%"
+          echo All four generated projects built successfully.>> "%MASTER_LOG%"
+          type "%MASTER_LOG%"
+          exit /b 0
+
+          :BUILD_PROJECT
+          set "PROJECT_NAME=%~1"
+          set "PROJECT_PATH=%~2"
+          set "LOG_BASE=%~3"
+
+          echo ==================================================>> "%MASTER_LOG%"
+          echo Building !PROJECT_NAME!>> "%MASTER_LOG%"
+          echo Project: !PROJECT_PATH!>> "%MASTER_LOG%"
+          echo ==================================================>> "%MASTER_LOG%"
+
+          if not exist "!PROJECT_PATH!" (
+              echo ERROR: Generated project is missing: !PROJECT_PATH!>> "%MASTER_LOG%"
+              type "%MASTER_LOG%"
+              exit /b 1
+          )
+
+          msbuild.exe "!PROJECT_PATH!" ^
+            %COMMON_ARGS% ^
+            /bl:"!LOG_BASE!.binlog" ^
             /fl ^
-            /flp:"logfile=%ARTIFACT_DIR%\EnhancedSource-%BUILD_CONFIGURATION%.log;verbosity=diagnostic" ^
-            > "%ARTIFACT_DIR%\msbuild-console.log" 2>&1
+            /flp:"logfile=!LOG_BASE!.log;verbosity=diagnostic" ^
+            >> "%MASTER_LOG%" 2>&1
 
-          set "BUILD_RESULT=%ERRORLEVEL%"
-          type "%ARTIFACT_DIR%\msbuild-console.log"
-          exit /b %BUILD_RESULT%
+          set "PROJECT_RESULT=!ERRORLEVEL!"
+
+          if not "!PROJECT_RESULT!"=="0" (
+              echo ERROR: !PROJECT_NAME! failed with exit code !PROJECT_RESULT!.>> "%MASTER_LOG%"
+              type "%MASTER_LOG%"
+              exit /b !PROJECT_RESULT!
+          )
+
+          echo SUCCESS: !PROJECT_NAME!>> "%MASTER_LOG%"
+          echo.>> "%MASTER_LOG%"
+          exit /b 0
+
+      - name: Verify newly compiled DLLs
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $buildStart = [DateTime]::Parse(
+              $env:CPP_BUILD_START,
+              [Globalization.CultureInfo]::InvariantCulture,
+              [Globalization.DateTimeStyles]::RoundtripKind
+          ).ToUniversalTime()
+
+          $required = @(
+              "game\deferred\bin\client.dll",
+              "game\deferred\bin\server.dll",
+              "game\deferred\bin\game_shader_generic_deferred.dll"
+          )
+
+          $results = foreach ($file in $required) {
+              if (!(Test-Path $file)) {
+                  throw "The project build did not create: $file"
+              }
+
+              $item = Get-Item $file
+
+              if ($item.Length -le 0) {
+                  throw "The compiled output is empty: $file"
+              }
+
+              if ($item.LastWriteTimeUtc -lt $buildStart.AddMinutes(-1)) {
+                  throw "The output is stale rather than newly compiled: $file"
+              }
+
+              $hash = Get-FileHash $file -Algorithm SHA256
+
+              [pscustomobject]@{
+                  File = $file
+                  Size = $item.Length
+                  ModifiedUtc = $item.LastWriteTimeUtc
+                  SHA256 = $hash.Hash
+              }
+          }
+
+          $results | Format-Table -AutoSize
+
+          $results |
+              ConvertTo-Json -Depth 3 |
+              Set-Content `
+                  "$env:ARTIFACT_DIR\compiled-dll-manifest.json" `
+                  -Encoding utf8
 
       - name: Create ready-to-copy game patch
         if: success()
         shell: powershell
+        env:
+          COMPILE_SHADERS: ${{ steps.shader_changes.outputs.compile }}
         run: |
           $ErrorActionPreference = "Stop"
 
@@ -439,11 +1013,32 @@ jobs:
               Where-Object { $_.Extension -in ".dll", ".pdb", ".map" } |
               Copy-Item -Destination $binTarget -Force
 
-          Copy-Item `
-              "game\deferred\shaders\*" `
-              $shaderTarget `
-              -Recurse `
-              -Force
+          if ($env:COMPILE_SHADERS -eq "true") {
+              Copy-Item `
+                  "game\deferred\shaders\*" `
+                  $shaderTarget `
+                  -Recurse `
+                  -Force
+
+              "Deferred shaders were rebuilt in this workflow run." |
+                  Set-Content `
+                      (Join-Path $packageRoot "SHADERS_REBUILT.txt") `
+                      -Encoding utf8
+          }
+          else {
+              Remove-Item $shaderTarget -Recurse -Force
+
+              @"
+          Deferred shaders were NOT rebuilt in this workflow run.
+
+          Copy only the bin folder from this artifact.
+          Keep the existing game\deferred\shaders folder from your previous successful
+          shader build.
+          "@ |
+                  Set-Content `
+                      (Join-Path $packageRoot "SHADERS_NOT_REBUILT.txt") `
+                      -Encoding utf8
+          }
 
           Write-Host "Ready-to-copy package:"
           Get-ChildItem $packageRoot -Recurse -File |
@@ -454,7 +1049,7 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v6
         with:
-          name: Enhanced-Source-${{ env.BUILD_CONFIGURATION }}-With-Deferred-Shaders
+          name: Enhanced-Source-${{ env.BUILD_CONFIGURATION }}-${{ steps.shader_changes.outputs.artifact_mode }}
           path: artifacts/Enhanced-Source-${{ env.BUILD_CONFIGURATION }}-Game-Patch/**
           if-no-files-found: error
           retention-days: 30
@@ -465,9 +1060,12 @@ jobs:
         with:
           name: Enhanced-Source-${{ env.BUILD_CONFIGURATION }}-Build-Logs
           path: |
-            artifacts/*.log
-            artifacts/*.binlog
+            artifacts/**
             src/Game_Deferred-2019.sln
+            src/game/client/client_deferred.vcxproj
+            src/game/server/server_deferred.vcxproj
+            src/materialsystem/shaderlib/shaderlib.vcxproj
+            src/materialsystem/deferredshaders/game_shader_deferred.vcxproj
             src/materialsystem/deferredshaders/fxctmp9/*.inc
             src/materialsystem/deferredshaders/fxctmp9_tmp/*.inc
           if-no-files-found: warn
