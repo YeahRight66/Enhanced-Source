@@ -7,8 +7,8 @@
 #define RH_EPSILON 1.0e-8f
 #define RH_FP16_SAFE_MAX 60000.0f
 
-static const float RH_VOLUME_SIZE_F = (float)RH_VOLUME_SIZE;
-static const float RH_ATLAS_WIDTH_F = (float)RH_ATLAS_WIDTH;
+#define RH_VOLUME_SIZE_F ( RH_VOLUME_SIZE * 1.0f )
+#define RH_ATLAS_WIDTH_F ( RH_ATLAS_WIDTH * 1.0f )
 
 float3 RH_SafeNormalize( float3 value, float3 fallbackDirection )
 {
