@@ -68,68 +68,83 @@ void RH_AccumulateRSM(
 	inout float validCount,
 	inout float occupancy )
 {
-	float2 rotatedDiskOffset = RH_Rotate2D( diskOffset, patternSinCos.x, patternSinCos.y );
-	float2 rotatedJitterXY = RH_Rotate2D( cellJitter.xy, patternSinCos.x, patternSinCos.y );
-	cellJitter.xy = rotatedJitterXY;
+	// Rotate the fixed pattern without retaining extra temporaries.
+	diskOffset = RH_Rotate2D( diskOffset, patternSinCos.x, patternSinCos.y );
+	cellJitter.xy = RH_Rotate2D( cellJitter.xy, patternSinCos.x, patternSinCos.y );
 
-	float2 localUV = localCenterUV + rotatedDiskOffset * worldToLocalUV * g_vecRHSettings.z;
+	float2 localUV = localCenterUV
+		+ diskOffset * worldToLocalUV * g_vecRHSettings.z;
 	float inside = step( 0.0f, localUV.x ) * step( localUV.x, 1.0f )
 		* step( 0.0f, localUV.y ) * step( localUV.y, 1.0f );
+	localUV = saturate( localUV );
 
-	float2 safeLocalUV = saturate( localUV );
-	float2 atlasUV = safeLocalUV * g_vecUVTransform.zw + g_vecUVTransform.xy;
-	float depth = tex2D( sShadowDepth, atlasUV ).r;
-	float3 flux = tex2D( sShadowFlux, atlasUV ).rgb;
+	float edge = min( min( localUV.x, localUV.y ),
+		min( 1.0f - localUV.x, 1.0f - localUV.y ) );
+	edge = saturate( edge / max( g_vecRHQualitySettings.x, 1.0e-4f ) );
+	edge = edge * edge * ( 3.0f - 2.0f * edge );
 
-	float edgeDistance = min( min( safeLocalUV.x, safeLocalUV.y ),
-		min( 1.0f - safeLocalUV.x, 1.0f - safeLocalUV.y ) );
-	float edgeFade = saturate( edgeDistance / max( g_vecRHQualitySettings.x, 1.0e-4f ) );
-	edgeFade = edgeFade * edgeFade * ( 3.0f - 2.0f * edgeFade );
+	float2 atlasUV = localUV * g_vecUVTransform.zw + g_vecUVTransform.xy;
+	float depth = tex2Dlod( sShadowDepth, float4( atlasUV, 0.0f, 0.0f ) ).r;
+	float geometryWeight = inside * edge * step( depth, 0.9999f );
 
-	// Geometry and radiance use separate validity masks. A black or back-facing
-	// surface must still block indirect light.
-	float geometryWeight = inside * edgeFade * step( depth, 0.9999f );
+	// Explicit LOD sampling makes this dynamic branch legal in ps_3_0 and keeps
+	// the expensive reconstruction path out of invalid RSM samples.
+	[branch]
+	if ( geometryWeight > 1.0e-4f )
+	{
+		float3 emitterPosition = RH_ReconstructRSMWorldPosition( localUV, depth );
+		float3 ray = cellCenterWS
+			+ cellJitter * ( g_vecRHSettings.y * 0.45f )
+			- emitterPosition;
+		float distanceSquaredWS = max( dot( ray, ray ), RH_EPSILON );
+		float inverseDistanceWS = rsqrt( distanceSquaredWS );
+		float distanceNormalized = ( distanceSquaredWS * inverseDistanceWS )
+			/ max( g_vecRHSettings.z, 1.0f );
 
-	// Keep this path branchless. tex2D uses implicit gradients in ps_3_0, and
-	// forcing a dynamic branch around it produces X3528 in the legacy FXC.
-	float3 emitterPosition = RH_ReconstructRSMWorldPosition( safeLocalUV, depth );
-	float geometryDistanceCells = length( cellCenterWS - emitterPosition )
-		/ max( g_vecRHSettings.y, 1.0f );
-	float innerRadius = max( g_vecRHGeometrySettings.y, 0.0f );
-	float outerRadius = max( g_vecRHGeometrySettings.z, innerRadius + 0.01f );
-	float surfaceOccupancy = 1.0f - smoothstep( innerRadius, outerRadius, geometryDistanceCells );
-	occupancy = max( occupancy,
-		saturate( surfaceOccupancy * geometryWeight
-			* g_vecRHGeometrySettings.x * g_vecRHGeometrySettings.w ) );
+		// Reuse the transport distance for geometry occupancy. The previous V3.2
+		// path calculated a second float3 distance, which pushed FXC over r31.
+		float innerRadius = max( g_vecRHGeometrySettings.y, 0.0f );
+		float outerRadius = max( g_vecRHGeometrySettings.z, innerRadius + 0.01f );
+		float surfaceOccupancy = 1.0f
+			- smoothstep( innerRadius, outerRadius,
+				distanceNormalized * g_vecRHSettings.z
+				/ max( g_vecRHSettings.y, 1.0f ) );
+		occupancy = max( occupancy,
+			saturate( surfaceOccupancy * geometryWeight
+				* g_vecRHGeometrySettings.x * g_vecRHGeometrySettings.w ) );
 
-	float radianceWeight = geometryWeight * step( 1.0e-7f, dot( flux, flux ) );
-	float3 encodedNormal = tex2D( sShadowNormal, atlasUV ).xyz * 2.0f - 1.0f;
-	float3 emitterNormal = RH_SafeNormalize( encodedNormal, float3( 0.0f, 0.0f, 1.0f ) );
-	float3 receiverPosition = cellCenterWS + cellJitter * ( g_vecRHSettings.y * 0.45f );
+		float3 flux = tex2Dlod( sShadowFlux, float4( atlasUV, 0.0f, 0.0f ) ).rgb;
+		float sampleWeight = geometryWeight
+			* step( 1.0e-7f, dot( flux, flux ) )
+			* step( 0.0025f, distanceNormalized )
+			* step( distanceNormalized, 1.5f );
 
-	float3 ray = receiverPosition - emitterPosition;
-	float distanceSquaredWS = dot( ray, ray );
-	float distanceWS = sqrt( max( distanceSquaredWS, RH_EPSILON ) );
-	float3 rayDirection = RH_SafeNormalize( ray, emitterNormal );
-	float distanceNormalized = distanceWS / max( g_vecRHSettings.z, 1.0f );
+		[branch]
+		if ( sampleWeight > 1.0e-5f )
+		{
+			float3 emitterNormal = tex2Dlod(
+				sShadowNormal, float4( atlasUV, 0.0f, 0.0f ) ).xyz * 2.0f - 1.0f;
+			emitterNormal *= rsqrt( max( dot( emitterNormal, emitterNormal ), RH_EPSILON ) );
 
-	float distanceValid = step( 0.0025f, distanceNormalized ) * step( distanceNormalized, 1.5f );
-	float sampleWeight = radianceWeight * distanceValid;
-	float geometric = saturate( dot( rayDirection, emitterNormal ) );
-	float attenuation = sampleWeight * geometric
-		/ ( 0.04f + distanceNormalized * distanceNormalized );
-	float3 transported = RH_ClampRadiance(
-		flux * ( attenuation * g_vecRHSettings.w ),
-		max( g_vecRHQualitySettings.y, 0.25f ) );
-	float4 basis = RH_ProjectDirection( rayDirection );
+			float3 rayDirection = ray * inverseDistanceWS;
+			float geometric = saturate( dot( rayDirection, emitterNormal ) );
+			float attenuation = sampleWeight * geometric
+				/ ( 0.04f + distanceNormalized * distanceNormalized );
+			float3 transported = min(
+				max( flux * ( attenuation * g_vecRHSettings.w ), 0.0f ),
+				max( g_vecRHQualitySettings.y, 0.25f ) );
+			float4 basis = float4(
+				rayDirection * 0.4886025119f,
+				0.2820947918f );
 
-	shR += basis * transported.r;
-	shG += basis * transported.g;
-	shB += basis * transported.b;
-	float validSample = step( 1.0e-5f, sampleWeight );
-	minDistance = lerp( minDistance, min( minDistance, distanceNormalized ), validSample );
-	maxDistance = max( maxDistance, distanceNormalized * validSample );
-	validCount += sampleWeight;
+			shR += basis * transported.r;
+			shG += basis * transported.g;
+			shB += basis * transported.b;
+			minDistance = min( minDistance, distanceNormalized );
+			maxDistance = max( maxDistance, distanceNormalized );
+			validCount += sampleWeight;
+		}
+	}
 }
 
 PS_OUTPUT main( const PS_INPUT In )
