@@ -7,8 +7,8 @@
 #define RH_EPSILON 1.0e-8f
 #define RH_FP16_SAFE_MAX 60000.0f
 
-#define RH_VOLUME_SIZE_F ( RH_VOLUME_SIZE * 1.0f )
-#define RH_ATLAS_WIDTH_F ( RH_ATLAS_WIDTH * 1.0f )
+// Float forms are defined by radiance_hints_config.h. That header explicitly
+// replaces legacy copies from deferred_global_common.h, preventing X1519.
 
 float3 RH_SafeNormalize( float3 value, float3 fallbackDirection )
 {

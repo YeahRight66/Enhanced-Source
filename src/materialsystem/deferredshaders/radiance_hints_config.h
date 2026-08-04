@@ -9,6 +9,15 @@
 #ifdef RH_VOLUME_SIZE
 # undef RH_VOLUME_SIZE
 #endif
+#ifdef RH_VOLUME_SIZE_F
+# undef RH_VOLUME_SIZE_F
+#endif
+#ifdef RH_ATLAS_WIDTH_F
+# undef RH_ATLAS_WIDTH_F
+#endif
+#ifdef RH_ATLAS_HEIGHT_F
+# undef RH_ATLAS_HEIGHT_F
+#endif
 #ifdef RH_ATLAS_WIDTH
 # undef RH_ATLAS_WIDTH
 #endif
@@ -62,6 +71,9 @@
 #define RH_VOLUME_SIZE                 32
 #define RH_ATLAS_WIDTH                 ( RH_VOLUME_SIZE * RH_VOLUME_SIZE )
 #define RH_ATLAS_HEIGHT                RH_VOLUME_SIZE
+#define RH_VOLUME_SIZE_F               ( RH_VOLUME_SIZE * 1.0f )
+#define RH_ATLAS_WIDTH_F               ( RH_ATLAS_WIDTH * 1.0f )
+#define RH_ATLAS_HEIGHT_F              ( RH_ATLAS_HEIGHT * 1.0f )
 
 // Set 0 stores the first bounce. Set 1 stores one optional secondary bounce.
 #define RH_SET_COUNT                   2

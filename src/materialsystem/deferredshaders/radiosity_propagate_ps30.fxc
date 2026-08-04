@@ -78,44 +78,37 @@ void RH_AccumulateBounce(
 	float3 sourceUVW = destinationUVW + sampleDirection * ( g_vecRHBounceSettings.x * distanceScale );
 	float inside = RH_InsideVolume( sourceUVW );
 
-	[branch]
-	if ( inside > 0.5f )
-	{
-		float4 sourceAux = RH_SampleAtlas( sAux, sourceUVW );
-		float sourceValidity = saturate( sourceAux.z * 2.5f );
+	// Branchless masked sampling avoids X3528 from implicit-gradient texture
+	// reads inside forced dynamic branches on ps_3_0.
+	float4 sourceAux = RH_SampleAtlas( sAux, sourceUVW );
+	float sourceValidity = inside * saturate( sourceAux.z * 2.5f );
+	float4 sourceSH_R = RH_DeringSH( RH_SampleAtlas( sSH_R, sourceUVW ) );
+	float4 sourceSH_G = RH_DeringSH( RH_SampleAtlas( sSH_G, sourceUVW ) );
+	float4 sourceSH_B = RH_DeringSH( RH_SampleAtlas( sSH_B, sourceUVW ) );
 
-		[branch]
-		if ( sourceValidity > 1.0e-3f )
-		{
-			float4 sourceSH_R = RH_DeringSH( RH_SampleAtlas( sSH_R, sourceUVW ) );
-			float4 sourceSH_G = RH_DeringSH( RH_SampleAtlas( sSH_G, sourceUVW ) );
-			float4 sourceSH_B = RH_DeringSH( RH_SampleAtlas( sSH_B, sourceUVW ) );
+	float transferDistance = g_vecRHBounceSettings.x * distanceScale;
+	float intervalWidth = max( sourceAux.y - sourceAux.x, 0.075f );
+	float intervalCenter = 0.5f * ( sourceAux.x + sourceAux.y );
+	float intervalWeight = saturate(
+		1.0f - abs( transferDistance - intervalCenter ) / intervalWidth );
+	intervalWeight = intervalWeight * intervalWeight * ( 3.0f - 2.0f * intervalWeight );
 
-			float transferDistance = g_vecRHBounceSettings.x * distanceScale;
-			float intervalWidth = max( sourceAux.y - sourceAux.x, 0.075f );
-			float intervalCenter = 0.5f * ( sourceAux.x + sourceAux.y );
-			float intervalWeight = saturate(
-				1.0f - abs( transferDistance - intervalCenter ) / intervalWidth );
-			intervalWeight = intervalWeight * intervalWeight * ( 3.0f - 2.0f * intervalWeight );
+	float geometryTransmittance = RH_GeometryTransmittance( destinationUVW, sourceUVW );
+	float visibility = sourceValidity
+		* max( intervalWeight, g_vecRHBounceSettings.z )
+		* geometryTransmittance;
+	float3 travelDirection = RH_SafeNormalize( -sampleDirection, float3( 0.0f, 0.0f, 1.0f ) );
+	float3 transported = RH_ClampRadiance(
+		RH_EvaluateRadiance( sourceSH_R, sourceSH_G, sourceSH_B, travelDirection ),
+		max( g_vecRHBounceSettings.w, 0.25f ) );
 
-			float geometryTransmittance = RH_GeometryTransmittance( destinationUVW, sourceUVW );
-			float visibility = sourceValidity
-				* max( intervalWeight, g_vecRHBounceSettings.z )
-				* geometryTransmittance;
-			float3 travelDirection = RH_SafeNormalize( -sampleDirection, float3( 0.0f, 0.0f, 1.0f ) );
-			float3 transported = RH_ClampRadiance(
-				RH_EvaluateRadiance( sourceSH_R, sourceSH_G, sourceSH_B, travelDirection ),
-				max( g_vecRHBounceSettings.w, 0.25f ) );
+	float attenuation = visibility / ( 1.0f + 6.0f * transferDistance * transferDistance );
+	float4 destinationBasis = RH_ProjectDirection( travelDirection );
 
-			float attenuation = visibility / ( 1.0f + 6.0f * transferDistance * transferDistance );
-			float4 destinationBasis = RH_ProjectDirection( travelDirection );
-
-			outSH_R += destinationBasis * ( transported.r * attenuation );
-			outSH_G += destinationBasis * ( transported.g * attenuation );
-			outSH_B += destinationBasis * ( transported.b * attenuation );
-			totalWeight += attenuation;
-		}
-	}
+	outSH_R += destinationBasis * ( transported.r * attenuation );
+	outSH_G += destinationBasis * ( transported.g * attenuation );
+	outSH_B += destinationBasis * ( transported.b * attenuation );
+	totalWeight += attenuation;
 }
 
 PS_OUTPUT main( const PS_INPUT In )

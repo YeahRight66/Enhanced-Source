@@ -120,19 +120,19 @@ PS_OUTPUT main( const PS_INPUT In )
 
 	// Trace toward the dominant emitter direction through the smooth RH occupancy
 	// field. This creates broad, stable indirect penumbrae without an AO texture.
-	[branch]
-	if ( g_vecRHSoftShadow.x > 1.0e-4f && confidence > 1.0e-3f )
-	{
-		float3 dominantTravelDirection = RH_DominantTravelDirection(
-			firstSH_R, firstSH_G, firstSH_B, -worldNormal );
-		float3 towardSource = -dominantTravelDirection;
-		float directionalConfidence = RH_DirectionalConfidence(
-			firstSH_R, firstSH_G, firstSH_B );
-		float hemisphereWeight = 0.35f + 0.65f * saturate( dot( towardSource, worldNormal ) );
-		float softVisibility = RH_TraceSoftIndirectVisibility(
-			volumeUVW, towardSource, directionalConfidence * hemisphereWeight * confidence );
-		indirect *= softVisibility;
-	}
+	// Do not force a dynamic branch around RH_SampleAtlas: it contains tex2D
+	// operations with implicit gradients, which legacy FXC rejects with X3528.
+	float3 dominantTravelDirection = RH_DominantTravelDirection(
+		firstSH_R, firstSH_G, firstSH_B, -worldNormal );
+	float3 towardSource = -dominantTravelDirection;
+	float directionalConfidence = RH_DirectionalConfidence(
+		firstSH_R, firstSH_G, firstSH_B );
+	float hemisphereWeight = 0.35f + 0.65f * saturate( dot( towardSource, worldNormal ) );
+	float softVisibility = RH_TraceSoftIndirectVisibility(
+		volumeUVW, towardSource, directionalConfidence * hemisphereWeight * confidence );
+	float softShadowEnabled = step( 1.0e-4f, g_vecRHSoftShadow.x )
+		* step( 1.0e-3f, confidence );
+	indirect *= lerp( 1.0f, softVisibility, softShadowEnabled );
 
 	indirect *= confidence;
 	float luminance = dot( indirect, float3( 0.2126f, 0.7152f, 0.0722f ) );
