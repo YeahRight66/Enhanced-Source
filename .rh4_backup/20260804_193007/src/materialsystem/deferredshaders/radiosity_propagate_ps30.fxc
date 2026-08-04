@@ -1,0 +1,152 @@
+#include "common_ps_fxc.h"
+#include "common_deferred_fxc.h"
+#include "radiance_hints_common_fxc.h"
+
+sampler sSH_R : register( s0 );
+sampler sSH_G : register( s1 );
+sampler sSH_B : register( s2 );
+sampler sAux  : register( s3 );
+
+// x = stochastic sampling radius in normalized volume coordinates
+// y = bounce gain, z = minimum legacy visibility, w = maximum radiance
+const float4 g_vecRHBounceSettings : register( c0 );
+// x = geometry enable, y = blocking strength,
+// z = minimum transmittance, w = occupancy bias
+const float4 g_vecRHGeometrySettings : register( c1 );
+
+struct PS_INPUT
+{
+	float3 vVolumeUVW : TEXCOORD0;
+	float2 vAtlasUV   : TEXCOORD1;
+};
+
+struct PS_OUTPUT
+{
+	float4 vSH_R : COLOR0;
+	float4 vSH_G : COLOR1;
+	float4 vSH_B : COLOR2;
+	float4 vAux  : COLOR3;
+};
+
+float3 RH_RotateDirectionZ( float3 direction, float sineValue, float cosineValue )
+{
+	float2 rotatedXY = RH_Rotate2D( direction.xy, sineValue, cosineValue );
+	return float3( rotatedXY, direction.z );
+}
+
+float RH_GeometryTransmittance( float3 destinationUVW, float3 sourceUVW )
+{
+	float maximumOccupancy = 0.0f;
+	float summedOccupancy = 0.0f;
+	float sampleCount = 0.0f;
+
+#if RH_GEOMETRY_TRACE_TAP_COUNT >= 1
+	float3 traceUVW0 = lerp( destinationUVW, sourceUVW, 0.35f );
+	float occupancy0 = RH_SampleAtlas( sAux, traceUVW0 ).w * RH_InsideVolume( traceUVW0 );
+	maximumOccupancy = max( maximumOccupancy, occupancy0 );
+	summedOccupancy += occupancy0;
+	sampleCount += 1.0f;
+#endif
+#if RH_GEOMETRY_TRACE_TAP_COUNT >= 2
+	float3 traceUVW1 = lerp( destinationUVW, sourceUVW, 0.68f );
+	float occupancy1 = RH_SampleAtlas( sAux, traceUVW1 ).w * RH_InsideVolume( traceUVW1 );
+	maximumOccupancy = max( maximumOccupancy, occupancy1 );
+	summedOccupancy += occupancy1;
+	sampleCount += 1.0f;
+#endif
+
+	float averageOccupancy = summedOccupancy / max( sampleCount, 1.0f );
+	// Preserve thin blockers with the maximum while retaining soft transitions.
+	float blocker = lerp( maximumOccupancy, averageOccupancy, 0.35f );
+	float occupancyBias = clamp( g_vecRHGeometrySettings.w, 0.0f, 0.95f );
+	blocker = saturate( ( blocker - occupancyBias ) / max( 1.0f - occupancyBias, 0.05f ) );
+
+	float blockedTransmittance = exp2( -4.0f * max( g_vecRHGeometrySettings.y, 0.0f ) * blocker );
+	blockedTransmittance = max( blockedTransmittance, saturate( g_vecRHGeometrySettings.z ) );
+	return lerp( 1.0f, blockedTransmittance, saturate( g_vecRHGeometrySettings.x ) );
+}
+
+void RH_AccumulateBounce(
+	float3 destinationUVW,
+	float3 sampleDirection,
+	float distanceScale,
+	inout float4 outSH_R,
+	inout float4 outSH_G,
+	inout float4 outSH_B,
+	inout float totalWeight )
+{
+	float3 sourceUVW = destinationUVW + sampleDirection * ( g_vecRHBounceSettings.x * distanceScale );
+	float inside = RH_InsideVolume( sourceUVW );
+
+	// Branchless masked sampling avoids X3528 from implicit-gradient texture
+	// reads inside forced dynamic branches on ps_3_0.
+	float4 sourceAux = RH_SampleAtlas( sAux, sourceUVW );
+	float sourceValidity = inside * saturate( sourceAux.z * 2.5f );
+	float4 sourceSH_R = RH_DeringSH( RH_SampleAtlas( sSH_R, sourceUVW ) );
+	float4 sourceSH_G = RH_DeringSH( RH_SampleAtlas( sSH_G, sourceUVW ) );
+	float4 sourceSH_B = RH_DeringSH( RH_SampleAtlas( sSH_B, sourceUVW ) );
+
+	float transferDistance = g_vecRHBounceSettings.x * distanceScale;
+	float intervalWidth = max( sourceAux.y - sourceAux.x, 0.075f );
+	float intervalCenter = 0.5f * ( sourceAux.x + sourceAux.y );
+	float intervalWeight = saturate(
+		1.0f - abs( transferDistance - intervalCenter ) / intervalWidth );
+	intervalWeight = intervalWeight * intervalWeight * ( 3.0f - 2.0f * intervalWeight );
+
+	float geometryTransmittance = RH_GeometryTransmittance( destinationUVW, sourceUVW );
+	float visibility = sourceValidity
+		* max( intervalWeight, g_vecRHBounceSettings.z )
+		* geometryTransmittance;
+	float3 travelDirection = RH_SafeNormalize( -sampleDirection, float3( 0.0f, 0.0f, 1.0f ) );
+	float3 transported = RH_ClampRadiance(
+		RH_EvaluateRadiance( sourceSH_R, sourceSH_G, sourceSH_B, travelDirection ),
+		max( g_vecRHBounceSettings.w, 0.25f ) );
+
+	float attenuation = visibility / ( 1.0f + 6.0f * transferDistance * transferDistance );
+	float4 destinationBasis = RH_ProjectDirection( travelDirection );
+
+	outSH_R += destinationBasis * ( transported.r * attenuation );
+	outSH_G += destinationBasis * ( transported.g * attenuation );
+	outSH_B += destinationBasis * ( transported.b * attenuation );
+	totalWeight += attenuation;
+}
+
+PS_OUTPUT main( const PS_INPUT In )
+{
+	PS_OUTPUT Out;
+	float4 bouncedSH_R = 0.0f;
+	float4 bouncedSH_G = 0.0f;
+	float4 bouncedSH_B = 0.0f;
+	float totalWeight = 0.0f;
+
+	float3 cellCoordinate = floor( In.vVolumeUVW * RH_VOLUME_SIZE_F );
+	float rotationQuadrant = floor( RH_Hash13( cellCoordinate + float3( 97.0f, 29.0f, 53.0f ) ) * 4.0f );
+	float rotationSine = 0.0f;
+	float rotationCosine = 1.0f;
+	if ( rotationQuadrant < 1.0f ) { rotationSine = 0.0f; rotationCosine =  1.0f; }
+	else if ( rotationQuadrant < 2.0f ) { rotationSine = 1.0f; rotationCosine =  0.0f; }
+	else if ( rotationQuadrant < 3.0f ) { rotationSine = 0.0f; rotationCosine = -1.0f; }
+	else { rotationSine = -1.0f; rotationCosine = 0.0f; }
+
+#if RH_BOUNCE_SAMPLE_COUNT >= 1
+	RH_AccumulateBounce( In.vVolumeUVW, RH_RotateDirectionZ( RH_SafeNormalize( float3( 1.000f,  0.180f, -0.120f ), float3( 1, 0, 0 ) ), rotationSine, rotationCosine ), 0.72f, bouncedSH_R, bouncedSH_G, bouncedSH_B, totalWeight );
+#endif
+#if RH_BOUNCE_SAMPLE_COUNT >= 2
+	RH_AccumulateBounce( In.vVolumeUVW, RH_RotateDirectionZ( RH_SafeNormalize( float3(-0.850f,  0.390f,  0.260f ), float3(-1, 0, 0 ) ), rotationSine, rotationCosine ), 0.91f, bouncedSH_R, bouncedSH_G, bouncedSH_B, totalWeight );
+#endif
+#if RH_BOUNCE_SAMPLE_COUNT >= 3
+	RH_AccumulateBounce( In.vVolumeUVW, RH_RotateDirectionZ( RH_SafeNormalize( float3( 0.210f,  0.970f, -0.300f ), float3( 0, 1, 0 ) ), rotationSine, rotationCosine ), 1.12f, bouncedSH_R, bouncedSH_G, bouncedSH_B, totalWeight );
+#endif
+#if RH_BOUNCE_SAMPLE_COUNT >= 4
+	RH_AccumulateBounce( In.vVolumeUVW, RH_RotateDirectionZ( RH_SafeNormalize( float3(-0.330f, -0.910f,  0.440f ), float3( 0,-1, 0 ) ), rotationSine, rotationCosine ), 1.31f, bouncedSH_R, bouncedSH_G, bouncedSH_B, totalWeight );
+#endif
+
+	float hasLighting = step( 1.0e-4f, totalWeight );
+	float gain = hasLighting * g_vecRHBounceSettings.y / max( totalWeight, 0.20f );
+
+	Out.vSH_R = RH_DeringSH( bouncedSH_R * gain );
+	Out.vSH_G = RH_DeringSH( bouncedSH_G * gain );
+	Out.vSH_B = RH_DeringSH( bouncedSH_B * gain );
+	Out.vAux = RH_SampleAtlas( sAux, In.vVolumeUVW );
+	return Out;
+}

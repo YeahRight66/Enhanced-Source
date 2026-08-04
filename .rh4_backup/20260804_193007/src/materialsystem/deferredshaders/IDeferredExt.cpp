@@ -29,7 +29,6 @@ CDeferredExtension::CDeferredExtension()
 	Q_memset( m_pTexCookie, 0, sizeof( ITexture* ) * NUM_COOKIE_SLOTS );
 	m_pTexVolumePrePass = NULL;
 	Q_memset( m_pTexShadowRad_Ortho, 0, sizeof( ITexture* ) * 2 );
-	Q_memset( m_pTexRadianceHintsRSM, 0, sizeof( ITexture* ) * 3 );
 	Q_memset( m_pTexRadBuffer, 0, sizeof( ITexture* ) * 2 );
 	Q_memset( m_pTexRadNormal, 0, sizeof( ITexture* ) * 2 );
 
@@ -185,12 +184,6 @@ void CDeferredExtension::CommitTexture_ShadowRadOutput_Ortho( ITexture *pAlbedo,
 {
 	m_pTexShadowRad_Ortho[0] = pAlbedo;
 	m_pTexShadowRad_Ortho[1] = pNormal;
-}
-void CDeferredExtension::CommitTexture_RadianceHintsRSM( ITexture *pFlux, ITexture *pNormal, ITexture *pDepth )
-{
-    m_pTexRadianceHintsRSM[0] = pFlux;
-    m_pTexRadianceHintsRSM[1] = pNormal;
-    m_pTexRadianceHintsRSM[2] = pDepth;
 }
 void CDeferredExtension::CommitTexture_Radiosity( ITexture *pTexRadBuffer0, ITexture *pTexRadBuffer1,
 		ITexture *pTexRadNormal0, ITexture *pTexRadNormal1 )

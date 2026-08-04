@@ -21,11 +21,6 @@ static CTextureReference g_tex_ShadowColor_Ortho[ MAX_SHADOW_ORTHO ];
 static CTextureReference g_tex_ShadowDepth_Ortho[ MAX_SHADOW_ORTHO ];
 static CTextureReference g_tex_ShadowRad_Albedo_Ortho[ MAX_SHADOW_ORTHO ];
 static CTextureReference g_tex_ShadowRad_Normal_Ortho[ MAX_SHADOW_ORTHO ];
-
-static CTextureReference g_tex_RHRSMDepth;
-static CTextureReference g_tex_RHRSMColor;
-static CTextureReference g_tex_RHRSMFlux;
-static CTextureReference g_tex_RHRSMNormal;
 static CTextureReference g_tex_ShadowColor_Proj[ MAX_SHADOW_PROJ ];
 static CTextureReference g_tex_ShadowDepth_Proj[ MAX_SHADOW_PROJ ];
 #if DEFCFG_ADAPTIVE_SHADOWMAP_LOD
@@ -38,7 +33,6 @@ static CTextureReference g_tex_ShadowColor_DP[ MAX_SHADOW_DP ];
 static CTextureReference g_tex_ShadowDepth_DP[ MAX_SHADOW_DP ];
 
 static CTextureReference g_tex_RadianceHints[ RH_SET_COUNT ][ RH_CHANNEL_COUNT ];
-static CTextureReference g_tex_RHIndirectHalf;
 
 static CTextureReference g_tex_ProjectableVGUI[ NUM_PROJECTABLE_VGUI ];
 
@@ -61,13 +55,10 @@ void InitDeferredRTs( bool bInitial )
 	if ( !bInitial )
 		materials->ReEnableRenderTargetAllocation_IRealizeIfICallThisAllTexturesWillBeUnloadedAndLoadTimeWillSufferHorribly(); // HAHAHAHA. No.
 
-	int screen_w = 128;
-    int screen_h = 128;
-    int dummy = 128;
+	//int screen_w, screen_h;
+	int dummy = 128;
 
-    materials->GetBackBufferDimensions( screen_w, screen_h );
-    const int rhHalfWidth = MAX( screen_w / 2, 1 );
-    const int rhHalfHeight = MAX( screen_h / 2, 1 );
+	//materials->GetBackBufferDimensions( screen_w, screen_h );
 
 const ImageFormat fmt_gbuffer0 =
 #if DEFCFG_LIGHTCTRL_PACKING
@@ -105,10 +96,8 @@ const ImageFormat fmt_gbuffer0 =
 	const ImageFormat fmt_depthColor = bShadowUseColor ? IMAGE_FORMAT_R32F
 		: g_pMaterialSystemHardwareConfig->GetNullTextureFormat();
 	const ImageFormat fmt_radAlbedo = IMAGE_FORMAT_RGBA8888;
-    const ImageFormat fmt_radNormal = IMAGE_FORMAT_RGBA8888;
-    const ImageFormat fmt_radBuffer = IMAGE_FORMAT_RGBA16161616F;
-    const ImageFormat fmt_rhRSMFlux = IMAGE_FORMAT_RGBA16161616F;
-    const ImageFormat fmt_rhHalf = IMAGE_FORMAT_RGBA16161616F;
+	const ImageFormat fmt_radNormal = IMAGE_FORMAT_RGBA8888;
+	const ImageFormat fmt_radBuffer = IMAGE_FORMAT_RGBA16161616F;
 
 	if ( fmt_depth == IMAGE_FORMAT_D16_SHADOW )
 		g_flDepthScalar = pow( 2.0, 16 );
@@ -124,9 +113,7 @@ const ImageFormat fmt_gbuffer0 =
 	unsigned int shadowColorFlags =		TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT | TEXTUREFLAGS_RENDERTARGET | TEXTUREFLAGS_POINTSAMPLE;
 	unsigned int projVGUIFlags =		TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT | TEXTUREFLAGS_RENDERTARGET;
 	unsigned int radAlbedoNormalFlags =	TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT | TEXTUREFLAGS_RENDERTARGET;
-	unsigned int radBufferFlags =       TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT | TEXTUREFLAGS_RENDERTARGET;
-    unsigned int rhRSMFlags =          TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT | TEXTUREFLAGS_RENDERTARGET | TEXTUREFLAGS_POINTSAMPLE;
-    unsigned int rhHalfFlags =         TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT | TEXTUREFLAGS_RENDERTARGET | TEXTUREFLAGS_POINTSAMPLE;
+	unsigned int radBufferFlags =		TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT | TEXTUREFLAGS_RENDERTARGET;
 
 	materials->BeginRenderTargetAllocation();
 
@@ -200,43 +187,6 @@ const ImageFormat fmt_gbuffer0 =
 			MATERIAL_RT_DEPTH_NONE,
 			gbufferFlags, 0 ) );
 
-
-#if DEFCFG_ENABLE_RADIOSITY
-        // Dedicated, camera-rotation-independent Reflective Shadow Map used only by RH.
-        g_tex_RHRSMDepth.Init( materials->CreateNamedRenderTargetTextureEx2(
-            DEFRTNAME_RH_RSM_DEPTH,
-            RH_RSM_RESOLUTION, RH_RSM_RESOLUTION,
-            RT_SIZE_NO_CHANGE,
-            fmt_depth,
-            MATERIAL_RT_DEPTH_NONE,
-            depthFlags, 0 ) );
-
-        g_tex_RHRSMColor.Init( materials->CreateNamedRenderTargetTextureEx2(
-            DEFRTNAME_RH_RSM_COLOR,
-            RH_RSM_RESOLUTION, RH_RSM_RESOLUTION,
-            RT_SIZE_NO_CHANGE,
-            fmt_depthColor,
-            MATERIAL_RT_DEPTH_NONE,
-            shadowColorFlags, 0 ) );
-
-        g_tex_RHRSMFlux.Init( materials->CreateNamedRenderTargetTextureEx2(
-            DEFRTNAME_RH_RSM_FLUX,
-            RH_RSM_RESOLUTION, RH_RSM_RESOLUTION,
-            RT_SIZE_NO_CHANGE,
-            fmt_rhRSMFlux,
-            MATERIAL_RT_DEPTH_NONE,
-            rhRSMFlags, 0 ) );
-
-        g_tex_RHRSMNormal.Init( materials->CreateNamedRenderTargetTextureEx2(
-            DEFRTNAME_RH_RSM_NORMAL,
-            RH_RSM_RESOLUTION, RH_RSM_RESOLUTION,
-            RT_SIZE_NO_CHANGE,
-            fmt_radNormal,
-            MATERIAL_RT_DEPTH_NONE,
-            rhRSMFlags, 0 ) );
-
-#endif
-
 		for ( int i = 0; i < MAX_SHADOW_ORTHO; i++ )
 		{
 #if CSM_USE_COMPOSITED_TARGET
@@ -305,7 +255,7 @@ const ImageFormat fmt_gbuffer0 =
 			DEFRTNAME_RH_SH_R,
 			DEFRTNAME_RH_SH_G,
 			DEFRTNAME_RH_SH_B,
-			DEFRTNAME_RH_VISIBILITY
+			DEFRTNAME_RH_AUX
 		};
 
 		for ( int setIndex = 0; setIndex < RH_SET_COUNT; ++setIndex )
@@ -324,17 +274,6 @@ const ImageFormat fmt_gbuffer0 =
 		}
 #endif
 	}
-
-#if DEFCFG_ENABLE_RADIOSITY
-	// Exact half-resolution target must be recreated after a video-mode change.
-	g_tex_RHIndirectHalf.Init( materials->CreateNamedRenderTargetTextureEx2(
-		DEFRTNAME_RH_INDIRECT_HALF,
-		rhHalfWidth, rhHalfHeight,
-		RT_SIZE_DEFAULT,
-		fmt_rhHalf,
-		MATERIAL_RT_DEPTH_NONE,
-		rhHalfFlags, 0 ) );
-#endif
 
 	for ( int i = 0; i < MAX_SHADOW_PROJ; i++ )
 	{
@@ -509,10 +448,6 @@ const ImageFormat fmt_gbuffer0 =
 #if DEFCFG_ENABLE_RADIOSITY
 	GetDeferredExt()->CommitTexture_ShadowRadOutput_Ortho( g_tex_ShadowRad_Albedo_Ortho[0],
 		g_tex_ShadowRad_Normal_Ortho[0] );
-    GetDeferredExt()->CommitTexture_RadianceHintsRSM(
-        g_tex_RHRSMFlux,
-        g_tex_RHRSMNormal,
-        bShadowUseColor ? g_tex_RHRSMColor : g_tex_RHRSMDepth );
 	// Preserve the existing extension ABI: expose the first RH set through its four legacy slots.
 	GetDeferredExt()->CommitTexture_Radiosity(
 		g_tex_RadianceHints[0][RH_CHANNEL_SH_R], g_tex_RadianceHints[0][RH_CHANNEL_SH_G],
@@ -601,36 +536,6 @@ ITexture *GetDefRT_VolumetricsBuffer( int index )
 {
 	Assert( g_tex_VolumetricsBuffer[ index ].IsValid() );
 	return g_tex_VolumetricsBuffer[ index ];
-}
-
-ITexture *GetDefRT_RHRSMDepth()
-{
-    Assert( g_tex_RHRSMDepth.IsValid() );
-    return g_tex_RHRSMDepth;
-}
-
-ITexture *GetDefRT_RHRSMColor()
-{
-    Assert( g_tex_RHRSMColor.IsValid() );
-    return g_tex_RHRSMColor;
-}
-
-ITexture *GetDefRT_RHRSMFlux()
-{
-    Assert( g_tex_RHRSMFlux.IsValid() );
-    return g_tex_RHRSMFlux;
-}
-
-ITexture *GetDefRT_RHRSMNormal()
-{
-    Assert( g_tex_RHRSMNormal.IsValid() );
-    return g_tex_RHRSMNormal;
-}
-
-ITexture *GetDefRT_RHIndirectHalf()
-{
-    Assert( g_tex_RHIndirectHalf.IsValid() );
-    return g_tex_RHIndirectHalf;
 }
 
 ITexture *GetDefRT_RadianceHints( int setIndex, int channelIndex )

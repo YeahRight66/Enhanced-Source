@@ -1,10 +1,10 @@
 #include "deferred_includes.h"
 #include "radiance_hints_config.h"
 
-#include "radiosity_gen_global_ps30.inc"
+#include "radiosity_gen_visibility_ps30.inc"
 #include "radiosity_gen_vs30.inc"
 
-BEGIN_VS_SHADER( RADIOSITY_GLOBAL, "RH 4.0 deterministic radiance injection" )
+BEGIN_VS_SHADER( RADIOSITY_VISIBILITY, "RH 4.0 directional blocker injection" )
     BEGIN_SHADER_PARAMS
     END_SHADER_PARAMS
 
@@ -22,8 +22,6 @@ BEGIN_VS_SHADER( RADIOSITY_GLOBAL, "RH 4.0 deterministic radiance injection" )
             pShaderShadow->EnableAlphaWrites( true );
 
             pShaderShadow->EnableTexture( SHADER_SAMPLER0, true );
-            pShaderShadow->EnableTexture( SHADER_SAMPLER1, true );
-            pShaderShadow->EnableTexture( SHADER_SAMPLER2, true );
 
             int texCoordDimensions[] = { 2 };
             pShaderShadow->VertexShaderVertexFormat(
@@ -32,8 +30,8 @@ BEGIN_VS_SHADER( RADIOSITY_GLOBAL, "RH 4.0 deterministic radiance injection" )
             DECLARE_STATIC_VERTEX_SHADER( radiosity_gen_vs30 );
             SET_STATIC_VERTEX_SHADER( radiosity_gen_vs30 );
 
-            DECLARE_STATIC_PIXEL_SHADER( radiosity_gen_global_ps30 );
-            SET_STATIC_PIXEL_SHADER( radiosity_gen_global_ps30 );
+            DECLARE_STATIC_PIXEL_SHADER( radiosity_gen_visibility_ps30 );
+            SET_STATIC_PIXEL_SHADER( radiosity_gen_visibility_ps30 );
         }
         DYNAMIC_STATE
         {
@@ -43,12 +41,10 @@ BEGIN_VS_SHADER( RADIOSITY_GLOBAL, "RH 4.0 deterministic radiance injection" )
             DECLARE_DYNAMIC_VERTEX_SHADER( radiosity_gen_vs30 );
             SET_DYNAMIC_VERTEX_SHADER( radiosity_gen_vs30 );
 
-            DECLARE_DYNAMIC_PIXEL_SHADER( radiosity_gen_global_ps30 );
-            SET_DYNAMIC_PIXEL_SHADER( radiosity_gen_global_ps30 );
+            DECLARE_DYNAMIC_PIXEL_SHADER( radiosity_gen_visibility_ps30 );
+            SET_DYNAMIC_PIXEL_SHADER( radiosity_gen_visibility_ps30 );
 
-            BindTexture( SHADER_SAMPLER0, GetDeferredExt()->GetTexture_RadianceHintsRSMFlux() );
-            BindTexture( SHADER_SAMPLER1, GetDeferredExt()->GetTexture_RadianceHintsRSMNormal() );
-            BindTexture( SHADER_SAMPLER2, GetDeferredExt()->GetTexture_RadianceHintsRSMDepth() );
+            BindTexture( SHADER_SAMPLER0, GetDeferredExt()->GetTexture_RadianceHintsRSMDepth() );
 
             pShaderAPI->SetPixelShaderConstant( 0, data.matWorldToRSM.Base(), 4 );
             pShaderAPI->SetPixelShaderConstant( 4, data.matRSMToWorld.Base(), 4 );
@@ -58,27 +54,38 @@ BEGIN_VS_SHADER( RADIOSITY_GLOBAL, "RH 4.0 deterministic radiance injection" )
             pShaderAPI->SetPixelShaderConstant( 8, originConstant );
 
             ConVarRef cellSize( "deferred_rh_cell_size" );
-            ConVarRef worldSpread( "deferred_rh_world_spread" );
-            ConVarRef injectionGain( "deferred_rh_injection_gain" );
             ConVarRef edgeFade( "deferred_rh_rsm_edge_fade" );
-            ConVarRef maxRadiance( "deferred_rh_max_radiance" );
+            ConVarRef geometryEnable( "deferred_rh_geometry_enable" );
+            ConVarRef visibilityInner( "deferred_rh_visibility_inner" );
+            ConVarRef visibilityOuter( "deferred_rh_visibility_outer" );
+            ConVarRef visibilityStrength( "deferred_rh_visibility_strength" );
+            ConVarRef visibilityDecay( "deferred_rh_visibility_decay" );
 
             const float cell = MAX( cellSize.GetFloat(), 1.0f );
             float settings[4] = {
                 cell * RH_VOLUME_SIZE,
                 cell,
-                MAX( worldSpread.GetFloat(), cell * 1.5f ),
-                MAX( injectionGain.GetFloat(), 0.0f )
+                clamp( edgeFade.GetFloat(), 0.001f, 0.20f ),
+                MAX( data.vecRSMParams.z, 1.0f )
             };
             pShaderAPI->SetPixelShaderConstant( 9, settings );
 
-            float quality[4] = {
-                clamp( edgeFade.GetFloat(), 0.001f, 0.20f ),
-                MAX( maxRadiance.GetFloat(), 0.25f ),
-                data.vecRSMParams.y,
-                MAX( data.vecRSMParams.z, 1.0f )
+            const float inner = clamp( visibilityInner.GetFloat(), 0.0f, 2.0f );
+            float visibility[4] = {
+                geometryEnable.GetBool() ? 1.0f : 0.0f,
+                inner,
+                clamp( visibilityOuter.GetFloat(), inner + 0.01f, 3.0f ),
+                clamp( visibilityStrength.GetFloat(), 0.0f, 4.0f )
             };
-            pShaderAPI->SetPixelShaderConstant( 10, quality );
+            pShaderAPI->SetPixelShaderConstant( 10, visibility );
+
+            float decay[4] = {
+                clamp( visibilityDecay.GetFloat(), 0.0f, 4.0f ),
+                data.vecRSMParams.y,
+                0.0f,
+                0.0f
+            };
+            pShaderAPI->SetPixelShaderConstant( 11, decay );
         }
 
         Draw();

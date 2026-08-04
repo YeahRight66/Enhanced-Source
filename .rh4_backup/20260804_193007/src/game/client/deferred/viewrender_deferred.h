@@ -53,13 +53,11 @@ private:
 
 	void BeginRadiosity( const CViewSetup &view );
 	void UpdateRadiosityPosition();
-	void RenderRadianceHintsRSM( const CViewSetup &view );
-	void PerformRadiosityGlobal();
-	void PerformRadiosityVisibility();
+	void PerformRadiosityGlobal( const int iRadiosityCascade, const CViewSetup &view );
 	void EndRadiosity( const CViewSetup &view );
 	void DebugRadiosity( const CViewSetup &view );
 
-	void RenderCascadedShadows( const CViewSetup &view );
+	void RenderCascadedShadows( const CViewSetup &view, const bool bEnableRadiosity );
 
 	IMesh *GetRadianceHintsVolumeMesh();
 	IMesh *CreateRadianceHintsVolumeMesh();

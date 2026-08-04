@@ -1,0 +1,57 @@
+#include "common_ps_fxc.h"
+#include "common_deferred_fxc.h"
+
+sampler sHalfGI  : register( s0 );
+sampler sDepth   : register( s1 );
+sampler sNormals : register( s2 );
+
+// xy half dimensions, zw inverse dimensions
+const float4 g_HalfSize : register( c0 );
+// x depth rejection scale, y normal exponent
+const float4 g_Filter   : register( c1 );
+
+struct PS_INPUT { float2 vTexCoord : TEXCOORD0; };
+
+float3 DecodeRHNormal( float2 uv )
+{
+	return normalize( DecodeDirectionVectorXYZFromSphericalST( tex2Dlod( sNormals, float4( uv, 0.0f, 0.0f ) ).xy ) );
+}
+
+void AccumulateRH(
+	float2 uv, float spatialWeight, float centerDepth, float3 centerNormal,
+	inout float3 colourSum, inout float weightSum )
+{
+	float4 gi = tex2Dlod( sHalfGI, float4( uv, 0.0f, 0.0f ) );
+	float valid = step( 0.1f, gi.a ) * step( gi.a, DEPTH_RECONSTRUCTION_LIMIT );
+	float depthWeight = exp2( -abs( gi.a - centerDepth ) * g_Filter.x );
+	float normalWeight = pow( saturate( dot( centerNormal, DecodeRHNormal( uv ) ) ), g_Filter.y );
+	float weight = spatialWeight * depthWeight * normalWeight * valid + 1.0e-6f;
+	colourSum += gi.rgb * weight;
+	weightSum += weight;
+}
+
+float4 main( const PS_INPUT In ) : COLOR0
+{
+	float centerDepth = tex2D( sDepth, In.vTexCoord ).x;
+	clip( min( centerDepth - 0.1f, DEPTH_RECONSTRUCTION_LIMIT - centerDepth ) );
+	float3 centerNormal = DecodeRHNormal( In.vTexCoord );
+
+	float2 halfPixel = In.vTexCoord * g_HalfSize.xy - 0.5f;
+	float2 basePixel = floor( halfPixel );
+	float2 f = halfPixel - basePixel;
+	float2 invSize = g_HalfSize.zw;
+
+	float2 uv00 = ( basePixel + float2( 0.5f, 0.5f ) ) * invSize;
+	float2 uv10 = uv00 + float2( invSize.x, 0.0f );
+	float2 uv01 = uv00 + float2( 0.0f, invSize.y );
+	float2 uv11 = uv00 + invSize;
+
+	float3 sum = 0.0f;
+	float weight = 0.0f;
+	AccumulateRH( uv00, ( 1.0f - f.x ) * ( 1.0f - f.y ), centerDepth, centerNormal, sum, weight );
+	AccumulateRH( uv10, f.x * ( 1.0f - f.y ), centerDepth, centerNormal, sum, weight );
+	AccumulateRH( uv01, ( 1.0f - f.x ) * f.y, centerDepth, centerNormal, sum, weight );
+	AccumulateRH( uv11, f.x * f.y, centerDepth, centerNormal, sum, weight );
+
+	return WriteLighting( float4( sum / max( weight, 1.0e-5f ), 0.0f ) );
+}

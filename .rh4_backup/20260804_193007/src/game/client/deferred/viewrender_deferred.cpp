@@ -387,7 +387,6 @@ public:
 						ITexture *pNormalTexture );
 
 	void SetRadiosityOutputEnabled( bool bEnabled );
-	void AddVisibilityOrigin( const Vector &visibilityOrigin );
 
 	void			Draw();
 	virtual bool	AdjustView( float waterHeight );
@@ -429,25 +428,6 @@ public:
 
 private:
 	int iCascadeIndex;
-};
-
-class CRadianceHintsRSMView : public CBaseShadowView
-{
-	DECLARE_CLASS( CRadianceHintsRSMView, CBaseShadowView );
-public:
-	CRadianceHintsRSMView( CViewRender *pMainView, const Vector &rhOrigin, float extent, float cellSize )
-		: CBaseShadowView( pMainView ), m_vecRHOrigin( rhOrigin ), m_flExtent( extent ),
-		  m_flCellSize( cellSize ), m_flRSMWorldSide( extent ) {}
-
-	virtual void CalcShadowView();
-	virtual void CommitData();
-	virtual int GetShadowMode() { return DEFERRED_SHADOW_MODE_ORTHO; }
-
-private:
-	Vector m_vecRHOrigin;
-	float m_flExtent;
-	float m_flCellSize;
-	float m_flRSMWorldSide;
 };
 
 class CDualParaboloidShadowView : public CBaseShadowView
@@ -683,7 +663,7 @@ void CDeferredViewRender::ViewDrawSceneDeferred( const CViewSetup &view, int nCl
 #endif
 
 #if DEFCFG_ENABLE_RADIOSITY
-	if ( deferred_radiosity_debug.GetBool() || deferred_rh_debug_mode.GetInt() > 0 )
+	if ( deferred_radiosity_debug.GetBool() )
 		DebugRadiosity( view );
 #endif
 
@@ -919,59 +899,62 @@ static lightData_Global_t GetActiveGlobalLightState()
 void CDeferredViewRender::PerformLighting( const CViewSetup &view )
 {
 	bool bResetLightAccum = false;
-	const bool bRHEnabled = DEFCFG_ENABLE_RADIOSITY != 0 && deferred_radiosity_enable.GetBool();
+	const bool bRadiosityEnabled = DEFCFG_ENABLE_RADIOSITY != 0 && deferred_radiosity_enable.GetBool();
 
-	if ( bRHEnabled )
+	if ( bRadiosityEnabled )
 		BeginRadiosity( view );
 
 	if ( GetGlobalLight() != NULL )
 	{
 		struct defData_setGlobalLightState
 		{
+		public:
 			lightData_Global_t state;
-			static void Fire( defData_setGlobalLightState d ) { GetDeferredExt()->CommitLightData_Global( d.state ); }
+
+			static void Fire( defData_setGlobalLightState d )
+			{
+				GetDeferredExt()->CommitLightData_Global( d.state );
+			};
 		};
 
 		defData_setGlobalLightState lightDataState;
 		lightDataState.state = GetActiveGlobalLightState();
 
-		if ( !GetLightingEditor()->IsEditorLightingActive() && deferred_override_globalLight_enable.GetBool() )
+		if ( !GetLightingEditor()->IsEditorLightingActive() &&
+			deferred_override_globalLight_enable.GetBool() )
 		{
 			lightDataState.state.bShadow = deferred_override_globalLight_shadow_enable.GetBool();
 			UTIL_StringToVector( lightDataState.state.diff.AsVector3D().Base(), deferred_override_globalLight_diffuse.GetString() );
 			UTIL_StringToVector( lightDataState.state.ambh.AsVector3D().Base(), deferred_override_globalLight_ambient_high.GetString() );
 			UTIL_StringToVector( lightDataState.state.ambl.AsVector3D().Base(), deferred_override_globalLight_ambient_low.GetString() );
-			lightDataState.state.bEnabled = lightDataState.state.diff.LengthSqr() > 0.01f ||
-				lightDataState.state.ambh.LengthSqr() > 0.01f || lightDataState.state.ambl.LengthSqr() > 0.01f;
+
+			lightDataState.state.bEnabled = ( lightDataState.state.diff.LengthSqr() > 0.01f ||
+				lightDataState.state.ambh.LengthSqr() > 0.01f ||
+				lightDataState.state.ambl.LengthSqr() > 0.01f );
 		}
 
 		QUEUE_FIRE( defData_setGlobalLightState, Fire, lightDataState );
 
 		if ( lightDataState.state.bEnabled )
 		{
-			// RH owns a stable sun-space RSM. It is deliberately rendered before CSM,
-			// because both paths temporarily use orthographic shadow constant slot zero.
-			if ( bRHEnabled )
-				RenderRadianceHintsRSM( view );
+			bool bShadowedGlobal = lightDataState.state.bShadow;
 
-			if ( lightDataState.state.bShadow )
+			if ( bShadowedGlobal )
 			{
-				Vector origins[2] = { view.origin, view.origin + lightDataState.state.vecLight.AsVector3D() * 1024.0f };
+				Vector origins[2] = { view.origin, view.origin + lightDataState.state.vecLight.AsVector3D() * 1024 };
 				render->ViewSetupVis( false, 2, origins );
-				RenderCascadedShadows( view );
+
+				RenderCascadedShadows( view, bRadiosityEnabled );
 			}
 		}
 		else
-		{
 			bResetLightAccum = true;
-		}
 	}
 	else
-	{
 		bResetLightAccum = true;
-	}
 
 	CViewSetup lightingView = view;
+
 	if ( building_cubemaps.GetBool() )
 		engine->GetScreenSize( lightingView.width, lightingView.height );
 
@@ -984,15 +967,13 @@ void CDeferredViewRender::PerformLighting( const CViewSetup &view )
 		pRenderContext->ClearBuffers( true, false );
 	}
 	else
-	{
-		DrawLightPassFullscreen( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_GLOBAL ),
-			lightingView.width, lightingView.height );
-	}
+		DrawLightPassFullscreen( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_GLOBAL ), lightingView.width, lightingView.height );
 
 	pRenderContext.SafeRelease();
+
 	GetLightingManager()->RenderLights( lightingView, this );
 
-	if ( bRHEnabled && m_bRadianceHintsInjected )
+	if ( bRadiosityEnabled )
 		EndRadiosity( view );
 
 	pRenderContext.GetFrom( materials );
@@ -1001,9 +982,18 @@ void CDeferredViewRender::PerformLighting( const CViewSetup &view )
 
 void CDeferredViewRender::BeginRadiosity( const CViewSetup &view )
 {
+	Vector forward;
+	AngleVectors( view.angles, &forward );
+	forward.z = 0.0f;
+	if ( forward.LengthSqr() < 1.0e-4f )
+		forward.Init( 1.0f, 0.0f, 0.0f );
+	else
+		VectorNormalize( forward );
+
 	const float cellSize = MAX( deferred_rh_cell_size.GetFloat(), 1.0f );
 	const float extent = cellSize * RH_VOLUME_SIZE;
-	Vector desiredOrigin = view.origin - Vector( extent, extent, extent ) * 0.5f;
+	Vector center = view.origin + forward * ( extent * 0.20f );
+	Vector desiredOrigin = center - Vector( extent, extent, extent ) * 0.5f;
 
 	for ( int axis = 0; axis < 3; ++axis )
 		desiredOrigin[axis] = floor( desiredOrigin[axis] / cellSize ) * cellSize;
@@ -1013,10 +1003,10 @@ void CDeferredViewRender::BeginRadiosity( const CViewSetup &view )
 	if ( m_bRadianceHintsOriginValid && !cellSizeChanged )
 	{
 		origin = m_vecRadiosityOrigin[0];
-		const float deadZone = MAX( deferred_rh_origin_hysteresis.GetFloat(), 0.0f ) * cellSize;
+		const float hysteresis = MAX( deferred_rh_origin_hysteresis.GetFloat(), 0.0f ) * cellSize;
 		for ( int axis = 0; axis < 3; ++axis )
 		{
-			if ( fabs( desiredOrigin[axis] - origin[axis] ) > deadZone )
+			if ( fabs( desiredOrigin[axis] - origin[axis] ) > hysteresis )
 				origin[axis] = desiredOrigin[axis];
 		}
 	}
@@ -1024,7 +1014,7 @@ void CDeferredViewRender::BeginRadiosity( const CViewSetup &view )
 	m_bRadianceHintsOriginValid = true;
 	m_flRadianceHintsCellSize = cellSize;
 	m_vecRadiosityOrigin[0] = origin;
-	m_vecRadiosityOrigin[1] = origin;
+	m_vecRadiosityOrigin[1] = origin; // Kept for the existing extension ABI.
 	m_bRadianceHintsInjected = false;
 
 	CMatRenderContextPtr pRenderContext( materials );
@@ -1032,7 +1022,8 @@ void CDeferredViewRender::BeginRadiosity( const CViewSetup &view )
 	{
 		for ( int channel = 0; channel < RH_CHANNEL_COUNT; ++channel )
 		{
-			pRenderContext->PushRenderTargetAndViewport( GetDefRT_RadianceHints( set, channel ), NULL,
+			pRenderContext->PushRenderTargetAndViewport(
+				GetDefRT_RadianceHints( set, channel ), NULL,
 				0, 0, RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT );
 			pRenderContext->ClearColor4ub( 0, 0, 0, 0 );
 			pRenderContext->ClearBuffers( true, false );
@@ -1048,62 +1039,33 @@ void CDeferredViewRender::UpdateRadiosityPosition()
 	struct defData_setupRadiosity
 	{
 		radiosityData_t data;
-		static void Fire( defData_setupRadiosity d ) { GetDeferredExt()->CommitRadiosityData( d.data ); }
+
+		static void Fire( defData_setupRadiosity d )
+		{
+			GetDeferredExt()->CommitRadiosityData( d.data );
+		}
 	};
 
 	defData_setupRadiosity setup;
 	setup.data.vecOrigin[0] = m_vecRadiosityOrigin[0];
 	setup.data.vecOrigin[1] = m_vecRadiosityOrigin[1];
-	setup.data.vecRSMParams.w = MAX( deferred_rh_cell_size.GetFloat(), 1.0f );
 	QUEUE_FIRE( defData_setupRadiosity, Fire, setup );
 }
 
-void CDeferredViewRender::RenderRadianceHintsRSM( const CViewSetup &view )
-{
-	const float cellSize = MAX( deferred_rh_cell_size.GetFloat(), 1.0f );
-	const float extent = cellSize * RH_VOLUME_SIZE;
-	const Vector volumeCenter = m_vecRadiosityOrigin[0] + Vector( extent, extent, extent ) * 0.5f;
-
-	CRefPtr<CRadianceHintsRSMView> pRSM = new CRadianceHintsRSMView(
-		this, m_vecRadiosityOrigin[0], extent, cellSize );
-	pRSM->Setup( view, GetDefRT_RHRSMDepth(), GetDefRT_RHRSMColor() );
-	pRSM->SetupRadiosityTargets( GetDefRT_RHRSMFlux(), GetDefRT_RHRSMNormal() );
-	pRSM->SetRadiosityOutputEnabled( true );
-	// A sun view can originate outside the BSP. Seed PVS from the camera and
-	// eight stable points inside the RH cube so world, props and models are not
-	// lost merely because the light camera sits outside the current leaf.
-	pRSM->AddVisibilityOrigin( view.origin );
-	const float visOffset = extent * 0.25f;
-	for ( int sx = -1; sx <= 1; sx += 2 )
-	for ( int sy = -1; sy <= 1; sy += 2 )
-	for ( int sz = -1; sz <= 1; sz += 2 )
-		pRSM->AddVisibilityOrigin( volumeCenter + Vector( sx * visOffset, sy * visOffset, sz * visOffset ) );
-	AddViewToScene( pRSM );
-
-	PerformRadiosityGlobal();
-	PerformRadiosityVisibility();
-	m_bRadianceHintsInjected = true;
-}
-
-void CDeferredViewRender::PerformRadiosityGlobal()
+void CDeferredViewRender::PerformRadiosityGlobal( const int shadowCascade, const CViewSetup &view )
 {
 	CMatRenderContextPtr pRenderContext( materials );
-	pRenderContext->SetIntRenderingParameter( INT_RENDERPARM_DEFERRED_RADIOSITY_CASCADE, 0 );
-	pRenderContext->PushRenderTargetAndViewport( GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_R ), NULL,
+	pRenderContext->SetIntRenderingParameter(
+		INT_RENDERPARM_DEFERRED_RADIOSITY_CASCADE, shadowCascade );
+
+	pRenderContext->PushRenderTargetAndViewport(
+		GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_R ), NULL,
 		0, 0, RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT );
 	pRenderContext->SetRenderTargetEx( 1, GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_G ) );
 	pRenderContext->SetRenderTargetEx( 2, GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_B ) );
-	pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_GLOBAL ) );
-	GetRadianceHintsVolumeMesh()->Draw();
-	pRenderContext->PopRenderTargetAndViewport();
-}
+	pRenderContext->SetRenderTargetEx( 3, GetDefRT_RadianceHints( 0, RH_CHANNEL_AUX ) );
 
-void CDeferredViewRender::PerformRadiosityVisibility()
-{
-	CMatRenderContextPtr pRenderContext( materials );
-	pRenderContext->PushRenderTargetAndViewport( GetDefRT_RadianceHints( 0, RH_CHANNEL_VISIBILITY ), NULL,
-		0, 0, RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT );
-	pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_VISIBILITY ) );
+	pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_GLOBAL ) );
 	GetRadianceHintsVolumeMesh()->Draw();
 	pRenderContext->PopRenderTargetAndViewport();
 }
@@ -1111,65 +1073,70 @@ void CDeferredViewRender::PerformRadiosityVisibility()
 void CDeferredViewRender::EndRadiosity( const CViewSetup &view )
 {
 	const int bounceCount = clamp( deferred_rh_bounce_count.GetInt(), 0, 1 );
-	if ( bounceCount > 0 )
+	if ( m_bRadianceHintsInjected && bounceCount > 0 )
 	{
 		CMatRenderContextPtr pRenderContext( materials );
-		pRenderContext->PushRenderTargetAndViewport( GetDefRT_RadianceHints( 1, RH_CHANNEL_SH_R ), NULL,
+		pRenderContext->PushRenderTargetAndViewport(
+			GetDefRT_RadianceHints( 1, RH_CHANNEL_SH_R ), NULL,
 			0, 0, RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT );
 		pRenderContext->SetRenderTargetEx( 1, GetDefRT_RadianceHints( 1, RH_CHANNEL_SH_G ) );
 		pRenderContext->SetRenderTargetEx( 2, GetDefRT_RadianceHints( 1, RH_CHANNEL_SH_B ) );
-		pRenderContext->SetRenderTargetEx( 3, GetDefRT_RadianceHints( 1, RH_CHANNEL_VISIBILITY ) );
+		pRenderContext->SetRenderTargetEx( 3, GetDefRT_RadianceHints( 1, RH_CHANNEL_AUX ) );
 		pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_0 ) );
 		GetRadianceHintsVolumeMesh()->Draw();
 		pRenderContext->PopRenderTargetAndViewport();
 	}
 
-	ITexture *pHalf = GetDefRT_RHIndirectHalf();
-	const int halfWidth = MAX( pHalf->GetActualWidth(), 1 );
-	const int halfHeight = MAX( pHalf->GetActualHeight(), 1 );
-	CMatRenderContextPtr pRenderContext( materials );
-	pRenderContext->PushRenderTargetAndViewport( pHalf, NULL, 0, 0, halfWidth, halfHeight );
-	pRenderContext->ClearColor4ub( 0, 0, 0, 0 );
-	pRenderContext->ClearBuffers( true, false );
-	DrawLightPassFullscreen( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_BLEND ),
-		halfWidth, halfHeight );
-	pRenderContext->PopRenderTargetAndViewport();
-
-	// The caller's _rt_LightAccum target is restored by the pop above.
-	DrawLightPassFullscreen( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_UPSAMPLE ),
+	// PerformLighting keeps _rt_LightAccum bound here; this pass adds RH irradiance.
+	DrawLightPassFullscreen(
+		GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_BLEND ),
 		view.width, view.height );
 }
 
 void CDeferredViewRender::DebugRadiosity( const CViewSetup &view )
 {
-	(void)view;
 	const float cellSize = MAX( deferred_rh_cell_size.GetFloat(), 1.0f );
 	const float extent = cellSize * RH_VOLUME_SIZE;
 	const Vector &origin = m_vecRadiosityOrigin[0];
 	const Vector maximum = origin + Vector( extent, extent, extent );
+
 	DebugDrawCross( origin, cellSize * 0.4f, -1.0f );
 	DebugDrawCross( maximum, cellSize * 0.4f, -1.0f );
-	engine->Con_NPrintf( 20, "RH4 preset %s | grid %i | RSM %i | origin %.1f %.1f %.1f | injected %i",
-		RH_QUALITY_PRESET == RH_PRESET_HIGH ? "HIGH" : "BALANCED",
-		RH_VOLUME_SIZE, RH_RSM_RESOLUTION, origin.x, origin.y, origin.z,
-		m_bRadianceHintsInjected ? 1 : 0 );
+	engine->Con_NPrintf( 20, "RH origin %.1f %.1f %.1f | cell %.1f | extent %.1f | injected %i",
+		origin.x, origin.y, origin.z, cellSize, extent, m_bRadianceHintsInjected ? 1 : 0 );
 }
 
-void CDeferredViewRender::RenderCascadedShadows( const CViewSetup &view )
+void CDeferredViewRender::RenderCascadedShadows( const CViewSetup &view, const bool bEnableRadiosity )
 {
 	for ( int i = 0; i < SHADOW_NUM_CASCADES; ++i )
 	{
+		const cascade_t &cascade = GetCascadeInfo( i );
+		const bool outputRSM = bEnableRadiosity && cascade.bOutputRadiosityData && !m_bRadianceHintsInjected;
+
 #if CSM_USE_COMPOSITED_TARGET == 0
 		const int textureIndex = i;
 #else
 		const int textureIndex = 0;
 #endif
+
 		CRefPtr<COrthoShadowView> pOrthoDepth = new COrthoShadowView( this, i );
 		pOrthoDepth->Setup( view, GetShadowDepthRT_Ortho( textureIndex ), GetShadowColorRT_Ortho( textureIndex ) );
+		if ( outputRSM )
+		{
+			pOrthoDepth->SetRadiosityOutputEnabled( true );
+			pOrthoDepth->SetupRadiosityTargets(
+				GetRadiosityAlbedoRT_Ortho( textureIndex ),
+				GetRadiosityNormalRT_Ortho( textureIndex ) );
+		}
 		AddViewToScene( pOrthoDepth );
+
+		if ( outputRSM )
+		{
+			PerformRadiosityGlobal( i, view );
+			m_bRadianceHintsInjected = true;
+		}
 	}
 }
-
 
 void CDeferredViewRender::DrawLightShadowView( const CViewSetup &view, int iDesiredShadowmap, def_light_t *l )
 {
@@ -3352,119 +3319,6 @@ void CBaseShadowView::SetRadiosityOutputEnabled( bool bEnabled )
 {
 	m_bOutputRadiosity = bEnabled;
 }
-
-void CBaseShadowView::AddVisibilityOrigin( const Vector &visibilityOrigin )
-{
-	shadowVis.AddVisOrigin( visibilityOrigin );
-}
-
-void CRadianceHintsRSMView::CalcShadowView()
-{
-	lightData_Global_t state = GetActiveGlobalLightState();
-	QAngle lightAngles;
-	VectorAngles( -state.vecLight.AsVector3D(), lightAngles );
-
-	Vector forward, right, up;
-	AngleVectors( lightAngles, &forward, &right, &up );
-
-	const Vector center = m_vecRHOrigin + Vector( m_flExtent, m_flExtent, m_flExtent ) * 0.5f;
-	const float projectedHalfWidth = 0.5f * m_flExtent *
-		( fabs( right.x ) + fabs( right.y ) + fabs( right.z ) );
-	const float projectedHalfHeight = 0.5f * m_flExtent *
-		( fabs( up.x ) + fabs( up.y ) + fabs( up.z ) );
-	const float projectedHalfDepth = 0.5f * m_flExtent *
-		( fabs( forward.x ) + fabs( forward.y ) + fabs( forward.z ) );
-	const float padding = MAX( deferred_rh_rsm_padding.GetFloat(), 0.0f ) * m_flCellSize;
-	const float halfSide = MAX( projectedHalfWidth, projectedHalfHeight ) + padding;
-	const float halfDepth = projectedHalfDepth + padding;
-
-	m_flRSMWorldSide = MAX( halfSide * 2.0f, m_flCellSize );
-	origin = center - forward * halfDepth + up * halfSide - right * halfSide;
-	angles = lightAngles;
-
-	x = y = 0;
-	width = height = RH_RSM_RESOLUTION;
-	m_bOrtho = true;
-	m_OrthoLeft = 0.0f;
-	m_OrthoTop = -m_flRSMWorldSide;
-	m_OrthoRight = m_flRSMWorldSide;
-	m_OrthoBottom = 0.0f;
-	zNear = zNearViewmodel = 0.0f;
-	zFar = zFarViewmodel = MAX( halfDepth * 2.0f, m_flCellSize * 4.0f );
-	m_flAspectRatio = 0.0f;
-
-	// Stable light-space texel snapping. Camera rotation never participates.
-	const float worldPerTexel = m_flRSMWorldSide / RH_RSM_RESOLUTION;
-	const float rightCoordinate = DotProduct( right, origin );
-	const float upCoordinate = DotProduct( up, origin );
-	const float snappedRight = floor( rightCoordinate / worldPerTexel + 0.5f ) * worldPerTexel;
-	const float snappedUp = floor( upCoordinate / worldPerTexel + 0.5f ) * worldPerTexel;
-	origin += right * ( snappedRight - rightCoordinate );
-	origin += up * ( snappedUp - upCoordinate );
-
-	const float depthQuantum = GetDepthMapDepthResolution( zFar - zNear );
-	if ( depthQuantum > 0.0f )
-	{
-		const float depthCoordinate = DotProduct( forward, origin );
-		const float snappedDepth = floor( depthCoordinate / depthQuantum + 0.5f ) * depthQuantum;
-		origin += forward * ( snappedDepth - depthCoordinate );
-	}
-}
-
-void CRadianceHintsRSMView::CommitData()
-{
-	struct sendRHData
-	{
-		shadowData_ortho_t shadow;
-		radiosityData_t radiosity;
-		static void Fire( sendRHData d )
-		{
-			IDeferredExtension *pDef = GetDeferredExt();
-			pDef->CommitShadowData_Ortho( 0, d.shadow );
-			pDef->CommitRadiosityData( d.radiosity );
-		}
-	};
-
-	sendRHData packet;
-	const cascade_t &referenceCascade = GetCascadeInfo( 0 );
-	packet.shadow.iRes_x = RH_RSM_RESOLUTION;
-	packet.shadow.iRes_y = RH_RSM_RESOLUTION;
-	packet.shadow.vecSlopeSettings.Init(
-		referenceCascade.flSlopeScaleMin,
-		referenceCascade.flSlopeScaleMax,
-		referenceCascade.flNormalScaleMax,
-		1.0f / MAX( zFar, 1.0f ) );
-	packet.shadow.vecOrigin.Init( origin );
-#if CSM_USE_COMPOSITED_TARGET
-	packet.shadow.vecUVTransform.Init( 0.0f, 0.0f, 1.0f, 1.0f );
-#endif
-
-	VMatrix viewMatrix, projectionMatrix, worldToProjection, worldToPixels;
-	render->GetMatricesForView( *this, &viewMatrix, &projectionMatrix, &worldToProjection, &worldToPixels );
-	VMatrix screenToTexture;
-	MatrixBuildScale( screenToTexture, 0.5f, -0.5f, 1.0f );
-	screenToTexture[0][3] = 0.5f;
-	screenToTexture[1][3] = 0.5f;
-	MatrixMultiply( screenToTexture, worldToProjection, packet.shadow.matWorldToTexture );
-
-	VMatrix textureToWorld;
-	MatrixInverseGeneral( packet.shadow.matWorldToTexture, textureToWorld );
-	packet.radiosity.vecOrigin[0] = m_vecRHOrigin;
-	packet.radiosity.vecOrigin[1] = m_vecRHOrigin;
-	packet.radiosity.matWorldToRSM = packet.shadow.matWorldToTexture.Transpose();
-	packet.radiosity.matRSMToWorld = textureToWorld.Transpose();
-	packet.radiosity.vecRSMParams.Init(
-		(float)RH_RSM_RESOLUTION,
-		1.0f / (float)RH_RSM_RESOLUTION,
-		m_flRSMWorldSide,
-		m_flCellSize );
-
-	QUEUE_FIRE( sendRHData, Fire, packet );
-
-	CMatRenderContextPtr pRenderContext( materials );
-	pRenderContext->SetIntRenderingParameter( INT_RENDERPARM_DEFERRED_SHADOW_INDEX, 0 );
-}
-
 
 void COrthoShadowView::CalcShadowView()
 {

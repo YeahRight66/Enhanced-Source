@@ -2,215 +2,148 @@
 #include "common_deferred_fxc.h"
 #include "radiance_hints_common_fxc.h"
 
-const float3 g_vecGridOrigin              : register( c0 );
-const float4x3 g_matOrtho                 : register( c1 );
-const float4 g_vecUVTransform             : register( c4 );
-const float4 g_vecSlopeSettings           : register( c5 );
-const float3 g_vecShadowOrigin            : register( c6 );
-const float3 g_vecShadowForward           : register( c7 );
-// x = volume extent, y = cell size, z = world spread distance, w = injection gain
-const float4 g_vecRHSettings              : register( c8 );
-// x = RSM edge fade in local UV, y = maximum transported radiance
-const float4 g_vecRHQualitySettings       : register( c9 );
-// x = geometry enable, y = solid inner radius in cells,
-// z = occupancy outer radius in cells, w = occupancy strength
-const float4 g_vecRHGeometrySettings      : register( c10 );
+const float4x4 g_matWorldToRSM  : register( c0 );
+const float4x4 g_matRSMToWorld  : register( c4 );
+const float3   g_vecGridOrigin  : register( c8 );
+// x = volume extent, y = cell size, z = gather radius, w = injection gain
+const float4   g_vecRHSettings  : register( c9 );
+// x = RSM edge fade, y = max radiance, z = inverse RSM resolution, w = RSM world side
+const float4   g_vecRHQuality   : register( c10 );
 
-sampler sShadowFlux                       : register( s0 );
-sampler sShadowNormal                     : register( s1 );
-sampler sShadowDepth                      : register( s2 );
+sampler sRSMFlux   : register( s0 );
+sampler sRSMNormal : register( s1 );
+sampler sRSMDepth  : register( s2 );
 
 struct PS_INPUT
 {
-	float3 vVolumeUVW : TEXCOORD0;
-	float2 vAtlasUV   : TEXCOORD1;
+    float3 vVolumeUVW : TEXCOORD0;
+    float2 vAtlasUV   : TEXCOORD1;
 };
 
 struct PS_OUTPUT
 {
-	float4 vSH_R : COLOR0;
-	float4 vSH_G : COLOR1;
-	float4 vSH_B : COLOR2;
-	float4 vAux  : COLOR3;
+    float4 vSH_R : COLOR0;
+    float4 vSH_G : COLOR1;
+    float4 vSH_B : COLOR2;
 };
 
-float3 RH_ReconstructRSMWorldPosition( float2 localUV, float depth )
+float3 RH_ReconstructRSMPosition( float2 uv, float depth )
 {
-	float3 rowX = float3( g_matOrtho[0][0], g_matOrtho[1][0], g_matOrtho[2][0] );
-	float3 rowY = float3( g_matOrtho[0][1], g_matOrtho[1][1], g_matOrtho[2][1] );
-	float3 rowZ = g_vecShadowForward * g_vecSlopeSettings.w;
-
-	float3 rhs;
-	rhs.x = localUV.x - g_matOrtho[3][0];
-	rhs.y = localUV.y - g_matOrtho[3][1];
-	rhs.z = depth + dot( g_vecShadowOrigin, rowZ );
-
-	float3 crossYZ = cross( rowY, rowZ );
-	float determinant = dot( rowX, crossYZ );
-	float determinantSign = determinant < 0.0f ? -1.0f : 1.0f;
-	float safeDeterminant = determinantSign * max( abs( determinant ), 1.0e-7f );
-
-	return ( rhs.x * crossYZ + rhs.y * cross( rowZ, rowX ) + rhs.z * cross( rowX, rowY ) ) / safeDeterminant;
+    float4 world = mul( float4( uv, depth, 1.0f ), g_matRSMToWorld );
+    return world.xyz / max( abs( world.w ), 1.0e-6f );
 }
 
-void RH_AccumulateRSM(
-	float2 localCenterUV,
-	float2 diskOffset,
-	float3 cellJitter,
-	float2 patternSinCos,
-	float3 cellCenterWS,
-	float2 worldToLocalUV,
-	inout float4 shR,
-	inout float4 shG,
-	inout float4 shB,
-	inout float minDistance,
-	inout float maxDistance,
-	inout float validCount,
-	inout float occupancy )
+void RH_AccumulateRadiance(
+    float2 centerUV,
+    float2 diskOffset,
+    float2 patternSinCos,
+    float3 cellCenterWS,
+    inout float4 shR,
+    inout float4 shG,
+    inout float4 shB,
+    inout float totalWeight )
 {
-	// Rotate the fixed pattern without retaining extra temporaries.
-	diskOffset = RH_Rotate2D( diskOffset, patternSinCos.x, patternSinCos.y );
-	cellJitter.xy = RH_Rotate2D( cellJitter.xy, patternSinCos.x, patternSinCos.y );
+    diskOffset = RH_Rotate2D( diskOffset, patternSinCos.x, patternSinCos.y );
+    float2 uv = centerUV + diskOffset * ( g_vecRHSettings.z / g_vecRHQuality.w );
 
-	float2 localUV = localCenterUV
-		+ diskOffset * worldToLocalUV * g_vecRHSettings.z;
-	float inside = step( 0.0f, localUV.x ) * step( localUV.x, 1.0f )
-		* step( 0.0f, localUV.y ) * step( localUV.y, 1.0f );
-	localUV = saturate( localUV );
+    float inside = step( 0.0f, uv.x ) * step( uv.x, 1.0f )
+        * step( 0.0f, uv.y ) * step( uv.y, 1.0f );
+    uv = saturate( uv );
 
-	float edge = min( min( localUV.x, localUV.y ),
-		min( 1.0f - localUV.x, 1.0f - localUV.y ) );
-	edge = saturate( edge / max( g_vecRHQualitySettings.x, 1.0e-4f ) );
-	edge = edge * edge * ( 3.0f - 2.0f * edge );
+    float edge = min( min( uv.x, uv.y ), min( 1.0f - uv.x, 1.0f - uv.y ) );
+    edge = saturate( edge / max( g_vecRHQuality.x, 1.0e-4f ) );
+    edge = edge * edge * ( 3.0f - 2.0f * edge );
 
-	float2 atlasUV = localUV * g_vecUVTransform.zw + g_vecUVTransform.xy;
-	float depth = tex2Dlod( sShadowDepth, float4( atlasUV, 0.0f, 0.0f ) ).r;
-	float geometryWeight = inside * edge * step( depth, 0.9999f );
+    float depth = tex2Dlod( sRSMDepth, float4( uv, 0.0f, 0.0f ) ).r;
+    float validDepth = inside * edge * step( depth, 0.9999f );
 
-	// Explicit LOD sampling makes this dynamic branch legal in ps_3_0 and keeps
-	// the expensive reconstruction path out of invalid RSM samples.
-	[branch]
-	if ( geometryWeight > 1.0e-4f )
-	{
-		float3 emitterPosition = RH_ReconstructRSMWorldPosition( localUV, depth );
-		float3 ray = cellCenterWS
-			+ cellJitter * ( g_vecRHSettings.y * 0.45f )
-			- emitterPosition;
-		float distanceSquaredWS = max( dot( ray, ray ), RH_EPSILON );
-		float inverseDistanceWS = rsqrt( distanceSquaredWS );
-		float distanceNormalized = ( distanceSquaredWS * inverseDistanceWS )
-			/ max( g_vecRHSettings.z, 1.0f );
+    [branch]
+    if ( validDepth > 1.0e-4f )
+    {
+        float3 emitterPosition = RH_ReconstructRSMPosition( uv, depth );
+        float3 ray = cellCenterWS - emitterPosition;
+        float distanceSquared = dot( ray, ray );
 
-		// Reuse the transport distance for geometry occupancy. The previous V3.2
-		// path calculated a second float3 distance, which pushed FXC over r31.
-		float innerRadius = max( g_vecRHGeometrySettings.y, 0.0f );
-		float outerRadius = max( g_vecRHGeometrySettings.z, innerRadius + 0.01f );
-		float surfaceOccupancy = 1.0f
-			- smoothstep( innerRadius, outerRadius,
-				distanceNormalized * g_vecRHSettings.z
-				/ max( g_vecRHSettings.y, 1.0f ) );
-		occupancy = max( occupancy,
-			saturate( surfaceOccupancy * geometryWeight
-				* g_vecRHGeometrySettings.x * g_vecRHGeometrySettings.w ) );
+        [branch]
+        if ( distanceSquared > 1.0e-4f )
+        {
+            float inverseDistance = rsqrt( distanceSquared );
+            float distanceValue = distanceSquared * inverseDistance;
+            float distanceNormalized = distanceValue / max( g_vecRHSettings.z, 1.0f );
+            float radial = saturate( 1.0f - distanceNormalized );
+            radial *= radial;
 
-		float3 flux = tex2Dlod( sShadowFlux, float4( atlasUV, 0.0f, 0.0f ) ).rgb;
-		float sampleWeight = geometryWeight
-			* step( 1.0e-7f, dot( flux, flux ) )
-			* step( 0.0025f, distanceNormalized )
-			* step( distanceNormalized, 1.5f );
+            float3 flux = tex2Dlod( sRSMFlux, float4( uv, 0.0f, 0.0f ) ).rgb;
+            float fluxValid = step( 1.0e-8f, dot( flux, flux ) );
+            float3 normal = tex2Dlod( sRSMNormal, float4( uv, 0.0f, 0.0f ) ).xyz * 2.0f - 1.0f;
+            normal = RH_SafeNormalize( normal, float3( 0.0f, 0.0f, 1.0f ) );
 
-		[branch]
-		if ( sampleWeight > 1.0e-5f )
-		{
-			float3 emitterNormal = tex2Dlod(
-				sShadowNormal, float4( atlasUV, 0.0f, 0.0f ) ).xyz * 2.0f - 1.0f;
-			emitterNormal *= rsqrt( max( dot( emitterNormal, emitterNormal ), RH_EPSILON ) );
+            float3 travelDirection = ray * inverseDistance;
+            float emitterCosine = saturate( dot( normal, travelDirection ) );
+            float sampleWeight = validDepth * fluxValid * radial * emitterCosine;
+            float attenuation = sampleWeight / ( 0.12f + distanceNormalized * distanceNormalized );
+            float3 transported = RH_ClampRadiance(
+                flux * ( attenuation * g_vecRHSettings.w ),
+                max( g_vecRHQuality.y, 0.25f ) );
 
-			float3 rayDirection = ray * inverseDistanceWS;
-			float geometric = saturate( dot( rayDirection, emitterNormal ) );
-			float attenuation = sampleWeight * geometric
-				/ ( 0.04f + distanceNormalized * distanceNormalized );
-			float3 transported = min(
-				max( flux * ( attenuation * g_vecRHSettings.w ), 0.0f ),
-				max( g_vecRHQualitySettings.y, 0.25f ) );
-			float4 basis = float4(
-				rayDirection * 0.4886025119f,
-				0.2820947918f );
-
-			shR += basis * transported.r;
-			shG += basis * transported.g;
-			shB += basis * transported.b;
-			minDistance = min( minDistance, distanceNormalized );
-			maxDistance = max( maxDistance, distanceNormalized );
-			validCount += sampleWeight;
-		}
-	}
+            float4 basis = RH_ProjectDirection( travelDirection );
+            shR += basis * transported.r;
+            shG += basis * transported.g;
+            shB += basis * transported.b;
+            totalWeight += sampleWeight;
+        }
+    }
 }
 
 PS_OUTPUT main( const PS_INPUT In )
 {
-	PS_OUTPUT Out;
-	float3 cellCenterWS = g_vecGridOrigin + In.vVolumeUVW * g_vecRHSettings.x;
-	float3 projected = mul( float4( cellCenterWS, 1.0f ), g_matOrtho );
-	float2 localCenterUV = projected.xy;
+    PS_OUTPUT Out;
 
-	float3 rowX = float3( g_matOrtho[0][0], g_matOrtho[1][0], g_matOrtho[2][0] );
-	float3 rowY = float3( g_matOrtho[0][1], g_matOrtho[1][1], g_matOrtho[2][1] );
-	float2 worldToLocalUV = float2( length( rowX ), length( rowY ) );
+    float3 cellCenterWS = g_vecGridOrigin + In.vVolumeUVW * g_vecRHSettings.x;
+    float4 projected = mul( float4( cellCenterWS, 1.0f ), g_matWorldToRSM );
+    float2 centerUV = projected.xy / max( abs( projected.w ), 1.0e-6f );
 
-	float3 cellCoordinate = floor( In.vVolumeUVW * RH_VOLUME_SIZE_F );
-	float patternQuadrant = floor( RH_Hash13( cellCoordinate + float3( 11.0f, 37.0f, 73.0f ) ) * 4.0f );
-	float2 patternSinCos = float2( 0.0f, 1.0f );
-	if ( patternQuadrant < 1.0f ) patternSinCos = float2( 0.0f,  1.0f );
-	else if ( patternQuadrant < 2.0f ) patternSinCos = float2( 1.0f,  0.0f );
-	else if ( patternQuadrant < 3.0f ) patternSinCos = float2( 0.0f, -1.0f );
-	else patternSinCos = float2( -1.0f, 0.0f );
+    float3 worldCell = floor( cellCenterWS / max( g_vecRHSettings.y, 1.0f ) );
+    float quadrant = floor( RH_Hash13( worldCell + float3( 11.0f, 37.0f, 73.0f ) ) * 4.0f );
+    float2 patternSinCos = float2( 0.0f, 1.0f );
+    if ( quadrant < 1.0f ) patternSinCos = float2( 0.0f,  1.0f );
+    else if ( quadrant < 2.0f ) patternSinCos = float2( 1.0f,  0.0f );
+    else if ( quadrant < 3.0f ) patternSinCos = float2( 0.0f, -1.0f );
+    else patternSinCos = float2( -1.0f, 0.0f );
 
-	float4 shR = 0.0f;
-	float4 shG = 0.0f;
-	float4 shB = 0.0f;
-	float minDistance = 1.0f;
-	float maxDistance = 0.0f;
-	float validCount = 0.0f;
-	float occupancy = 0.0f;
+    float4 shR = 0.0f;
+    float4 shG = 0.0f;
+    float4 shB = 0.0f;
+    float totalWeight = 0.0f;
 
-#if RH_RSM_SAMPLE_COUNT >= 1
-	RH_AccumulateRSM( localCenterUV, float2( 0.000f,  0.000f ), float3( 0.17f, -0.31f,  0.23f ), patternSinCos, cellCenterWS, worldToLocalUV, shR, shG, shB, minDistance, maxDistance, validCount, occupancy );
+#if RH_RADIANCE_SAMPLE_COUNT >= 1
+    RH_AccumulateRadiance( centerUV, float2( 0.000f,  0.000f ), patternSinCos, cellCenterWS, shR, shG, shB, totalWeight );
 #endif
-#if RH_RSM_SAMPLE_COUNT >= 2
-	RH_AccumulateRSM( localCenterUV, float2( 0.527f,  0.143f ), float3(-0.36f,  0.11f, -0.19f ), patternSinCos, cellCenterWS, worldToLocalUV, shR, shG, shB, minDistance, maxDistance, validCount, occupancy );
+#if RH_RADIANCE_SAMPLE_COUNT >= 2
+    RH_AccumulateRadiance( centerUV, float2( 0.527f,  0.143f ), patternSinCos, cellCenterWS, shR, shG, shB, totalWeight );
 #endif
-#if RH_RSM_SAMPLE_COUNT >= 3
-	RH_AccumulateRSM( localCenterUV, float2(-0.401f,  0.388f ), float3( 0.28f,  0.37f, -0.27f ), patternSinCos, cellCenterWS, worldToLocalUV, shR, shG, shB, minDistance, maxDistance, validCount, occupancy );
+#if RH_RADIANCE_SAMPLE_COUNT >= 3
+    RH_AccumulateRadiance( centerUV, float2(-0.401f,  0.388f ), patternSinCos, cellCenterWS, shR, shG, shB, totalWeight );
 #endif
-#if RH_RSM_SAMPLE_COUNT >= 4
-	RH_AccumulateRSM( localCenterUV, float2( 0.118f, -0.591f ), float3(-0.12f, -0.22f,  0.39f ), patternSinCos, cellCenterWS, worldToLocalUV, shR, shG, shB, minDistance, maxDistance, validCount, occupancy );
+#if RH_RADIANCE_SAMPLE_COUNT >= 4
+    RH_AccumulateRadiance( centerUV, float2( 0.118f, -0.591f ), patternSinCos, cellCenterWS, shR, shG, shB, totalWeight );
 #endif
-#if RH_RSM_SAMPLE_COUNT >= 5
-	RH_AccumulateRSM( localCenterUV, float2(-0.684f, -0.104f ), float3( 0.41f, -0.08f, -0.33f ), patternSinCos, cellCenterWS, worldToLocalUV, shR, shG, shB, minDistance, maxDistance, validCount, occupancy );
+#if RH_RADIANCE_SAMPLE_COUNT >= 5
+    RH_AccumulateRadiance( centerUV, float2(-0.684f, -0.104f ), patternSinCos, cellCenterWS, shR, shG, shB, totalWeight );
 #endif
-#if RH_RSM_SAMPLE_COUNT >= 6
-	RH_AccumulateRSM( localCenterUV, float2( 0.632f, -0.477f ), float3(-0.29f,  0.32f,  0.07f ), patternSinCos, cellCenterWS, worldToLocalUV, shR, shG, shB, minDistance, maxDistance, validCount, occupancy );
+#if RH_RADIANCE_SAMPLE_COUNT >= 6
+    RH_AccumulateRadiance( centerUV, float2( 0.632f, -0.477f ), patternSinCos, cellCenterWS, shR, shG, shB, totalWeight );
 #endif
-#if RH_RSM_SAMPLE_COUNT >= 7
-	RH_AccumulateRSM( localCenterUV, float2(-0.214f,  0.779f ), float3( 0.06f, -0.44f, -0.11f ), patternSinCos, cellCenterWS, worldToLocalUV, shR, shG, shB, minDistance, maxDistance, validCount, occupancy );
+#if RH_RADIANCE_SAMPLE_COUNT >= 7
+    RH_AccumulateRadiance( centerUV, float2(-0.214f,  0.779f ), patternSinCos, cellCenterWS, shR, shG, shB, totalWeight );
 #endif
-#if RH_RSM_SAMPLE_COUNT >= 8
-	RH_AccumulateRSM( localCenterUV, float2( 0.806f,  0.326f ), float3(-0.43f,  0.19f,  0.31f ), patternSinCos, cellCenterWS, worldToLocalUV, shR, shG, shB, minDistance, maxDistance, validCount, occupancy );
+#if RH_RADIANCE_SAMPLE_COUNT >= 8
+    RH_AccumulateRadiance( centerUV, float2( 0.806f,  0.326f ), patternSinCos, cellCenterWS, shR, shG, shB, totalWeight );
 #endif
 
-	float hasSamples = step( 1.0e-4f, validCount );
-	float normalization = hasSamples / ( RH_PI * max( validCount, 1.0e-4f ) );
-	float confidence = saturate( validCount * ( 2.0f / RH_RSM_SAMPLE_COUNT ) );
-	confidence = confidence * confidence * ( 3.0f - 2.0f * confidence );
-
-	Out.vSH_R = RH_DeringSH( shR * normalization );
-	Out.vSH_G = RH_DeringSH( shG * normalization );
-	Out.vSH_B = RH_DeringSH( shB * normalization );
-	Out.vAux = float4(
-		lerp( 1.0f, minDistance, hasSamples ),
-		maxDistance,
-		confidence,
-		saturate( occupancy ) );
-	return Out;
+    float normalization = step( 1.0e-5f, totalWeight ) / max( totalWeight * RH_PI, 1.0e-5f );
+    Out.vSH_R = RH_LimitRadianceSH( shR * normalization );
+    Out.vSH_G = RH_LimitRadianceSH( shG * normalization );
+    Out.vSH_B = RH_LimitRadianceSH( shB * normalization );
+    return Out;
 }

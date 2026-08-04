@@ -4,26 +4,36 @@
 #include "defconstruct_vs30.inc"
 #include "radiosity_blend_ps30.inc"
 
-BEGIN_VS_SHADER( RADIOSITY_BLEND, "RH 4.0 half-resolution reconstruction" )
+BEGIN_VS_SHADER( RADIOSITY_BLEND, "Radiance Hints reconstruction with soft indirect shadows" )
 	BEGIN_SHADER_PARAMS
 		SHADER_PARAM( SHR0, SHADER_PARAM_TYPE_TEXTURE, "", "First-bounce red SH" )
 		SHADER_PARAM( SHG0, SHADER_PARAM_TYPE_TEXTURE, "", "First-bounce green SH" )
 		SHADER_PARAM( SHB0, SHADER_PARAM_TYPE_TEXTURE, "", "First-bounce blue SH" )
-		SHADER_PARAM( VIS0, SHADER_PARAM_TYPE_TEXTURE, "", "Directional visibility SH" )
+		SHADER_PARAM( AUX0, SHADER_PARAM_TYPE_TEXTURE, "", "First-bounce distance, validity and occupancy" )
 		SHADER_PARAM( SHR1, SHADER_PARAM_TYPE_TEXTURE, "", "Second-bounce red SH" )
 		SHADER_PARAM( SHG1, SHADER_PARAM_TYPE_TEXTURE, "", "Second-bounce green SH" )
 		SHADER_PARAM( SHB1, SHADER_PARAM_TYPE_TEXTURE, "", "Second-bounce blue SH" )
 	END_SHADER_PARAMS
 
-	SHADER_INIT_PARAMS() {}
+	SHADER_INIT_PARAMS()
+	{
+	}
 
 	SHADER_INIT
 	{
-		LoadTexture( SHR0 ); LoadTexture( SHG0 ); LoadTexture( SHB0 ); LoadTexture( VIS0 );
-		LoadTexture( SHR1 ); LoadTexture( SHG1 ); LoadTexture( SHB1 );
+		LoadTexture( SHR0 );
+		LoadTexture( SHG0 );
+		LoadTexture( SHB0 );
+		LoadTexture( AUX0 );
+		LoadTexture( SHR1 );
+		LoadTexture( SHG1 );
+		LoadTexture( SHB1 );
 	}
 
-	SHADER_FALLBACK { return 0; }
+	SHADER_FALLBACK
+	{
+		return 0;
+	}
 
 	SHADER_DRAW
 	{
@@ -32,7 +42,8 @@ BEGIN_VS_SHADER( RADIOSITY_BLEND, "RH 4.0 half-resolution reconstruction" )
 			pShaderShadow->SetDefaultState();
 			pShaderShadow->EnableDepthTest( false );
 			pShaderShadow->EnableDepthWrites( false );
-			pShaderShadow->EnableAlphaWrites( true ); // linear depth for the bilateral upsample
+			pShaderShadow->EnableAlphaWrites( false );
+			EnableAlphaBlending( SHADER_BLEND_ONE, SHADER_BLEND_ONE );
 
 			pShaderShadow->EnableTexture( SHADER_SAMPLER0, true );
 			pShaderShadow->EnableTexture( SHADER_SAMPLER1, true );
@@ -68,57 +79,59 @@ BEGIN_VS_SHADER( RADIOSITY_BLEND, "RH 4.0 half-resolution reconstruction" )
 
 			BindTexture( SHADER_SAMPLER0, GetDeferredExt()->GetTexture_Depth() );
 			BindTexture( SHADER_SAMPLER1, GetDeferredExt()->GetTexture_Normals() );
-			BindTexture( SHADER_SAMPLER2, SHR0 ); BindTexture( SHADER_SAMPLER3, SHG0 );
-			BindTexture( SHADER_SAMPLER4, SHB0 ); BindTexture( SHADER_SAMPLER5, VIS0 );
-			BindTexture( SHADER_SAMPLER6, SHR1 ); BindTexture( SHADER_SAMPLER7, SHG1 );
+			BindTexture( SHADER_SAMPLER2, SHR0 );
+			BindTexture( SHADER_SAMPLER3, SHG0 );
+			BindTexture( SHADER_SAMPLER4, SHB0 );
+			BindTexture( SHADER_SAMPLER5, AUX0 );
+			BindTexture( SHADER_SAMPLER6, SHR1 );
+			BindTexture( SHADER_SAMPLER7, SHG1 );
 			BindTexture( SHADER_SAMPLER8, SHB1 );
 
 			CommitBaseDeferredConstants_Frustum( pShaderAPI, VERTEX_SHADER_SHADER_SPECIFIC_CONST_0 );
 			CommitBaseDeferredConstants_Origin( pShaderAPI, 0 );
 
+			const Vector &origin = GetDeferredExt()->GetRadiosityData().vecOrigin[0];
+			float originConstant[4] = { origin.x, origin.y, origin.z, 0.0f };
+			pShaderAPI->SetPixelShaderConstant( 1, originConstant );
+
 			ConVarRef cellSize( "deferred_rh_cell_size" );
 			ConVarRef receiverOffset( "deferred_rh_receiver_offset" );
 			ConVarRef intensity( "deferred_rh_intensity" );
-			ConVarRef legacyMultiplier( "deferred_radiosity_multiplier" );
+			ConVarRef validityBoost( "deferred_rh_validity_boost" );
 			ConVarRef saturation( "deferred_rh_saturation" );
 			ConVarRef maxRadiance( "deferred_rh_max_radiance" );
+			ConVarRef legacyMultiplier( "deferred_radiosity_multiplier" );
 			ConVarRef geometryEnable( "deferred_rh_geometry_enable" );
-			ConVarRef visibilityStrength( "deferred_rh_visibility_strength" );
-			ConVarRef visibilityDecay( "deferred_rh_visibility_decay" );
-			ConVarRef shadowStrength( "deferred_rh_soft_shadow_strength" );
-			ConVarRef shadowDistance( "deferred_rh_soft_shadow_distance" );
-			ConVarRef shadowSoftness( "deferred_rh_soft_shadow_softness" );
-			ConVarRef shadowMinVisibility( "deferred_rh_soft_shadow_min_visibility" );
-			ConVarRef geometryBias( "deferred_rh_geometry_bias" );
+			ConVarRef softShadowStrength( "deferred_rh_soft_shadow_strength" );
+			ConVarRef softShadowDistance( "deferred_rh_soft_shadow_distance" );
+			ConVarRef softShadowSoftness( "deferred_rh_soft_shadow_softness" );
+			ConVarRef softShadowMinVisibility( "deferred_rh_soft_shadow_min_visibility" );
 
-			const Vector &origin = GetDeferredExt()->GetRadiosityData().vecOrigin[0];
-			float c1[4] = { origin.x, origin.y, origin.z, 0.0f };
-			pShaderAPI->SetPixelShaderConstant( 1, c1 );
-
-			const float cell = MAX( cellSize.GetFloat(), 1.0f );
-			float c2[4] = {
-				cell * RH_VOLUME_SIZE,
-				clamp( receiverOffset.GetFloat(), 0.0f, cell * 0.45f ),
+			const float safeCellSize = MAX( cellSize.GetFloat(), 1.0f );
+			float settings[4] = {
+				safeCellSize * RH_VOLUME_SIZE,
+				clamp( receiverOffset.GetFloat(), 0.0f, safeCellSize * 0.45f ),
 				MAX( intensity.GetFloat(), 0.0f ) * MAX( legacyMultiplier.GetFloat(), 0.0f ),
 				1.0f
 			};
-			pShaderAPI->SetPixelShaderConstant( 2, c2 );
+			pShaderAPI->SetPixelShaderConstant( 2, settings );
 
-			float c3[4] = {
+			float quality[4] = {
+				MAX( validityBoost.GetFloat(), 1.0f ),
 				clamp( saturation.GetFloat(), 0.0f, 2.0f ),
 				MAX( maxRadiance.GetFloat(), 0.25f ),
-				geometryEnable.GetBool() ? MAX( visibilityStrength.GetFloat(), 0.0f ) : 0.0f,
-				MAX( visibilityDecay.GetFloat(), 0.0f ) * ( 1.20f - 0.55f * clamp( shadowSoftness.GetFloat(), 0.0f, 1.0f ) )
+				0.0f
 			};
-			pShaderAPI->SetPixelShaderConstant( 3, c3 );
+			pShaderAPI->SetPixelShaderConstant( 3, quality );
 
-			float c4[4] = {
-				geometryEnable.GetBool() ? clamp( shadowStrength.GetFloat(), 0.0f, 2.0f ) : 0.0f,
-				clamp( shadowDistance.GetFloat(), 0.5f, 12.0f ),
-				clamp( shadowMinVisibility.GetFloat(), 0.0f, 1.0f ),
-				clamp( geometryBias.GetFloat(), 0.0f, 0.95f )
+			const float geometryScale = geometryEnable.GetBool() ? 1.0f : 0.0f;
+			float softShadowSettings[4] = {
+				clamp( softShadowStrength.GetFloat(), 0.0f, 4.0f ) * geometryScale,
+				clamp( softShadowDistance.GetFloat(), 0.75f, 12.0f ),
+				clamp( softShadowSoftness.GetFloat(), 0.0f, 1.0f ),
+				clamp( softShadowMinVisibility.GetFloat(), 0.0f, 1.0f )
 			};
-			pShaderAPI->SetPixelShaderConstant( 4, c4 );
+			pShaderAPI->SetPixelShaderConstant( 4, softShadowSettings );
 		}
 
 		Draw();

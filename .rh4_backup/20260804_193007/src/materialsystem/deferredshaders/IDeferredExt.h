@@ -104,25 +104,7 @@ struct volumeData_t
 
 struct radiosityData_t
 {
-    radiosityData_t()
-    {
-        vecOrigin[0].Init();
-        vecOrigin[1].Init();
-        matWorldToRSM.Identity();
-        matRSMToWorld.Identity();
-        vecRSMParams.Init();
-    }
-
-    // Kept as a pair for compatibility with older RH callers. RH 4.0 uses [0].
-    Vector vecOrigin[2];
-
-    // Matrices are stored transposed for mul( float4, matrix ) in HLSL.
-    VMatrix matWorldToRSM;
-    VMatrix matRSMToWorld;
-
-    // x = RSM resolution, y = inverse resolution,
-    // z = RSM world-space side length, w = RH cell size.
-    Vector4D vecRSMParams;
+	Vector vecOrigin[2];
 };
 
 class IDeferredExtension : public IBaseInterface
@@ -166,12 +148,11 @@ public:
 	virtual void CommitTexture_Cookie( const int &index, ITexture *pTexCookie ) = 0;
 	virtual void CommitTexture_VolumePrePass( ITexture *pTexVolumePrePass ) = 0;
 	virtual void CommitTexture_ShadowRadOutput_Ortho( ITexture *pAlbedo, ITexture *pNormal ) = 0;
-	virtual void CommitTexture_RadianceHintsRSM( ITexture *pFlux, ITexture *pNormal, ITexture *pDepth ) = 0;
 	virtual void CommitTexture_Radiosity( ITexture *pTexRadBuffer0, ITexture *pTexRadBuffer1,
 		ITexture *pTexRadNormal0, ITexture *pTexRadNormal1 ) = 0;
 };
 
-#define DEFERRED_EXTENSION_VERSION "DeferredExtensionVersion002"
+#define DEFERRED_EXTENSION_VERSION "DeferredExtensionVersion001"
 
 #ifdef STDSHADER_DX9_DLL_EXPORT
 
@@ -220,7 +201,6 @@ public:
 	virtual void CommitTexture_Cookie( const int &index, ITexture *pTexCookie );
 	virtual void CommitTexture_VolumePrePass( ITexture *pTexVolumePrePass );
 	virtual void CommitTexture_ShadowRadOutput_Ortho( ITexture *pAlbedo, ITexture *pNormal );
-	virtual void CommitTexture_RadianceHintsRSM( ITexture *pFlux, ITexture *pNormal, ITexture *pDepth );
 	virtual void CommitTexture_Radiosity( ITexture *pTexRadBuffer0, ITexture *pTexRadBuffer1,
 		ITexture *pTexRadNormal0, ITexture *pTexRadNormal1 );
 
@@ -266,9 +246,6 @@ public:
 	inline ITexture *GetTexture_VolumePrePass();
 	inline ITexture *GetTexture_ShadowRad_Ortho_Albedo();
 	inline ITexture *GetTexture_ShadowRad_Ortho_Normal();
-	inline ITexture *GetTexture_RadianceHintsRSMFlux();
-	inline ITexture *GetTexture_RadianceHintsRSMNormal();
-	inline ITexture *GetTexture_RadianceHintsRSMDepth();
 	inline ITexture *GetTexture_RadBuffer( const int &index );
 	inline ITexture *GetTexture_RadNormal( const int &index );
 
@@ -313,7 +290,6 @@ private:
 	ITexture *m_pTexCookie[ NUM_COOKIE_SLOTS ];
 	ITexture *m_pTexVolumePrePass;
 	ITexture *m_pTexShadowRad_Ortho[ 2 ];
-	ITexture *m_pTexRadianceHintsRSM[ 3 ];
 	ITexture *m_pTexRadBuffer[ 2 ];
 	ITexture *m_pTexRadNormal[ 2 ];
 };
@@ -460,19 +436,7 @@ ITexture *CDeferredExtension::GetTexture_ShadowRad_Ortho_Albedo()
 }
 ITexture *CDeferredExtension::GetTexture_ShadowRad_Ortho_Normal()
 {
-    return m_pTexShadowRad_Ortho[1];
-}
-ITexture *CDeferredExtension::GetTexture_RadianceHintsRSMFlux()
-{
-    return m_pTexRadianceHintsRSM[0];
-}
-ITexture *CDeferredExtension::GetTexture_RadianceHintsRSMNormal()
-{
-    return m_pTexRadianceHintsRSM[1];
-}
-ITexture *CDeferredExtension::GetTexture_RadianceHintsRSMDepth()
-{
-    return m_pTexRadianceHintsRSM[2];
+	return m_pTexShadowRad_Ortho[1];
 }
 ITexture *CDeferredExtension::GetTexture_RadBuffer( const int &index )
 {
