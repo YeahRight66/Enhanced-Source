@@ -9,7 +9,9 @@ BEGIN_VS_SHADER( RADIOSITY_GLOBAL, "RH 4.0 deterministic radiance injection" )
     END_SHADER_PARAMS
 
     SHADER_INIT_PARAMS() {}
-    SHADER_INIT() {}
+    SHADER_INIT
+    {
+    }
     SHADER_FALLBACK { return 0; }
 
     SHADER_DRAW
