@@ -61,7 +61,7 @@ void RH_FilterNeighbour(
     float sampleConfidence = RH_MetaConfidence( sampleMeta );
     float sampleValid = saturate( sampleMeta.w ) * step( 1.0e-5f, sampleMeta.z );
 
-    float energySimilarity = rcp(
+    float energySimilarity = 1.0f / (
         1.0f + max( g_RHFilter.z, 0.0f ) * 8.0f * abs( centerEnergy - sampleMeta.z ) );
     energySimilarity = lerp( 1.0f, energySimilarity, centerConfidence );
 
@@ -122,7 +122,7 @@ PS_OUTPUT main( const PS_INPUT In )
     RH_FilterNeighbour( In.vVolumeUVW, float3( 0.0f, 0.0f,-1.0f ), centerConfidence, centerMeta.z, sumR, sumG, sumB, confidenceSum, distanceSum, energySum, weightSum );
 #endif
 
-    float inverseWeight = rcp( max( weightSum, 1.0e-5f ) );
+    float inverseWeight = 1.0f / max( weightSum, 1.0e-5f );
     float coefficientClamp = max( g_RHQuality.x, 0.25f );
     Out.vSH_R = clamp( RH_LimitRadianceSH( sumR * inverseWeight ), -coefficientClamp, coefficientClamp );
     Out.vSH_G = clamp( RH_LimitRadianceSH( sumG * inverseWeight ), -coefficientClamp, coefficientClamp );

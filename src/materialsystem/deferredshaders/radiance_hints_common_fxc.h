@@ -120,7 +120,7 @@ float RH_MetaBlockerDistance( float4 meta, float maximumDistanceCells )
 float RH_EnergySimilarity( float centerEnergy, float sampleEnergy, float scale )
 {
     float difference = abs( centerEnergy - sampleEnergy );
-    return rcp( 1.0f + max( scale, 0.0f ) * difference );
+    return 1.0f / ( 1.0f + max( scale, 0.0f ) * difference );
 }
 
 float RH_DirectionalConfidence( float4 shR, float4 shG, float4 shB )
