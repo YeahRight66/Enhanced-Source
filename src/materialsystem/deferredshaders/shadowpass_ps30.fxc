@@ -91,12 +91,20 @@ PS_OUTPUT main( const PS_INPUT In )
 #endif
 
 	float normalLengthSquared = dot( In.vecNormal, In.vecNormal );
+	float normalValid = step( 1.0e-8f, normalLengthSquared );
 	float3 normal = In.vecNormal * rsqrt( max( normalLengthSquared, 1.0e-8f ) );
+	normal = lerp( float3( 0.0f, 0.0f, 1.0f ), normal, normalValid );
+
 	float lightLengthSquared = dot( g_vecRHLightDirection, g_vecRHLightDirection );
+	float lightValid = step( 1.0e-8f, lightLengthSquared );
 	float3 lightDirection = g_vecRHLightDirection * rsqrt( max( lightLengthSquared, 1.0e-8f ) );
+	lightDirection = lerp( float3( 0.0f, 0.0f, 1.0f ), lightDirection, lightValid );
+
 	float directCosine = saturate( dot( normal, lightDirection ) );
-	// RSM target 1 now stores directly lit diffuse flux rather than plain albedo.
-	Out.vColor_1 = float4( albedo.rgb * g_vecRHLightDiffuse * directCosine, albedo.a );
+	// Store HDR directly-lit diffuse flux. Negative material/light values are
+	// rejected before they can poison the signed SH volume.
+	float3 flux = max( albedo.rgb, 0.0f ) * max( g_vecRHLightDiffuse, 0.0f ) * directCosine;
+	Out.vColor_1 = float4( min( flux, 60000.0f ), saturate( albedo.a ) );
 	Out.vColor_2 = float4( normal * 0.5f + 0.5f, 1.0f );
 #endif
 

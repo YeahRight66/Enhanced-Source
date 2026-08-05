@@ -106,6 +106,23 @@ float RH_RadianceEnergy( float4 shR, float4 shG, float4 shB )
     return max( shR.w * 0.2126f + shG.w * 0.7152f + shB.w * 0.0722f, 0.0f );
 }
 
+
+float RH_MetaConfidence( float4 meta )
+{
+    return saturate( meta.x ) * saturate( meta.w );
+}
+
+float RH_MetaBlockerDistance( float4 meta, float maximumDistanceCells )
+{
+    return saturate( meta.y ) * max( maximumDistanceCells, 0.0f );
+}
+
+float RH_EnergySimilarity( float centerEnergy, float sampleEnergy, float scale )
+{
+    float difference = abs( centerEnergy - sampleEnergy );
+    return rcp( 1.0f + max( scale, 0.0f ) * difference );
+}
+
 float RH_DirectionalConfidence( float4 shR, float4 shG, float4 shB )
 {
     float3 directional = shR.xyz * 0.2126f + shG.xyz * 0.7152f + shB.xyz * 0.0722f;

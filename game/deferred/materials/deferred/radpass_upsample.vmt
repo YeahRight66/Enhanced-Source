@@ -1,0 +1,4 @@
+"RADIOSITY_UPSAMPLE"
+{
+	"$BASETEXTURE"		"_rt_rh_indirecthalf"
+}

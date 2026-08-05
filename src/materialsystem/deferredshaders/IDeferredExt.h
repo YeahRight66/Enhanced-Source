@@ -116,7 +116,7 @@ struct radiosityData_t
     // Kept as a pair for compatibility with older RH callers. RH 4.0 uses [0].
     Vector vecOrigin[2];
 
-    // Matrices are stored transposed for mul( float4, matrix ) in HLSL.
+    // Native VMatrix layout is uploaded directly and consumed by mul( float4, matrix ).
     VMatrix matWorldToRSM;
     VMatrix matRSMToWorld;
 

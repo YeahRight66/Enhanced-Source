@@ -21,6 +21,7 @@ ITexture *GetDefRT_RHRSMDepth();
 ITexture *GetDefRT_RHRSMColor();
 ITexture *GetDefRT_RHRSMFlux();
 ITexture *GetDefRT_RHRSMNormal();
+ITexture *GetDefRT_RHVisibility();
 ITexture *GetDefRT_RHIndirectHalf();
 
 ITexture *GetDefRT_RadianceHints( int setIndex, int channelIndex );

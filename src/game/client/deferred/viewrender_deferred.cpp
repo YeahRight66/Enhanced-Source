@@ -435,9 +435,9 @@ class CRadianceHintsRSMView : public CBaseShadowView
 {
 	DECLARE_CLASS( CRadianceHintsRSMView, CBaseShadowView );
 public:
-	CRadianceHintsRSMView( CViewRender *pMainView, const Vector &rhOrigin, float extent, float cellSize )
+	CRadianceHintsRSMView( CViewRender *pMainView, const Vector &rhOrigin, float extent, float cellSize, bool reverseDirection )
 		: CBaseShadowView( pMainView ), m_vecRHOrigin( rhOrigin ), m_flExtent( extent ),
-		  m_flCellSize( cellSize ), m_flRSMWorldSide( extent ) {}
+		  m_flCellSize( cellSize ), m_flRSMWorldSide( extent ), m_bReverseDirection( reverseDirection ) {}
 
 	virtual void CalcShadowView();
 	virtual void CommitData();
@@ -448,6 +448,7 @@ private:
 	float m_flExtent;
 	float m_flCellSize;
 	float m_flRSMWorldSide;
+	bool m_bReverseDirection;
 };
 
 class CDualParaboloidShadowView : public CBaseShadowView
@@ -1040,6 +1041,12 @@ void CDeferredViewRender::BeginRadiosity( const CViewSetup &view )
 		}
 	}
 
+	pRenderContext->PushRenderTargetAndViewport( GetDefRT_RHVisibility(), NULL,
+		0, 0, RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT );
+	pRenderContext->ClearColor4ub( 0, 0, 0, 0 );
+	pRenderContext->ClearBuffers( true, false );
+	pRenderContext->PopRenderTargetAndViewport();
+
 	UpdateRadiosityPosition();
 }
 
@@ -1063,17 +1070,40 @@ void CDeferredViewRender::RenderRadianceHintsRSM( const CViewSetup &view )
 	const float cellSize = MAX( deferred_rh_cell_size.GetFloat(), 1.0f );
 	const float extent = cellSize * RH_VOLUME_SIZE;
 	const Vector volumeCenter = m_vecRadiosityOrigin[0] + Vector( extent, extent, extent ) * 0.5f;
+	const float visOffset = extent * 0.25f;
 
+	// Optional reverse-direction geometry capture. It is injected only into the
+	// blocker field, never into radiance. This captures the opposite outer layer
+	// of world/models and makes low-frequency blocking much more consistent in
+	// interiors while preserving a deterministic single-frame pipeline.
+	if ( deferred_rh_back_rsm_enable.GetBool() )
+	{
+		CRefPtr<CRadianceHintsRSMView> pBackRSM = new CRadianceHintsRSMView(
+			this, m_vecRadiosityOrigin[0], extent, cellSize, true );
+		pBackRSM->Setup( view, GetDefRT_RHRSMDepth(), GetDefRT_RHRSMColor() );
+		pBackRSM->SetupRadiosityTargets( GetDefRT_RHRSMFlux(), GetDefRT_RHRSMNormal() );
+		pBackRSM->SetRadiosityOutputEnabled( true );
+		pBackRSM->AddVisibilityOrigin( view.origin );
+		for ( int sx = -1; sx <= 1; sx += 2 )
+		for ( int sy = -1; sy <= 1; sy += 2 )
+		for ( int sz = -1; sz <= 1; sz += 2 )
+			pBackRSM->AddVisibilityOrigin( volumeCenter + Vector( sx * visOffset, sy * visOffset, sz * visOffset ) );
+		AddViewToScene( pBackRSM );
+
+		CMatRenderContextPtr pRenderContext( materials );
+		pRenderContext->SetIntRenderingParameter( INT_RENDERPARM_DEFERRED_RADIOSITY_CASCADE, 1 );
+		PerformRadiosityVisibility();
+	}
+
+	// Sun-facing RSM supplies actual reflected flux and the other half of the
+	// directional blocker field. It is rendered last so the debug RSM targets
+	// continue to show the physically relevant sun-facing data.
 	CRefPtr<CRadianceHintsRSMView> pRSM = new CRadianceHintsRSMView(
-		this, m_vecRadiosityOrigin[0], extent, cellSize );
+		this, m_vecRadiosityOrigin[0], extent, cellSize, false );
 	pRSM->Setup( view, GetDefRT_RHRSMDepth(), GetDefRT_RHRSMColor() );
 	pRSM->SetupRadiosityTargets( GetDefRT_RHRSMFlux(), GetDefRT_RHRSMNormal() );
 	pRSM->SetRadiosityOutputEnabled( true );
-	// A sun view can originate outside the BSP. Seed PVS from the camera and
-	// eight stable points inside the RH cube so world, props and models are not
-	// lost merely because the light camera sits outside the current leaf.
 	pRSM->AddVisibilityOrigin( view.origin );
-	const float visOffset = extent * 0.25f;
 	for ( int sx = -1; sx <= 1; sx += 2 )
 	for ( int sy = -1; sy <= 1; sy += 2 )
 	for ( int sz = -1; sz <= 1; sz += 2 )
@@ -1081,7 +1111,12 @@ void CDeferredViewRender::RenderRadianceHintsRSM( const CViewSetup &view )
 	AddViewToScene( pRSM );
 
 	PerformRadiosityGlobal();
+	{
+		CMatRenderContextPtr pRenderContext( materials );
+		pRenderContext->SetIntRenderingParameter( INT_RENDERPARM_DEFERRED_RADIOSITY_CASCADE, 0 );
+	}
 	PerformRadiosityVisibility();
+	PerformRadiosityFilter();
 	m_bRadianceHintsInjected = true;
 }
 
@@ -1093,6 +1128,7 @@ void CDeferredViewRender::PerformRadiosityGlobal()
 		0, 0, RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT );
 	pRenderContext->SetRenderTargetEx( 1, GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_G ) );
 	pRenderContext->SetRenderTargetEx( 2, GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_B ) );
+	pRenderContext->SetRenderTargetEx( 3, GetDefRT_RadianceHints( 0, RH_CHANNEL_META ) );
 	pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_GLOBAL ) );
 	GetRadianceHintsVolumeMesh()->Draw();
 	pRenderContext->PopRenderTargetAndViewport();
@@ -1101,9 +1137,22 @@ void CDeferredViewRender::PerformRadiosityGlobal()
 void CDeferredViewRender::PerformRadiosityVisibility()
 {
 	CMatRenderContextPtr pRenderContext( materials );
-	pRenderContext->PushRenderTargetAndViewport( GetDefRT_RadianceHints( 0, RH_CHANNEL_VISIBILITY ), NULL,
+	pRenderContext->PushRenderTargetAndViewport( GetDefRT_RHVisibility(), NULL,
 		0, 0, RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT );
 	pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_VISIBILITY ) );
+	GetRadianceHintsVolumeMesh()->Draw();
+	pRenderContext->PopRenderTargetAndViewport();
+}
+
+void CDeferredViewRender::PerformRadiosityFilter()
+{
+	CMatRenderContextPtr pRenderContext( materials );
+	pRenderContext->PushRenderTargetAndViewport( GetDefRT_RadianceHints( 1, RH_CHANNEL_SH_R ), NULL,
+		0, 0, RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT );
+	pRenderContext->SetRenderTargetEx( 1, GetDefRT_RadianceHints( 1, RH_CHANNEL_SH_G ) );
+	pRenderContext->SetRenderTargetEx( 2, GetDefRT_RadianceHints( 1, RH_CHANNEL_SH_B ) );
+	pRenderContext->SetRenderTargetEx( 3, GetDefRT_RadianceHints( 1, RH_CHANNEL_META ) );
+	pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_FILTER ) );
 	GetRadianceHintsVolumeMesh()->Draw();
 	pRenderContext->PopRenderTargetAndViewport();
 }
@@ -1114,12 +1163,11 @@ void CDeferredViewRender::EndRadiosity( const CViewSetup &view )
 	if ( bounceCount > 0 )
 	{
 		CMatRenderContextPtr pRenderContext( materials );
-		pRenderContext->PushRenderTargetAndViewport( GetDefRT_RadianceHints( 1, RH_CHANNEL_SH_R ), NULL,
+		pRenderContext->PushRenderTargetAndViewport( GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_R ), NULL,
 			0, 0, RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT );
-		pRenderContext->SetRenderTargetEx( 1, GetDefRT_RadianceHints( 1, RH_CHANNEL_SH_G ) );
-		pRenderContext->SetRenderTargetEx( 2, GetDefRT_RadianceHints( 1, RH_CHANNEL_SH_B ) );
-		pRenderContext->SetRenderTargetEx( 3, GetDefRT_RadianceHints( 1, RH_CHANNEL_VISIBILITY ) );
-		pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_0 ) );
+		pRenderContext->SetRenderTargetEx( 1, GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_G ) );
+		pRenderContext->SetRenderTargetEx( 2, GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_B ) );
+		pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_1 ) );
 		GetRadianceHintsVolumeMesh()->Draw();
 		pRenderContext->PopRenderTargetAndViewport();
 	}
@@ -1149,7 +1197,7 @@ void CDeferredViewRender::DebugRadiosity( const CViewSetup &view )
 	const Vector maximum = origin + Vector( extent, extent, extent );
 	DebugDrawCross( origin, cellSize * 0.4f, -1.0f );
 	DebugDrawCross( maximum, cellSize * 0.4f, -1.0f );
-	engine->Con_NPrintf( 20, "RH4 preset %s | grid %i | RSM %i | origin %.1f %.1f %.1f | injected %i",
+	engine->Con_NPrintf( 20, "RH4.2 preset %s | grid %i | RSM %i | origin %.1f %.1f %.1f | injected %i",
 		RH_QUALITY_PRESET == RH_PRESET_HIGH ? "HIGH" : "BALANCED",
 		RH_VOLUME_SIZE, RH_RSM_RESOLUTION, origin.x, origin.y, origin.z,
 		m_bRadianceHintsInjected ? 1 : 0 );
@@ -3362,7 +3410,10 @@ void CRadianceHintsRSMView::CalcShadowView()
 {
 	lightData_Global_t state = GetActiveGlobalLightState();
 	QAngle lightAngles;
-	VectorAngles( -state.vecLight.AsVector3D(), lightAngles );
+	Vector rsmDirection = m_bReverseDirection
+		? state.vecLight.AsVector3D()
+		: -state.vecLight.AsVector3D();
+	VectorAngles( rsmDirection, lightAngles );
 
 	Vector forward, right, up;
 	AngleVectors( lightAngles, &forward, &right, &up );
@@ -3451,8 +3502,8 @@ void CRadianceHintsRSMView::CommitData()
 	MatrixInverseGeneral( packet.shadow.matWorldToTexture, textureToWorld );
 	packet.radiosity.vecOrigin[0] = m_vecRHOrigin;
 	packet.radiosity.vecOrigin[1] = m_vecRHOrigin;
-	packet.radiosity.matWorldToRSM = packet.shadow.matWorldToTexture.Transpose();
-	packet.radiosity.matRSMToWorld = textureToWorld.Transpose();
+	packet.radiosity.matWorldToRSM = packet.shadow.matWorldToTexture;
+	packet.radiosity.matRSMToWorld = textureToWorld;
 	packet.radiosity.vecRSMParams.Init(
 		(float)RH_RSM_RESOLUTION,
 		1.0f / (float)RH_RSM_RESOLUTION,

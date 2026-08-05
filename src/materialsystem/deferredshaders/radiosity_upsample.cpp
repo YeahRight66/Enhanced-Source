@@ -3,7 +3,7 @@
 #include "screenspace_vs30.inc"
 #include "radiosity_upsample_ps30.inc"
 
-BEGIN_VS_SHADER( RADIOSITY_UPSAMPLE, "RH 4.0 depth/normal bilateral upsample" )
+BEGIN_VS_SHADER( RADIOSITY_UPSAMPLE, "RH 4.2 depth/normal bilateral upsample" )
 	BEGIN_SHADER_PARAMS
 		SHADER_PARAM( BASETEXTURE, SHADER_PARAM_TYPE_TEXTURE, "", "Half-resolution RH indirect buffer" )
 	END_SHADER_PARAMS
@@ -51,11 +51,12 @@ BEGIN_VS_SHADER( RADIOSITY_UPSAMPLE, "RH 4.0 depth/normal bilateral upsample" )
 			float c0[4] = { halfW, halfH, 1.0f / halfW, 1.0f / halfH };
 			pShaderAPI->SetPixelShaderConstant( 0, c0 );
 
-			float c1[4] = {
-				MAX( depthScale.GetFloat(), 0.0f ),
-				MAX( normalPower.GetFloat(), 1.0f ),
-				0.0f, 0.0f
-			};
+            float c1[4] = {
+                MAX( depthScale.GetFloat(), 0.0f ),
+                MAX( normalPower.GetFloat(), 1.0f ),
+                1.0f,
+                0.0f
+            };
 			pShaderAPI->SetPixelShaderConstant( 1, c1 );
 		}
 		Draw();

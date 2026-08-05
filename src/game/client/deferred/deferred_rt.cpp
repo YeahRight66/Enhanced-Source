@@ -38,6 +38,7 @@ static CTextureReference g_tex_ShadowColor_DP[ MAX_SHADOW_DP ];
 static CTextureReference g_tex_ShadowDepth_DP[ MAX_SHADOW_DP ];
 
 static CTextureReference g_tex_RadianceHints[ RH_SET_COUNT ][ RH_CHANNEL_COUNT ];
+static CTextureReference g_tex_RHVisibility;
 static CTextureReference g_tex_RHIndirectHalf;
 
 static CTextureReference g_tex_ProjectableVGUI[ NUM_PROJECTABLE_VGUI ];
@@ -125,7 +126,10 @@ const ImageFormat fmt_gbuffer0 =
 	unsigned int projVGUIFlags =		TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT | TEXTUREFLAGS_RENDERTARGET;
 	unsigned int radAlbedoNormalFlags =	TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT | TEXTUREFLAGS_RENDERTARGET;
 	unsigned int radBufferFlags =       TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT | TEXTUREFLAGS_RENDERTARGET;
-    unsigned int rhRSMFlags =          TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT | TEXTUREFLAGS_RENDERTARGET | TEXTUREFLAGS_POINTSAMPLE;
+    // Filter HDR flux spatially to reduce deterministic RSM undersampling.
+    // Keep normals point-sampled so filtering never blends unrelated surfaces.
+    unsigned int rhRSMFluxFlags =      TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT | TEXTUREFLAGS_RENDERTARGET;
+    unsigned int rhRSMNormalFlags =    TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT | TEXTUREFLAGS_RENDERTARGET | TEXTUREFLAGS_POINTSAMPLE;
     unsigned int rhHalfFlags =         TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT | TEXTUREFLAGS_RENDERTARGET | TEXTUREFLAGS_POINTSAMPLE;
 
 	materials->BeginRenderTargetAllocation();
@@ -225,7 +229,7 @@ const ImageFormat fmt_gbuffer0 =
             RT_SIZE_NO_CHANGE,
             fmt_rhRSMFlux,
             MATERIAL_RT_DEPTH_NONE,
-            rhRSMFlags, 0 ) );
+            rhRSMFluxFlags, 0 ) );
 
         g_tex_RHRSMNormal.Init( materials->CreateNamedRenderTargetTextureEx2(
             DEFRTNAME_RH_RSM_NORMAL,
@@ -233,7 +237,7 @@ const ImageFormat fmt_gbuffer0 =
             RT_SIZE_NO_CHANGE,
             fmt_radNormal,
             MATERIAL_RT_DEPTH_NONE,
-            rhRSMFlags, 0 ) );
+            rhRSMNormalFlags, 0 ) );
 
 #endif
 
@@ -300,13 +304,13 @@ const ImageFormat fmt_gbuffer0 =
 		}
 
 #if DEFCFG_ENABLE_RADIOSITY
-		static const char *s_RHNames[ RH_CHANNEL_COUNT ] =
-		{
-			DEFRTNAME_RH_SH_R,
-			DEFRTNAME_RH_SH_G,
-			DEFRTNAME_RH_SH_B,
-			DEFRTNAME_RH_VISIBILITY
-		};
+        static const char *s_RHNames[ RH_CHANNEL_COUNT ] =
+        {
+            DEFRTNAME_RH_SH_R,
+            DEFRTNAME_RH_SH_G,
+            DEFRTNAME_RH_SH_B,
+            DEFRTNAME_RH_META
+        };
 
 		for ( int setIndex = 0; setIndex < RH_SET_COUNT; ++setIndex )
 		{
@@ -322,6 +326,14 @@ const ImageFormat fmt_gbuffer0 =
 						radBufferFlags, 0 ) );
 			}
 		}
+
+        g_tex_RHVisibility.Init( materials->CreateNamedRenderTargetTextureEx2(
+            DEFRTNAME_RH_VISIBILITY,
+            RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT,
+            RT_SIZE_NO_CHANGE,
+            fmt_radBuffer,
+            MATERIAL_RT_DEPTH_NONE,
+            radBufferFlags, 0 ) );
 #endif
 	}
 
@@ -514,9 +526,9 @@ const ImageFormat fmt_gbuffer0 =
         g_tex_RHRSMNormal,
         bShadowUseColor ? g_tex_RHRSMColor : g_tex_RHRSMDepth );
 	// Preserve the existing extension ABI: expose the first RH set through its four legacy slots.
-	GetDeferredExt()->CommitTexture_Radiosity(
-		g_tex_RadianceHints[0][RH_CHANNEL_SH_R], g_tex_RadianceHints[0][RH_CHANNEL_SH_G],
-		g_tex_RadianceHints[0][RH_CHANNEL_SH_B], g_tex_RadianceHints[0][RH_CHANNEL_AUX] );
+    GetDeferredExt()->CommitTexture_Radiosity(
+        g_tex_RadianceHints[0][RH_CHANNEL_SH_R], g_tex_RadianceHints[0][RH_CHANNEL_SH_G],
+        g_tex_RadianceHints[0][RH_CHANNEL_SH_B], g_tex_RHVisibility );
 #endif
 }
 
@@ -627,6 +639,12 @@ ITexture *GetDefRT_RHRSMNormal()
     return g_tex_RHRSMNormal;
 }
 
+ITexture *GetDefRT_RHVisibility()
+{
+    Assert( g_tex_RHVisibility.IsValid() );
+    return g_tex_RHVisibility;
+}
+
 ITexture *GetDefRT_RHIndirectHalf()
 {
     Assert( g_tex_RHIndirectHalf.IsValid() );
@@ -650,7 +668,7 @@ ITexture *GetDefRT_RadiosityBuffer( int index )
 ITexture *GetDefRT_RadiosityNormal( int index )
 {
 	Assert( index >= 0 && index < 2 );
-	return GetDefRT_RadianceHints( 0, index == 0 ? RH_CHANNEL_SH_B : RH_CHANNEL_AUX );
+	return index == 0 ? GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_B ) : GetDefRT_RHVisibility();
 }
 
 ITexture *GetShadowColorRT_Ortho( int index )

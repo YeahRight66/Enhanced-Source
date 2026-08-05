@@ -4,7 +4,7 @@
 #include "radiosity_gen_visibility_ps30.inc"
 #include "radiosity_gen_vs30.inc"
 
-BEGIN_VS_SHADER( RADIOSITY_VISIBILITY, "RH 4.0 directional blocker injection" )
+BEGIN_VS_SHADER( RADIOSITY_VISIBILITY, "RH 4.2 directional blocker injection" )
     BEGIN_SHADER_PARAMS
     END_SHADER_PARAMS
 
@@ -22,8 +22,10 @@ BEGIN_VS_SHADER( RADIOSITY_VISIBILITY, "RH 4.0 directional blocker injection" )
             pShaderShadow->EnableDepthTest( false );
             pShaderShadow->EnableDepthWrites( false );
             pShaderShadow->EnableAlphaWrites( true );
+            EnableAlphaBlending( SHADER_BLEND_ONE, SHADER_BLEND_ONE );
 
             pShaderShadow->EnableTexture( SHADER_SAMPLER0, true );
+            pShaderShadow->EnableTexture( SHADER_SAMPLER1, true );
 
             int texCoordDimensions[] = { 2 };
             pShaderShadow->VertexShaderVertexFormat(
@@ -47,6 +49,7 @@ BEGIN_VS_SHADER( RADIOSITY_VISIBILITY, "RH 4.0 directional blocker injection" )
             SET_DYNAMIC_PIXEL_SHADER( radiosity_gen_visibility_ps30 );
 
             BindTexture( SHADER_SAMPLER0, GetDeferredExt()->GetTexture_RadianceHintsRSMDepth() );
+            BindTexture( SHADER_SAMPLER1, GetDeferredExt()->GetTexture_RadianceHintsRSMNormal() );
 
             pShaderAPI->SetPixelShaderConstant( 0, data.matWorldToRSM.Base(), 4 );
             pShaderAPI->SetPixelShaderConstant( 4, data.matRSMToWorld.Base(), 4 );
@@ -62,6 +65,8 @@ BEGIN_VS_SHADER( RADIOSITY_VISIBILITY, "RH 4.0 directional blocker injection" )
             ConVarRef visibilityOuter( "deferred_rh_visibility_outer" );
             ConVarRef visibilityStrength( "deferred_rh_visibility_strength" );
             ConVarRef visibilityDecay( "deferred_rh_visibility_decay" );
+            ConVarRef visibilityDilation( "deferred_rh_visibility_dilation" );
+            ConVarRef visibilityNormalWeight( "deferred_rh_visibility_normal_weight" );
 
             const float cell = MAX( cellSize.GetFloat(), 1.0f );
             float settings[4] = {
@@ -84,10 +89,15 @@ BEGIN_VS_SHADER( RADIOSITY_VISIBILITY, "RH 4.0 directional blocker injection" )
             float decay[4] = {
                 clamp( visibilityDecay.GetFloat(), 0.0f, 4.0f ),
                 data.vecRSMParams.y,
-                0.0f,
-                0.0f
+                clamp( visibilityDilation.GetFloat(), 0.0f, 1.5f ),
+                clamp( visibilityNormalWeight.GetFloat(), 0.0f, 1.0f )
             };
             pShaderAPI->SetPixelShaderConstant( 11, decay );
+
+            ConVarRef backRSM( "deferred_rh_back_rsm_enable" );
+            const float passScale = backRSM.GetBool() ? 0.5f : 1.0f;
+            float pass[4] = { passScale, 0.0f, 0.0f, 0.0f };
+            pShaderAPI->SetPixelShaderConstant( 12, pass );
         }
 
         Draw();

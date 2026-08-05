@@ -48,6 +48,10 @@ ConVar deferred_rh_rsm_padding(
     "deferred_rh_rsm_padding", "2.0", FCVAR_ARCHIVE,
     "Dedicated RSM padding around the RH cube, in cell units." );
 
+ConVar deferred_rh_back_rsm_enable(
+    "deferred_rh_back_rsm_enable", "1", FCVAR_ARCHIVE,
+    "Renders a reverse-direction blocker RSM to capture geometry hidden from the sun-facing RSM." );
+
 ConVar deferred_rh_visibility_inner(
     "deferred_rh_visibility_inner", "0.12", FCVAR_ARCHIVE,
     "Fully occupied radius around an RSM surface, in RH cell units." );
@@ -99,6 +103,55 @@ ConVar deferred_rh_upsample_depth_scale(
 ConVar deferred_rh_upsample_normal_power(
     "deferred_rh_upsample_normal_power", "16.0", FCVAR_ARCHIVE,
     "Normal similarity exponent for RH bilateral upsampling." );
+
+
+ConVar deferred_rh_visibility_dilation(
+    "deferred_rh_visibility_dilation", "0.35", FCVAR_ARCHIVE,
+    "Conservative blocker expansion in RH cell units." );
+
+ConVar deferred_rh_visibility_normal_weight(
+    "deferred_rh_visibility_normal_weight", "0.55", FCVAR_ARCHIVE,
+    "Influence of RSM surface orientation on blocker injection." );
+
+ConVar deferred_rh_filter_strength(
+    "deferred_rh_filter_strength", "0.70", FCVAR_ARCHIVE,
+    "Visibility-aware 3D radiance reconstruction strength." );
+
+ConVar deferred_rh_filter_fill_boost(
+    "deferred_rh_filter_fill_boost", "1.75", FCVAR_ARCHIVE,
+    "Neighbour contribution boost for low-confidence RH cells." );
+
+ConVar deferred_rh_filter_energy_scale(
+    "deferred_rh_filter_energy_scale", "0.30", FCVAR_ARCHIVE,
+    "Rejects neighbours with strongly different radiance energy." );
+
+ConVar deferred_rh_filter_direction_preserve(
+    "deferred_rh_filter_direction_preserve", "0.65", FCVAR_ARCHIVE,
+    "Anchors reliable directional SH cells during spatial reconstruction." );
+
+ConVar deferred_rh_filter_radius(
+    "deferred_rh_filter_radius", "1.0", FCVAR_ARCHIVE,
+    "Spatial reconstruction radius in RH cells." );
+
+ConVar deferred_rh_bounce_trace_width(
+    "deferred_rh_bounce_trace_width", "0.35", FCVAR_ARCHIVE,
+    "Cone width used while testing blockers during secondary transport." );
+
+ConVar deferred_rh_bounce_min_confidence(
+    "deferred_rh_bounce_min_confidence", "0.03", FCVAR_ARCHIVE,
+    "Minimum filtered-cell confidence accepted by secondary transport." );
+
+ConVar deferred_rh_receiver_radius(
+    "deferred_rh_receiver_radius", "0.45", FCVAR_ARCHIVE,
+    "High-preset receiver reconstruction radius in RH cell units." );
+
+ConVar deferred_rh_reconstruction_confidence_floor(
+    "deferred_rh_reconstruction_confidence_floor", "0.015", FCVAR_ARCHIVE,
+    "Small confidence floor preventing isolated zero-light holes." );
+
+ConVar deferred_rh_shadow_isotropic_blend(
+    "deferred_rh_shadow_isotropic_blend", "0.25", FCVAR_ARCHIVE,
+    "Adds local isotropic blocking when radiance direction is ambiguous." );
 
 ConVar deferred_rh_debug_mode(
     "deferred_rh_debug_mode", "0", FCVAR_NONE,

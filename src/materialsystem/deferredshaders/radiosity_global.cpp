@@ -4,7 +4,7 @@
 #include "radiosity_gen_global_ps30.inc"
 #include "radiosity_gen_vs30.inc"
 
-BEGIN_VS_SHADER( RADIOSITY_GLOBAL, "RH 4.0 deterministic radiance injection" )
+BEGIN_VS_SHADER( RADIOSITY_GLOBAL, "RH 4.2 deterministic radiance injection" )
     BEGIN_SHADER_PARAMS
     END_SHADER_PARAMS
 

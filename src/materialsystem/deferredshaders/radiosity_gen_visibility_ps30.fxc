@@ -9,10 +9,14 @@ const float3   g_vecGridOrigin : register( c8 );
 const float4   g_vecRHSettings : register( c9 );
 // x = enable, y = inner radius cells, z = outer radius cells, w = strength
 const float4   g_vecVisibility : register( c10 );
-// x = distance decay, y = inverse RSM resolution
+// x = distance decay, y = inverse RSM resolution, z = dilation cells,
+// w = normal-facing influence
 const float4   g_vecDecay      : register( c11 );
+// x = per-view accumulation scale (0.5 for front/back dual capture).
+const float4   g_vecPass       : register( c12 );
 
 sampler sRSMDepth  : register( s0 );
+sampler sRSMNormal : register( s1 );
 
 struct PS_INPUT
 {
@@ -35,8 +39,10 @@ void RH_AccumulateVisibility(
     inout float validWeight )
 {
     diskOffset = RH_Rotate2D( diskOffset, patternSinCos.x, patternSinCos.y );
-    float sampleRadiusWorld = g_vecRHSettings.y * 1.25f;
-    float2 uv = centerUV + diskOffset * ( sampleRadiusWorld / g_vecRHSettings.w );
+    float footprintCells = g_vecRHSettings.w * g_vecDecay.y / max( g_vecRHSettings.y, 1.0f );
+    float outerRadius = max( g_vecVisibility.z + g_vecDecay.z + footprintCells, g_vecVisibility.y + 0.01f );
+    float sampleRadiusWorld = g_vecRHSettings.y * max( outerRadius, 1.0f );
+    float2 uv = centerUV + diskOffset * ( sampleRadiusWorld / max( g_vecRHSettings.w, 1.0f ) );
 
     float inside = step( 0.0f, uv.x ) * step( uv.x, 1.0f )
         * step( 0.0f, uv.y ) * step( uv.y, 1.0f );
@@ -52,8 +58,7 @@ void RH_AccumulateVisibility(
     [branch]
     if ( valid > 1.0e-4f )
     {
-        float3 surfacePosition = RH_ReconstructRSMPositionVisibility( uv, depth );
-        float3 toSurface = surfacePosition - cellCenterWS;
+        float3 toSurface = RH_ReconstructRSMPositionVisibility( uv, depth ) - cellCenterWS;
         float distanceSquared = dot( toSurface, toSurface );
 
         [branch]
@@ -63,13 +68,19 @@ void RH_AccumulateVisibility(
             float distanceCells = distanceSquared * inverseDistance / max( g_vecRHSettings.y, 1.0f );
             float occupancy = 1.0f - smoothstep(
                 max( g_vecVisibility.y, 0.0f ),
-                max( g_vecVisibility.z, g_vecVisibility.y + 0.01f ),
+                outerRadius,
                 distanceCells );
-            occupancy *= exp2( -max( g_vecDecay.x, 0.0f ) * distanceCells );
-            occupancy *= valid * saturate( g_vecVisibility.x ) * max( g_vecVisibility.w, 0.0f );
 
             float3 directionToBlocker = toSurface * inverseDistance;
-            visibilitySH += RH_ProjectDirection( directionToBlocker ) * occupancy;
+            float3 surfaceNormal = tex2Dlod( sRSMNormal, float4( uv, 0.0f, 0.0f ) ).xyz * 2.0f - 1.0f;
+            surfaceNormal = RH_SafeNormalize( surfaceNormal, -directionToBlocker );
+            float facing = 0.35f + 0.65f * abs( dot( surfaceNormal, -directionToBlocker ) );
+            facing = lerp( 1.0f, facing, saturate( g_vecDecay.w ) );
+
+            occupancy *= exp2( -max( g_vecDecay.x, 0.0f ) * distanceCells );
+            occupancy *= valid * saturate( g_vecVisibility.x ) * max( g_vecVisibility.w, 0.0f ) * facing;
+
+            visibilitySH += RH_ProjectDirection( directionToBlocker ) * ( occupancy * g_vecPass.x );
             validWeight += valid;
         }
     }

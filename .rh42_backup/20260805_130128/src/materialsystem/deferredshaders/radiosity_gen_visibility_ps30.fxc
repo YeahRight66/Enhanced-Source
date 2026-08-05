@@ -1,0 +1,116 @@
+#include "common_ps_fxc.h"
+#include "common_deferred_fxc.h"
+#include "radiance_hints_common_fxc.h"
+
+const float4x4 g_matWorldToRSM : register( c0 );
+const float4x4 g_matRSMToWorld : register( c4 );
+const float3   g_vecGridOrigin : register( c8 );
+// x = volume extent, y = cell size, z = edge fade, w = RSM world side
+const float4   g_vecRHSettings : register( c9 );
+// x = enable, y = inner radius cells, z = outer radius cells, w = strength
+const float4   g_vecVisibility : register( c10 );
+// x = distance decay, y = inverse RSM resolution
+const float4   g_vecDecay      : register( c11 );
+
+sampler sRSMDepth  : register( s0 );
+
+struct PS_INPUT
+{
+    float3 vVolumeUVW : TEXCOORD0;
+    float2 vAtlasUV   : TEXCOORD1;
+};
+
+float3 RH_ReconstructRSMPositionVisibility( float2 uv, float depth )
+{
+    float4 world = mul( float4( uv, depth, 1.0f ), g_matRSMToWorld );
+    return world.xyz / max( abs( world.w ), 1.0e-6f );
+}
+
+void RH_AccumulateVisibility(
+    float2 centerUV,
+    float2 diskOffset,
+    float2 patternSinCos,
+    float3 cellCenterWS,
+    inout float4 visibilitySH,
+    inout float validWeight )
+{
+    diskOffset = RH_Rotate2D( diskOffset, patternSinCos.x, patternSinCos.y );
+    float sampleRadiusWorld = g_vecRHSettings.y * 1.25f;
+    float2 uv = centerUV + diskOffset * ( sampleRadiusWorld / g_vecRHSettings.w );
+
+    float inside = step( 0.0f, uv.x ) * step( uv.x, 1.0f )
+        * step( 0.0f, uv.y ) * step( uv.y, 1.0f );
+    uv = saturate( uv );
+
+    float edge = min( min( uv.x, uv.y ), min( 1.0f - uv.x, 1.0f - uv.y ) );
+    edge = saturate( edge / max( g_vecRHSettings.z, 1.0e-4f ) );
+    edge = edge * edge * ( 3.0f - 2.0f * edge );
+
+    float depth = tex2Dlod( sRSMDepth, float4( uv, 0.0f, 0.0f ) ).r;
+    float valid = inside * edge * step( depth, 0.9999f );
+
+    [branch]
+    if ( valid > 1.0e-4f )
+    {
+        float3 surfacePosition = RH_ReconstructRSMPositionVisibility( uv, depth );
+        float3 toSurface = surfacePosition - cellCenterWS;
+        float distanceSquared = dot( toSurface, toSurface );
+
+        [branch]
+        if ( distanceSquared > 1.0e-5f )
+        {
+            float inverseDistance = rsqrt( distanceSquared );
+            float distanceCells = distanceSquared * inverseDistance / max( g_vecRHSettings.y, 1.0f );
+            float occupancy = 1.0f - smoothstep(
+                max( g_vecVisibility.y, 0.0f ),
+                max( g_vecVisibility.z, g_vecVisibility.y + 0.01f ),
+                distanceCells );
+            occupancy *= exp2( -max( g_vecDecay.x, 0.0f ) * distanceCells );
+            occupancy *= valid * saturate( g_vecVisibility.x ) * max( g_vecVisibility.w, 0.0f );
+
+            float3 directionToBlocker = toSurface * inverseDistance;
+            visibilitySH += RH_ProjectDirection( directionToBlocker ) * occupancy;
+            validWeight += valid;
+        }
+    }
+}
+
+float4 main( const PS_INPUT In ) : COLOR0
+{
+    float3 cellCenterWS = g_vecGridOrigin + In.vVolumeUVW * g_vecRHSettings.x;
+    float4 projected = mul( float4( cellCenterWS, 1.0f ), g_matWorldToRSM );
+    float2 centerUV = projected.xy / max( abs( projected.w ), 1.0e-6f );
+
+    float3 worldCell = floor( cellCenterWS / max( g_vecRHSettings.y, 1.0f ) );
+    float quadrant = floor( RH_Hash13( worldCell + float3( 61.0f, 17.0f, 43.0f ) ) * 4.0f );
+    float2 patternSinCos = float2( 0.0f, 1.0f );
+    if ( quadrant < 1.0f ) patternSinCos = float2( 0.0f,  1.0f );
+    else if ( quadrant < 2.0f ) patternSinCos = float2( 1.0f,  0.0f );
+    else if ( quadrant < 3.0f ) patternSinCos = float2( 0.0f, -1.0f );
+    else patternSinCos = float2( -1.0f, 0.0f );
+
+    float4 visibilitySH = 0.0f;
+    float validWeight = 0.0f;
+
+#if RH_VISIBILITY_SAMPLE_COUNT >= 1
+    RH_AccumulateVisibility( centerUV, float2( 0.000f,  0.000f ), patternSinCos, cellCenterWS, visibilitySH, validWeight );
+#endif
+#if RH_VISIBILITY_SAMPLE_COUNT >= 2
+    RH_AccumulateVisibility( centerUV, float2( 0.650f,  0.150f ), patternSinCos, cellCenterWS, visibilitySH, validWeight );
+#endif
+#if RH_VISIBILITY_SAMPLE_COUNT >= 3
+    RH_AccumulateVisibility( centerUV, float2(-0.450f,  0.550f ), patternSinCos, cellCenterWS, visibilitySH, validWeight );
+#endif
+#if RH_VISIBILITY_SAMPLE_COUNT >= 4
+    RH_AccumulateVisibility( centerUV, float2( 0.100f, -0.700f ), patternSinCos, cellCenterWS, visibilitySH, validWeight );
+#endif
+#if RH_VISIBILITY_SAMPLE_COUNT >= 5
+    RH_AccumulateVisibility( centerUV, float2(-0.750f, -0.250f ), patternSinCos, cellCenterWS, visibilitySH, validWeight );
+#endif
+#if RH_VISIBILITY_SAMPLE_COUNT >= 6
+    RH_AccumulateVisibility( centerUV, float2( 0.700f, -0.550f ), patternSinCos, cellCenterWS, visibilitySH, validWeight );
+#endif
+
+    visibilitySH /= max( validWeight, 1.0f );
+    return RH_LimitVisibilitySH( visibilitySH );
+}

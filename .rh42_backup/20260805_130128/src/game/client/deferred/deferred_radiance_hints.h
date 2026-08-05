@@ -1,0 +1,48 @@
+#ifndef DEFERRED_RADIANCE_HINTS_H
+#define DEFERRED_RADIANCE_HINTS_H
+
+// Runtime controls. None of these require shader recompilation.
+extern ConVar deferred_rh_cell_size;
+extern ConVar deferred_rh_world_spread;
+extern ConVar deferred_rh_injection_gain;
+extern ConVar deferred_rh_bounce_count;
+extern ConVar deferred_rh_bounce_gain;
+extern ConVar deferred_rh_receiver_offset;
+extern ConVar deferred_rh_intensity;
+extern ConVar deferred_rh_rsm_edge_fade;
+extern ConVar deferred_rh_saturation;
+extern ConVar deferred_rh_max_radiance;
+extern ConVar deferred_rh_origin_hysteresis;
+extern ConVar deferred_rh_rsm_padding;
+
+// Directional blocker field.
+extern ConVar deferred_rh_visibility_inner;
+extern ConVar deferred_rh_visibility_outer;
+extern ConVar deferred_rh_visibility_strength;
+extern ConVar deferred_rh_visibility_decay;
+extern ConVar deferred_rh_geometry_strength;
+extern ConVar deferred_rh_geometry_min_transmittance;
+extern ConVar deferred_rh_geometry_bias;
+
+// Low-frequency indirect shadows.
+extern ConVar deferred_rh_soft_shadow_strength;
+extern ConVar deferred_rh_soft_shadow_distance;
+extern ConVar deferred_rh_soft_shadow_softness;
+extern ConVar deferred_rh_soft_shadow_min_visibility;
+
+// Half-resolution bilateral reconstruction.
+extern ConVar deferred_rh_upsample_depth_scale;
+extern ConVar deferred_rh_upsample_normal_power;
+
+extern ConVar deferred_rh_debug_mode;
+
+// Compatibility aliases retained for old configs; RH 4.0 no longer uses them
+// as scalar occupancy/validity controls.
+extern ConVar deferred_rh_min_visibility;
+extern ConVar deferred_rh_validity_boost;
+extern ConVar deferred_rh_geometry_enable;
+extern ConVar deferred_rh_geometry_inner;
+extern ConVar deferred_rh_geometry_outer;
+extern ConVar deferred_rh_geometry_occupancy;
+
+#endif // DEFERRED_RADIANCE_HINTS_H

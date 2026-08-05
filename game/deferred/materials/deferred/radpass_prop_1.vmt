@@ -3,5 +3,5 @@
 	"$SHR"		"_rt_rh_sh_r_01"
 	"$SHG"		"_rt_rh_sh_g_01"
 	"$SHB"		"_rt_rh_sh_b_01"
-	"$AUX"		"_rt_rh_aux_01"
+	"$AUX"		"_rt_rh_visibility_01"
 }

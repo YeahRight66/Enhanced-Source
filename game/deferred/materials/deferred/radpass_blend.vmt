@@ -3,7 +3,7 @@
 	"$SHR0"		"_rt_rh_sh_r_00"
 	"$SHG0"		"_rt_rh_sh_g_00"
 	"$SHB0"		"_rt_rh_sh_b_00"
-	"$AUX0"		"_rt_rh_aux_00"
+	"$VIS0"		"_rt_rh_visibility_00"
 	"$SHR1"		"_rt_rh_sh_r_01"
 	"$SHG1"		"_rt_rh_sh_g_01"
 	"$SHB1"		"_rt_rh_sh_b_01"

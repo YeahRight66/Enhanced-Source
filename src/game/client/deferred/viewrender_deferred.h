@@ -56,6 +56,7 @@ private:
 	void RenderRadianceHintsRSM( const CViewSetup &view );
 	void PerformRadiosityGlobal();
 	void PerformRadiosityVisibility();
+	void PerformRadiosityFilter();
 	void EndRadiosity( const CViewSetup &view );
 	void DebugRadiosity( const CViewSetup &view );
 

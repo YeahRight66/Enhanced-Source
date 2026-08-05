@@ -1,0 +1,112 @@
+// DYNAMIC: "SECOND_BOUNCE" "0..1"
+
+#include "common_ps_fxc.h"
+#include "common_deferred_fxc.h"
+#include "radiance_hints_common_fxc.h"
+
+sampler sDepth      : register( s0 );
+sampler sNormals    : register( s1 );
+sampler sFirstR     : register( s2 );
+sampler sFirstG     : register( s3 );
+sampler sFirstB     : register( s4 );
+sampler sVisibility : register( s5 );
+sampler sSecondR    : register( s6 );
+sampler sSecondG    : register( s7 );
+sampler sSecondB    : register( s8 );
+
+const float3 g_vecViewOrigin : register( c0 );
+const float3 g_vecRHOrigin   : register( c1 );
+// x extent, y receiver offset, z intensity, w second-bounce scale
+const float4 g_RHSettings    : register( c2 );
+// x saturation, y radiance clamp, z visibility amplitude, w visibility density
+const float4 g_RHQuality     : register( c3 );
+// x soft-shadow strength, y trace distance (cells), z min visibility, w self bias
+const float4 g_RHShadow      : register( c4 );
+
+struct PS_INPUT
+{
+	float2 vTexCoord   : TEXCOORD0;
+	float3 vecWorldRay : TEXCOORD1;
+};
+
+float RH_ConeVisibility( float3 uvw, float3 towardSource )
+{
+	float cellUV = 1.0f / RH_VOLUME_SIZE_F;
+	float distanceStep = g_RHShadow.y / RH_SOFT_SHADOW_TAP_COUNT;
+	float opticalDepth = 0.0f;
+	float totalWeight = 0.0f;
+
+#if RH_SOFT_SHADOW_TAP_COUNT >= 1
+	float3 p0 = uvw + towardSource * ( distanceStep * 0.75f * cellUV );
+	float i0 = RH_InsideVolume( p0 );
+	float b0 = RH_EvaluateVisibilityTwoSided( RH_SampleAtlas( sVisibility, p0 ), towardSource );
+	opticalDepth += max( b0 * g_RHQuality.z - g_RHShadow.w, 0.0f ) * i0 * 0.70f;
+	totalWeight += i0 * 0.70f;
+#endif
+#if RH_SOFT_SHADOW_TAP_COUNT >= 2
+	float3 p1 = uvw + towardSource * ( distanceStep * 1.75f * cellUV );
+	float i1 = RH_InsideVolume( p1 );
+	float b1 = RH_EvaluateVisibilityTwoSided( RH_SampleAtlas( sVisibility, p1 ), towardSource );
+	opticalDepth += max( b1 * g_RHQuality.z - g_RHShadow.w, 0.0f ) * i1 * 0.85f;
+	totalWeight += i1 * 0.85f;
+#endif
+#if RH_SOFT_SHADOW_TAP_COUNT >= 3
+	float3 p2 = uvw + towardSource * ( distanceStep * 2.75f * cellUV );
+	float i2 = RH_InsideVolume( p2 );
+	float b2 = RH_EvaluateVisibilityTwoSided( RH_SampleAtlas( sVisibility, p2 ), towardSource );
+	opticalDepth += max( b2 * g_RHQuality.z - g_RHShadow.w, 0.0f ) * i2;
+	totalWeight += i2;
+#endif
+#if RH_SOFT_SHADOW_TAP_COUNT >= 4
+	float3 p3 = uvw + towardSource * ( distanceStep * 3.75f * cellUV );
+	float i3 = RH_InsideVolume( p3 );
+	float b3 = RH_EvaluateVisibilityTwoSided( RH_SampleAtlas( sVisibility, p3 ), towardSource );
+	opticalDepth += max( b3 * g_RHQuality.z - g_RHShadow.w, 0.0f ) * i3 * 1.15f;
+	totalWeight += i3 * 1.15f;
+#endif
+
+	opticalDepth /= max( totalWeight, 1.0f );
+	float visibility = exp2( -g_RHShadow.x * g_RHQuality.w * 6.0f * opticalDepth );
+	return max( visibility, saturate( g_RHShadow.z ) );
+}
+
+float4 main( const PS_INPUT In ) : COLOR0
+{
+	float depth = tex2D( sDepth, In.vTexCoord ).x;
+	clip( min( depth - 0.1f, DEPTH_RECONSTRUCTION_LIMIT - depth ) );
+
+	float3 worldPos = g_vecViewOrigin + In.vecWorldRay * depth;
+	float3 normal = RH_SafeNormalize(
+		DecodeDirectionVectorXYZFromSphericalST( tex2D( sNormals, In.vTexCoord ).xy ),
+		float3( 0.0f, 0.0f, 1.0f ) );
+
+	float3 uvw = ( worldPos + normal * g_RHSettings.y - g_vecRHOrigin ) / max( g_RHSettings.x, 1.0f );
+	float volumeMask = RH_InsideVolume( uvw ) * RH_BoundaryFade( uvw );
+
+	float4 shR = RH_SampleAtlas( sFirstR, uvw );
+	float4 shG = RH_SampleAtlas( sFirstG, uvw );
+	float4 shB = RH_SampleAtlas( sFirstB, uvw );
+	float energy = RH_RadianceEnergy( shR, shG, shB );
+	float confidence = saturate( energy * 2.0f );
+
+	float3 indirect = RH_EvaluateDiffuse( shR, shG, shB, normal );
+#if SECOND_BOUNCE
+	indirect += RH_EvaluateDiffuse(
+		RH_SampleAtlas( sSecondR, uvw ),
+		RH_SampleAtlas( sSecondG, uvw ),
+		RH_SampleAtlas( sSecondB, uvw ), normal ) * g_RHSettings.w;
+#endif
+
+	float3 incoming = -RH_DominantTravelDirection( shR, shG, shB, -normal );
+	float directional = RH_DirectionalConfidence( shR, shG, shB );
+	float frontFacing = saturate( dot( incoming, normal ) );
+	float shadowMask = confidence * directional * frontFacing * step( 1.0e-4f, g_RHShadow.x );
+	indirect *= lerp( 1.0f, RH_ConeVisibility( uvw, incoming ), shadowMask );
+
+	float luminance = dot( indirect, float3( 0.2126f, 0.7152f, 0.0722f ) );
+	indirect = lerp( luminance.xxx, indirect, g_RHQuality.x );
+	indirect = RH_ClampRadiance( indirect, g_RHQuality.y );
+	indirect *= g_RHSettings.z * volumeMask;
+
+	return float4( indirect, depth );
+}

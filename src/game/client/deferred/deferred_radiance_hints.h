@@ -14,6 +14,7 @@ extern ConVar deferred_rh_saturation;
 extern ConVar deferred_rh_max_radiance;
 extern ConVar deferred_rh_origin_hysteresis;
 extern ConVar deferred_rh_rsm_padding;
+extern ConVar deferred_rh_back_rsm_enable;
 
 // Directional blocker field.
 extern ConVar deferred_rh_visibility_inner;
@@ -33,6 +34,19 @@ extern ConVar deferred_rh_soft_shadow_min_visibility;
 // Half-resolution bilateral reconstruction.
 extern ConVar deferred_rh_upsample_depth_scale;
 extern ConVar deferred_rh_upsample_normal_power;
+
+extern ConVar deferred_rh_visibility_dilation;
+extern ConVar deferred_rh_visibility_normal_weight;
+extern ConVar deferred_rh_filter_strength;
+extern ConVar deferred_rh_filter_fill_boost;
+extern ConVar deferred_rh_filter_energy_scale;
+extern ConVar deferred_rh_filter_direction_preserve;
+extern ConVar deferred_rh_filter_radius;
+extern ConVar deferred_rh_bounce_trace_width;
+extern ConVar deferred_rh_bounce_min_confidence;
+extern ConVar deferred_rh_receiver_radius;
+extern ConVar deferred_rh_reconstruction_confidence_floor;
+extern ConVar deferred_rh_shadow_isotropic_blend;
 
 extern ConVar deferred_rh_debug_mode;
 
