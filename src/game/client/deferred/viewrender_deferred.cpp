@@ -1115,7 +1115,7 @@ void CDeferredViewRender::StampRadiosityDynamicModels( const Vector &origin, flo
     {
         IClientEntity *pEntity = entitylist->GetClientEntity( entityIndex );
         IClientRenderable *pRenderable = pEntity != NULL ? pEntity->GetClientRenderable() : NULL;
-        if ( pRenderable == NULL || !pRenderable->ShouldDraw() || pRenderable->IsTransparent() )
+        if ( pRenderable == NULL || !pRenderable->ShouldDraw() )
             continue;
 
         const model_t *pModel = pRenderable->GetModel();
