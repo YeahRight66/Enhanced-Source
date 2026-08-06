@@ -34,6 +34,18 @@ struct PS_OUTPUT
     float4 vMeta : COLOR3;
 };
 
+float3 RH_GetCubeCornerDirection( int cornerIndex )
+{
+    if ( cornerIndex == 0 ) return float3( 0.5773503f, 0.5773503f, 0.5773503f );
+    if ( cornerIndex == 1 ) return float3(-0.5773503f, 0.5773503f, 0.5773503f );
+    if ( cornerIndex == 2 ) return float3( 0.5773503f,-0.5773503f, 0.5773503f );
+    if ( cornerIndex == 3 ) return float3(-0.5773503f,-0.5773503f, 0.5773503f );
+    if ( cornerIndex == 4 ) return float3( 0.5773503f, 0.5773503f,-0.5773503f );
+    if ( cornerIndex == 5 ) return float3(-0.5773503f, 0.5773503f,-0.5773503f );
+    if ( cornerIndex == 6 ) return float3( 0.5773503f,-0.5773503f,-0.5773503f );
+    return float3(-0.5773503f,-0.5773503f,-0.5773503f );
+}
+
 float RH_FilterTransmittance( float3 centerUVW, float3 sampleUVW, float3 direction )
 {
     float3 trace0 = lerp( centerUVW, sampleUVW, 0.35f );
@@ -127,11 +139,14 @@ PS_OUTPUT main( const PS_INPUT In )
         RH_FilterNeighbour( In.vVolumeUVW, float3( 0.0f, 0.0f,-1.0f ), centerConfidence, centerMeta.z, sumR, sumG, sumB, confidenceSum, distanceSum, energySum, weightSum );
     }
 #else
+    // All eight cube corners are required for reflection invariance. The old
+    // single-handed tetrahedron produced different reconstruction on mirrored rooms.
+    [loop]
+    for ( int cornerIndex = 0; cornerIndex < 8; ++cornerIndex )
     {
-        RH_FilterNeighbour( In.vVolumeUVW, float3( 0.5773503f, 0.5773503f, 0.5773503f ), centerConfidence, centerMeta.z, sumR, sumG, sumB, confidenceSum, distanceSum, energySum, weightSum );
-        RH_FilterNeighbour( In.vVolumeUVW, float3(-0.5773503f,-0.5773503f, 0.5773503f ), centerConfidence, centerMeta.z, sumR, sumG, sumB, confidenceSum, distanceSum, energySum, weightSum );
-        RH_FilterNeighbour( In.vVolumeUVW, float3(-0.5773503f, 0.5773503f,-0.5773503f ), centerConfidence, centerMeta.z, sumR, sumG, sumB, confidenceSum, distanceSum, energySum, weightSum );
-        RH_FilterNeighbour( In.vVolumeUVW, float3( 0.5773503f,-0.5773503f,-0.5773503f ), centerConfidence, centerMeta.z, sumR, sumG, sumB, confidenceSum, distanceSum, energySum, weightSum );
+        RH_FilterNeighbour( In.vVolumeUVW, RH_GetCubeCornerDirection( cornerIndex ),
+            centerConfidence, centerMeta.z, sumR, sumG, sumB,
+            confidenceSum, distanceSum, energySum, weightSum );
     }
 #endif
 

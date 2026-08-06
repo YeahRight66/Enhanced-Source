@@ -1,7 +1,7 @@
 #ifndef RADIANCE_HINTS_CONFIG_H
 #define RADIANCE_HINTS_CONFIG_H
 
-// Radiance Hints 5.0 compile-time configuration.
+// Radiance Hints 6.0 compile-time configuration.
 // This header intentionally overrides legacy RH macros locally. Do not include
 // it from deferred_global_common.h or common_deferred_fxc.h.
 
@@ -70,9 +70,9 @@
     // GTX 1050 target.
 #   define RH_VOLUME_SIZE                 48
 #   define RH_RSM_RESOLUTION              768
-#   define RH_RADIANCE_SAMPLE_COUNT       6
-#   define RH_VISIBILITY_SAMPLE_COUNT     6
-#   define RH_FILTER_NEIGHBOUR_COUNT      6
+#   define RH_RADIANCE_SAMPLE_COUNT       8
+#   define RH_VISIBILITY_SAMPLE_COUNT     8
+#   define RH_FILTER_NEIGHBOUR_COUNT      8
 #   define RH_BOUNCE_SAMPLE_COUNT         6
 #   define RH_RECEIVER_SAMPLE_COUNT       4
 #   define RH_SOFT_SHADOW_TAP_COUNT       4
@@ -88,10 +88,10 @@
 #define RH_ATLAS_HEIGHT_F                  ( RH_ATLAS_HEIGHT * 1.0f )
 #define RH_RSM_RESOLUTION_F                ( RH_RSM_RESOLUTION * 1.0f )
 
-// Raw/filtered radiance ping-pongs through two four-MRT sets.
-// The final twice-filtered first bounce is set 0; optional secondary transport
-// is written to set 1 RGB while set 0 metadata remains authoritative.
-#define RH_SET_COUNT                       2
+// Three four-MRT sets are used: set 0 is the final first-bounce field,
+// set 1 stores freshly generated surface bounce, and set 2 stores its
+// geometry-aware transport result. Metadata from set 0 remains authoritative.
+#define RH_SET_COUNT                       3
 #define RH_CHANNEL_COUNT                   4
 #define RH_CHANNEL_SH_R                    0
 #define RH_CHANNEL_SH_G                    1
@@ -107,11 +107,11 @@
 #if RH_RADIANCE_SAMPLE_COUNT < 1 || RH_RADIANCE_SAMPLE_COUNT > 8
 # error RH_RADIANCE_SAMPLE_COUNT must be in the range 1..8.
 #endif
-#if RH_VISIBILITY_SAMPLE_COUNT < 1 || RH_VISIBILITY_SAMPLE_COUNT > 6
-# error RH_VISIBILITY_SAMPLE_COUNT must be in the range 1..6.
+#if RH_VISIBILITY_SAMPLE_COUNT < 1 || RH_VISIBILITY_SAMPLE_COUNT > 8
+# error RH_VISIBILITY_SAMPLE_COUNT must be in the range 1..8.
 #endif
-#if RH_FILTER_NEIGHBOUR_COUNT != 4 && RH_FILTER_NEIGHBOUR_COUNT != 6
-# error RH_FILTER_NEIGHBOUR_COUNT must be 4 or 6.
+#if RH_FILTER_NEIGHBOUR_COUNT != 4 && RH_FILTER_NEIGHBOUR_COUNT != 6 && RH_FILTER_NEIGHBOUR_COUNT != 8
+# error RH_FILTER_NEIGHBOUR_COUNT must be 4, 6 or 8.
 #endif
 #if RH_BOUNCE_SAMPLE_COUNT < 1 || RH_BOUNCE_SAMPLE_COUNT > 6
 # error RH_BOUNCE_SAMPLE_COUNT must be in the range 1..6.
@@ -157,6 +157,18 @@
 #ifdef DEFRTNAME_RH_RSM_NORMAL
 # undef DEFRTNAME_RH_RSM_NORMAL
 #endif
+#ifdef DEFRTNAME_RH_RSM_ALBEDO
+# undef DEFRTNAME_RH_RSM_ALBEDO
+#endif
+#ifdef DEFRTNAME_RH_SURFACE_ALBEDO
+# undef DEFRTNAME_RH_SURFACE_ALBEDO
+#endif
+#ifdef DEFRTNAME_RH_SURFACE_NORMAL
+# undef DEFRTNAME_RH_SURFACE_NORMAL
+#endif
+#ifdef DEFRTNAME_RH_GEOMETRY_DISTANCE
+# undef DEFRTNAME_RH_GEOMETRY_DISTANCE
+#endif
 #ifdef DEFRTNAME_RH_INDIRECT_HALF
 # undef DEFRTNAME_RH_INDIRECT_HALF
 #endif
@@ -175,6 +187,10 @@
 #define DEFRTNAME_RH_RSM_COLOR             "_rt_RH_RSM_ColorDepth"
 #define DEFRTNAME_RH_RSM_FLUX              "_rt_RH_RSM_Flux"
 #define DEFRTNAME_RH_RSM_NORMAL            "_rt_RH_RSM_Normal"
+#define DEFRTNAME_RH_RSM_ALBEDO            "_rt_RH_RSM_Albedo"
+#define DEFRTNAME_RH_SURFACE_ALBEDO        "_rt_RH_SurfaceAlbedo"
+#define DEFRTNAME_RH_SURFACE_NORMAL        "_rt_RH_SurfaceNormal"
+#define DEFRTNAME_RH_GEOMETRY_DISTANCE     "_rt_RH_GeometryDistance"
 #define DEFRTNAME_RH_INDIRECT_HALF         "_rt_RH_IndirectHalf"
 #define DEFRTNAME_RH_GEOMETRY              "_rt_RH_Geometry"
 

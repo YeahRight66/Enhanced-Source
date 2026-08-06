@@ -4,26 +4,27 @@
 #include "radiosity_propagate_ps30.inc"
 #include "radiosity_propagate_vs30.inc"
 
-BEGIN_VS_SHADER( RADIOSITY_PROPAGATE, "RH 5.0 confidence/visibility-aware secondary bounce" )
+BEGIN_VS_SHADER( RADIOSITY_PROPAGATE, "RH 6.0 surface bounce generation and geometry transport" )
     BEGIN_SHADER_PARAMS
-        SHADER_PARAM( SHR, SHADER_PARAM_TYPE_TEXTURE, "", "Filtered red SH volume" )
-        SHADER_PARAM( SHG, SHADER_PARAM_TYPE_TEXTURE, "", "Filtered green SH volume" )
-        SHADER_PARAM( SHB, SHADER_PARAM_TYPE_TEXTURE, "", "Filtered blue SH volume" )
+        SHADER_PARAM( SHR, SHADER_PARAM_TYPE_TEXTURE, "", "Source red SH volume" )
+        SHADER_PARAM( SHG, SHADER_PARAM_TYPE_TEXTURE, "", "Source green SH volume" )
+        SHADER_PARAM( SHB, SHADER_PARAM_TYPE_TEXTURE, "", "Source blue SH volume" )
         SHADER_PARAM( VIS, SHADER_PARAM_TYPE_TEXTURE, "", "Directional visibility volume" )
-        SHADER_PARAM( META, SHADER_PARAM_TYPE_TEXTURE, "", "Filtered injection metadata" )
-        SHADER_PARAM( GEOMETRY, SHADER_PARAM_TYPE_TEXTURE, "", "Conservative geometry occupancy volume" )
+        SHADER_PARAM( META, SHADER_PARAM_TYPE_TEXTURE, "", "First-bounce metadata" )
+        SHADER_PARAM( GEOMETRY, SHADER_PARAM_TYPE_TEXTURE, "", "Conservative geometry occupancy" )
+        SHADER_PARAM( DISTANCE, SHADER_PARAM_TYPE_TEXTURE, "", "Geometry distance field" )
+        SHADER_PARAM( SURFACEALBEDO, SHADER_PARAM_TYPE_TEXTURE, "", "Accumulated RSM surface albedo" )
+        SHADER_PARAM( SURFACENORMAL, SHADER_PARAM_TYPE_TEXTURE, "", "Accumulated RSM surface normal" )
+        SHADER_PARAM( BOUNCEMODE, SHADER_PARAM_TYPE_INTEGER, "0", "0=surface generation, 1=transport" )
     END_SHADER_PARAMS
 
     SHADER_INIT_PARAMS() {}
 
     SHADER_INIT
     {
-        LoadTexture( SHR );
-        LoadTexture( SHG );
-        LoadTexture( SHB );
-        LoadTexture( VIS );
-        LoadTexture( META );
-        LoadTexture( GEOMETRY );
+        LoadTexture( SHR ); LoadTexture( SHG ); LoadTexture( SHB );
+        LoadTexture( VIS ); LoadTexture( META ); LoadTexture( GEOMETRY );
+        LoadTexture( DISTANCE ); LoadTexture( SURFACEALBEDO ); LoadTexture( SURFACENORMAL );
     }
 
     SHADER_FALLBACK { return 0; }
@@ -36,13 +37,15 @@ BEGIN_VS_SHADER( RADIOSITY_PROPAGATE, "RH 5.0 confidence/visibility-aware second
             pShaderShadow->EnableDepthTest( false );
             pShaderShadow->EnableDepthWrites( false );
             pShaderShadow->EnableAlphaWrites( true );
-
             pShaderShadow->EnableTexture( SHADER_SAMPLER0, true );
             pShaderShadow->EnableTexture( SHADER_SAMPLER1, true );
             pShaderShadow->EnableTexture( SHADER_SAMPLER2, true );
             pShaderShadow->EnableTexture( SHADER_SAMPLER3, true );
             pShaderShadow->EnableTexture( SHADER_SAMPLER4, true );
             pShaderShadow->EnableTexture( SHADER_SAMPLER5, true );
+            pShaderShadow->EnableTexture( SHADER_SAMPLER6, true );
+            pShaderShadow->EnableTexture( SHADER_SAMPLER7, true );
+            pShaderShadow->EnableTexture( SHADER_SAMPLER8, true );
 
             int texCoordDimensions[] = { 2 };
             pShaderShadow->VertexShaderVertexFormat(
@@ -67,8 +70,13 @@ BEGIN_VS_SHADER( RADIOSITY_PROPAGATE, "RH 5.0 confidence/visibility-aware second
             BindTexture( SHADER_SAMPLER3, VIS );
             BindTexture( SHADER_SAMPLER4, META );
             BindTexture( SHADER_SAMPLER5, GEOMETRY );
+            BindTexture( SHADER_SAMPLER6, DISTANCE );
+            BindTexture( SHADER_SAMPLER7, SURFACEALBEDO );
+            BindTexture( SHADER_SAMPLER8, SURFACENORMAL );
 
             ConVarRef bounceGain( "deferred_rh_bounce_gain" );
+            ConVarRef surfaceBounceGain( "deferred_rh_surface_bounce_gain" );
+            ConVarRef surfaceMinCoverage( "deferred_rh_surface_min_coverage" );
             ConVarRef maxRadiance( "deferred_rh_max_radiance" );
             ConVarRef geometryEnable( "deferred_rh_geometry_enable" );
             ConVarRef geometryStrength( "deferred_rh_geometry_strength" );
@@ -78,11 +86,13 @@ BEGIN_VS_SHADER( RADIOSITY_PROPAGATE, "RH 5.0 confidence/visibility-aware second
             ConVarRef traceWidth( "deferred_rh_bounce_trace_width" );
             ConVarRef minConfidence( "deferred_rh_bounce_min_confidence" );
 
+            const int mode = params[ BOUNCEMODE ]->GetIntValue() != 0 ? 1 : 0;
+            const float radiusCells = 2.25f;
             float settings[4] = {
-                2.25f / RH_VOLUME_SIZE_F,
+                radiusCells / RH_VOLUME_SIZE_F,
                 MAX( bounceGain.GetFloat(), 0.0f ),
                 MAX( maxRadiance.GetFloat(), 0.25f ),
-                2.25f
+                radiusCells
             };
             pShaderAPI->SetPixelShaderConstant( 0, settings );
 
@@ -104,10 +114,16 @@ BEGIN_VS_SHADER( RADIOSITY_PROPAGATE, "RH 5.0 confidence/visibility-aware second
             float trace[4] = {
                 clamp( traceWidth.GetFloat(), 0.0f, 1.5f ),
                 clamp( minConfidence.GetFloat(), 0.0f, 1.0f ),
-                0.0f,
-                0.0f
+                (float)mode,
+                MAX( surfaceBounceGain.GetFloat(), 0.0f )
             };
             pShaderAPI->SetPixelShaderConstant( 3, trace );
+
+            float surface[4] = {
+                clamp( surfaceMinCoverage.GetFloat(), 0.0f, 4.0f ),
+                0.0f, 0.0f, 0.0f
+            };
+            pShaderAPI->SetPixelShaderConstant( 4, surface );
         }
 
         Draw();

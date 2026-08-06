@@ -4,7 +4,7 @@
 #include "radiosity_gen_visibility_ps30.inc"
 #include "radiosity_gen_vs30.inc"
 
-BEGIN_VS_SHADER( RADIOSITY_VISIBILITY, "RH 5.0 directional blocker injection" )
+BEGIN_VS_SHADER( RADIOSITY_VISIBILITY, "RH 6.0 symmetric directional blocker injection" )
     BEGIN_SHADER_PARAMS
     END_SHADER_PARAMS
 

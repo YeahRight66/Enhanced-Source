@@ -56,9 +56,12 @@ private:
 	void UpdateRadiosityPosition();
 	void RenderRadianceHintsRSM( const CViewSetup &view );
 	void PerformRadiosityGlobal();
+	void PerformRadiositySky();
+	void PerformRadiositySurface();
 	void PerformRadiosityVisibility();
 	void PerformRadiosityFilter();
 	void UpdateRadiosityGeometry();
+	void BuildRadiosityDistanceField();
 	unsigned char BuildRadiosityStaticCell( const Vector &cellCenter, float cellSize ) const;
 	void StampRadiosityDynamicModels( const Vector &origin, float cellSize );
 	void EndRadiosity( const CViewSetup &view );
@@ -80,6 +83,7 @@ private:
 	bool m_bRHGeometryValid;
 	CUtlVector< unsigned char > m_RHStaticGeometry;
 	CUtlVector< unsigned char > m_RHCombinedGeometry;
+	CUtlVector< unsigned char > m_RHGeometryDistance;
 };
 
 

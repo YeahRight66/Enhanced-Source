@@ -38,12 +38,14 @@ float3 RH_ReconstructRSMPositionVisibility( float2 uv, float depth )
 // into locally initialized arrays.
 float2 RH_GetVisibilityOffset( int sampleIndex )
 {
-    if ( sampleIndex == 0 ) return float2( 0.000f,  0.000f );
-    if ( sampleIndex == 1 ) return float2( 0.650f,  0.150f );
-    if ( sampleIndex == 2 ) return float2(-0.450f,  0.550f );
-    if ( sampleIndex == 3 ) return float2( 0.100f, -0.700f );
-    if ( sampleIndex == 4 ) return float2(-0.750f, -0.250f );
-    return float2( 0.700f, -0.550f );
+    if ( sampleIndex == 0 ) return float2( 0.34f,  0.00f );
+    if ( sampleIndex == 1 ) return float2(-0.34f,  0.00f );
+    if ( sampleIndex == 2 ) return float2( 0.00f,  0.34f );
+    if ( sampleIndex == 3 ) return float2( 0.00f, -0.34f );
+    if ( sampleIndex == 4 ) return float2( 0.58f,  0.58f );
+    if ( sampleIndex == 5 ) return float2(-0.58f,  0.58f );
+    if ( sampleIndex == 6 ) return float2( 0.58f, -0.58f );
+    return float2(-0.58f, -0.58f );
 }
 
 float4 main( const PS_INPUT In ) : COLOR0
@@ -60,22 +62,7 @@ float4 main( const PS_INPUT In ) : COLOR0
     float2 centerUV =
         projected.xy / max( abs( projected.w ), 1.0e-6f );
 
-    float3 worldCell = floor( cellCenterWS / cellSize );
-    float quadrant =
-        floor( RH_Hash13(
-            worldCell + float3( 61.0f, 17.0f, 43.0f ) ) * 4.0f );
-
-    // x = sine, y = cosine
-    float2 patternSinCos = float2( 0.0f, 1.0f );
-
-    if ( quadrant < 1.0f )
-        patternSinCos = float2( 0.0f,  1.0f );
-    else if ( quadrant < 2.0f )
-        patternSinCos = float2( 1.0f,  0.0f );
-    else if ( quadrant < 3.0f )
-        patternSinCos = float2( 0.0f, -1.0f );
-    else
-        patternSinCos = float2(-1.0f,  0.0f );
+    const float2 patternSinCos = float2( 0.0f, 1.0f );
 
     const float footprintCells =
         g_vecRHSettings.w * g_vecDecay.y / cellSize;

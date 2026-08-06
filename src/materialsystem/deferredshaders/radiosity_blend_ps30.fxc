@@ -15,6 +15,7 @@ sampler sSecondG    : register( s7 );
 sampler sSecondB    : register( s8 );
 sampler sMeta       : register( s9 );
 sampler sGeometry   : register( s10 );
+sampler sDistance   : register( s11 );
 
 const float3 g_vecViewOrigin : register( c0 );
 const float3 g_vecRHOrigin   : register( c1 );
@@ -26,6 +27,8 @@ const float4 g_RHQuality     : register( c3 );
 const float4 g_RHShadow      : register( c4 );
 // x receiver radius cells, y confidence floor, z cone width, w isotropic blend.
 const float4 g_RHReconstruct : register( c5 );
+// x trace start cells, y receiver clearance cells, z contact strength, w far strength.
+const float4 g_RHShadowShape : register( c6 );
 
 struct PS_INPUT
 {
@@ -64,81 +67,72 @@ float3 RH_SampleFirstDiffuse( float3 uvw, float4 diffuseBasis, out float confide
 float RH_ConeVisibility( float3 uvw, float3 towardSource, float3 surfaceNormal, float4 receiverMeta )
 {
     const float cellUV = 1.0f / RH_VOLUME_SIZE_F;
+    towardSource = RH_SafeNormalize( towardSource, surfaceNormal );
+
     float3 tangent = RH_BuildTangent( towardSource );
     float3 bitangent = RH_SafeNormalize( cross( towardSource, tangent ), surfaceNormal );
     float traceDistance = max( g_RHShadow.y, 0.5f );
     float coneSlope = max( g_RHReconstruct.z, 0.0f );
     float adaptiveBias = g_RHShadow.w + ( 1.0f - saturate( receiverMeta.y ) ) * 0.08f;
+    float startCells = clamp( g_RHShadowShape.x, 0.25f, traceDistance );
+    float clearanceCells = clamp( g_RHShadowShape.y, 0.25f, 2.0f );
+    float3 traceOrigin = uvw + surfaceNormal * ( clearanceCells * cellUV );
+
+    float travelCells = startCells;
+    float previousCells = 0.0f;
     float opticalDepth = 0.0f;
 
-    // Ordered segment integration. Each tap represents a different length of the
-    // cone rather than another sample in an averaged blur kernel. This preserves
-    // contact blocking while allowing the penumbra to widen with distance.
-#if RH_SOFT_SHADOW_TAP_COUNT >= 1
+    // Sphere-tracing-inspired integration through the CPU distance field.  The
+    // trace takes large steps in empty space and short steps near walls.  The
+    // owning surface is skipped by the normal clearance, fixing dark floors.
+    [unroll]
+    for ( int tapIndex = 0; tapIndex < RH_SOFT_SHADOW_TAP_COUNT; ++tapIndex )
     {
-        float distanceCells = traceDistance * 0.17f;
-        float segmentCells = traceDistance * 0.17f;
-        float3 sampleUVW = uvw + towardSource * ( distanceCells * cellUV )
-            + tangent * ( coneSlope * distanceCells * 0.30f * cellUV );
+        float normalizedDistance = saturate( travelCells / traceDistance );
+        float coneRadiusCells = coneSlope * travelCells;
+        float phase = (float)tapIndex;
+        float3 lateralDirection = ( tapIndex == 0 ) ? float3( 0.0f, 0.0f, 0.0f )
+            : ( tapIndex == 1 ) ? tangent
+            : ( tapIndex == 2 ) ? -tangent
+            : bitangent;
+        float lateralScale = ( tapIndex == 0 ) ? 0.0f : ( 0.35f + 0.20f * phase );
+        float3 sampleUVW = traceOrigin
+            + towardSource * ( travelCells * cellUV )
+            + lateralDirection * ( coneRadiusCells * lateralScale * cellUV );
+
+        float inside = RH_InsideVolume( sampleUVW );
         float directionalBlocker = RH_EvaluateVisibilityTwoSided(
             RH_SampleAtlas( sVisibility, sampleUVW ), towardSource );
-        float blocker = max( directionalBlocker, RH_SampleAtlas( sGeometry, sampleUVW ).r );
+        float geometryBlocker = RH_SampleAtlas( sGeometry, sampleUVW ).r;
+        float blocker = max( directionalBlocker, geometryBlocker );
+        float segmentCells = max( travelCells - previousCells, 0.25f );
+        float distanceCells = RH_SampleAtlas( sDistance, sampleUVW ).r * 255.0f;
+        float distanceStep = clamp( distanceCells * 0.65f, 0.65f, 3.5f );
+        float strength = lerp(
+            max( g_RHShadowShape.z, 0.0f ),
+            max( g_RHShadowShape.w, 0.0f ),
+            normalizedDistance );
+
         opticalDepth += max( blocker * g_RHQuality.z - adaptiveBias, 0.0f )
-            * segmentCells * RH_InsideVolume( sampleUVW );
+            * segmentCells * strength * inside;
+
+        previousCells = travelCells;
+        travelCells = min( travelCells + distanceStep, traceDistance );
     }
-#endif
-#if RH_SOFT_SHADOW_TAP_COUNT >= 2
-    {
-        float distanceCells = traceDistance * 0.36f;
-        float segmentCells = traceDistance * 0.19f;
-        float3 sampleUVW = uvw + towardSource * ( distanceCells * cellUV )
-            - tangent * ( coneSlope * distanceCells * 0.55f * cellUV );
-        float directionalBlocker = RH_EvaluateVisibilityTwoSided(
-            RH_SampleAtlas( sVisibility, sampleUVW ), towardSource );
-        float blocker = max( directionalBlocker, RH_SampleAtlas( sGeometry, sampleUVW ).r );
-        opticalDepth += max( blocker * g_RHQuality.z - adaptiveBias, 0.0f )
-            * segmentCells * RH_InsideVolume( sampleUVW );
-    }
-#endif
-#if RH_SOFT_SHADOW_TAP_COUNT >= 3
-    {
-        float distanceCells = traceDistance * 0.62f;
-        float segmentCells = traceDistance * 0.26f;
-        float3 sampleUVW = uvw + towardSource * ( distanceCells * cellUV )
-            + bitangent * ( coneSlope * distanceCells * 0.78f * cellUV );
-        float directionalBlocker = RH_EvaluateVisibilityTwoSided(
-            RH_SampleAtlas( sVisibility, sampleUVW ), towardSource );
-        float blocker = max( directionalBlocker, RH_SampleAtlas( sGeometry, sampleUVW ).r );
-        opticalDepth += max( blocker * g_RHQuality.z - adaptiveBias, 0.0f )
-            * segmentCells * RH_InsideVolume( sampleUVW );
-    }
-#endif
-#if RH_SOFT_SHADOW_TAP_COUNT >= 4
-    {
-        float distanceCells = traceDistance * 0.96f;
-        float segmentCells = traceDistance * 0.34f;
-        float3 sampleUVW = uvw + towardSource * ( distanceCells * cellUV )
-            - bitangent * ( coneSlope * distanceCells * cellUV );
-        float directionalBlocker = RH_EvaluateVisibilityTwoSided(
-            RH_SampleAtlas( sVisibility, sampleUVW ), towardSource );
-        float blocker = max( directionalBlocker, RH_SampleAtlas( sGeometry, sampleUVW ).r );
-        opticalDepth += max( blocker * g_RHQuality.z - adaptiveBias, 0.0f )
-            * segmentCells * RH_InsideVolume( sampleUVW );
-    }
-#endif
 
     float directionalVisibility = exp2(
-        -max( g_RHShadow.x, 0.0f ) * max( g_RHQuality.w, 0.0f ) * 2.2f * opticalDepth );
+        -max( g_RHShadow.x, 0.0f ) * max( g_RHQuality.w, 0.0f ) * opticalDepth );
 
-    // The local term handles ambiguous/isotropic radiance cells and stabilizes
-    // wall contact. It is blended conservatively so it cannot turn RH into AO.
-    float localBlocker = RH_EvaluateVisibilityTwoSided(
-        RH_SampleAtlas( sVisibility, uvw ), -surfaceNormal );
-    float3 localGeometryUVW = uvw + surfaceNormal * ( 0.35f * cellUV );
-    localBlocker = max( localBlocker, RH_SampleAtlas( sGeometry, localGeometryUVW ).r );
-    float localOpticalDepth = max( localBlocker * g_RHQuality.z - adaptiveBias, 0.0f );
+    // Contact blocking is evaluated beyond the owning surface and in the light
+    // direction.  It remains a conservative ambiguity fallback, not an AO term.
+    float3 localUVW = traceOrigin + towardSource * ( 0.35f * cellUV );
+    float localDirectional = RH_EvaluateVisibilityTwoSided(
+        RH_SampleAtlas( sVisibility, localUVW ), towardSource );
+    float localBlocker = max( localDirectional, RH_SampleAtlas( sGeometry, localUVW ).r );
+    float localOpticalDepth = max( localBlocker * g_RHQuality.z - adaptiveBias, 0.0f )
+        * max( g_RHShadowShape.z, 0.0f );
     float isotropicVisibility = exp2(
-        -max( g_RHShadow.x, 0.0f ) * max( g_RHQuality.w, 0.0f ) * 1.6f * localOpticalDepth );
+        -max( g_RHShadow.x, 0.0f ) * max( g_RHQuality.w, 0.0f ) * localOpticalDepth );
 
     float visibility = lerp(
         directionalVisibility,

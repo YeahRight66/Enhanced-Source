@@ -4,7 +4,7 @@
 #include "radiosity_filter_ps30.inc"
 #include "radiosity_propagate_vs30.inc"
 
-BEGIN_VS_SHADER( RADIOSITY_FILTER, "RH 5.0 confidence/visibility-aware spatial reconstruction" )
+BEGIN_VS_SHADER( RADIOSITY_FILTER, "RH 6.0 symmetric confidence/visibility-aware spatial reconstruction" )
     BEGIN_SHADER_PARAMS
         SHADER_PARAM( SHR, SHADER_PARAM_TYPE_TEXTURE, "", "Raw red SH volume" )
         SHADER_PARAM( SHG, SHADER_PARAM_TYPE_TEXTURE, "", "Raw green SH volume" )
@@ -12,7 +12,7 @@ BEGIN_VS_SHADER( RADIOSITY_FILTER, "RH 5.0 confidence/visibility-aware spatial r
         SHADER_PARAM( META, SHADER_PARAM_TYPE_TEXTURE, "", "Raw injection metadata" )
         SHADER_PARAM( VIS, SHADER_PARAM_TYPE_TEXTURE, "", "Directional visibility volume" )
         SHADER_PARAM( GEOMETRY, SHADER_PARAM_TYPE_TEXTURE, "", "Conservative geometry occupancy volume" )
-        SHADER_PARAM( FILTERPHASE, SHADER_PARAM_TYPE_INTEGER, "0", "0=axial, 1=tetrahedral" )
+        SHADER_PARAM( FILTERPHASE, SHADER_PARAM_TYPE_INTEGER, "0", "0=axial, 1=eight-corner" )
     END_SHADER_PARAMS
 
     SHADER_INIT_PARAMS()

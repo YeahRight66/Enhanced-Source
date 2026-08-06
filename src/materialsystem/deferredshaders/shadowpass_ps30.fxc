@@ -58,6 +58,7 @@ struct PS_OUTPUT
 #if RADIOSITY
 	float4 vColor_1 : COLOR1;
 	float4 vColor_2 : COLOR2;
+	float4 vColor_3 : COLOR3;
 #endif
 };
 
@@ -108,6 +109,7 @@ PS_OUTPUT main( const PS_INPUT In )
 		* max( g_vecRHLightDiffuse, 0.0f ) * ( directCosine * 0.3183098862f );
 	Out.vColor_1 = float4( min( reflectedRadiance, 60000.0f ), saturate( albedo.a ) );
 	Out.vColor_2 = float4( normal * 0.5f + 0.5f, 1.0f );
+	Out.vColor_3 = float4( max( albedo.rgb, 0.0f ), saturate( albedo.a ) );
 #endif
 
 #if ALPHATEST

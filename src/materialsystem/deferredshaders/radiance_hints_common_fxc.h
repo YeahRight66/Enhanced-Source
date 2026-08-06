@@ -68,6 +68,15 @@ float4 RH_DiffuseBasis( float3 direction )
     return float4( direction * 1.0233267079f, 0.8862269255f );
 }
 
+// L1 SH projection of a constant-radiance hemisphere whose outgoing/travel
+// directions are centred on hemisphereDirection. Used by hemisphere skylight
+// and Lambertian surface re-emission.
+float4 RH_ProjectHemisphere( float3 hemisphereDirection )
+{
+    hemisphereDirection = RH_SafeNormalize( hemisphereDirection, float3( 0.0f, 0.0f, 1.0f ) );
+    return float4( hemisphereDirection * 1.5349900619f, 1.7724538509f );
+}
+
 float3 RH_EvaluateRadiance( float4 shR, float4 shG, float4 shB, float3 direction )
 {
     float4 basis = RH_ProjectDirection( direction );

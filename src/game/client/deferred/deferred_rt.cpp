@@ -30,6 +30,7 @@ static CTextureReference g_tex_RHRSMDepth;
 static CTextureReference g_tex_RHRSMColor;
 static CTextureReference g_tex_RHRSMFlux;
 static CTextureReference g_tex_RHRSMNormal;
+static CTextureReference g_tex_RHRSMAlbedo;
 static CTextureReference g_tex_ShadowColor_Proj[ MAX_SHADOW_PROJ ];
 static CTextureReference g_tex_ShadowDepth_Proj[ MAX_SHADOW_PROJ ];
 #if DEFCFG_ADAPTIVE_SHADOWMAP_LOD
@@ -45,12 +46,18 @@ static CTextureReference g_tex_RadianceHints[ RH_SET_COUNT ][ RH_CHANNEL_COUNT ]
 static CTextureReference g_tex_RHVisibility;
 static CTextureReference g_tex_RHIndirectHalf;
 static CTextureReference g_tex_RHGeometry;
+static CTextureReference g_tex_RHGeometryDistance;
+static CTextureReference g_tex_RHSurfaceAlbedo;
+static CTextureReference g_tex_RHSurfaceNormal;
 
 static unsigned char g_RHGeometryData[ RH_ATLAS_WIDTH * RH_ATLAS_HEIGHT ];
+static unsigned char g_RHGeometryDistanceData[ RH_ATLAS_WIDTH * RH_ATLAS_HEIGHT ];
 
-class CRHGeometryTextureRegenerator : public ITextureRegenerator
+class CRHByteTextureRegenerator : public ITextureRegenerator
 {
 public:
+    CRHByteTextureRegenerator( const unsigned char *pData ) : m_pData( pData ) {}
+
     virtual void RegenerateTextureBits( ITexture *pTexture, IVTFTexture *pVTFTexture, Rect_t *pRect )
     {
         (void)pTexture;
@@ -66,24 +73,26 @@ public:
         for ( int y = 0; y < RH_ATLAS_HEIGHT; ++y )
         {
             unsigned char *pRow = pDst + y * rowStride;
-            const unsigned char *pSrc = g_RHGeometryData + y * RH_ATLAS_WIDTH;
+            const unsigned char *pSrc = m_pData + y * RH_ATLAS_WIDTH;
             for ( int x = 0; x < RH_ATLAS_WIDTH; ++x )
             {
-                const unsigned char occupancy = pSrc[x];
-                pRow[x * 4 + 0] = occupancy;
-                pRow[x * 4 + 1] = occupancy;
-                pRow[x * 4 + 2] = occupancy;
+                const unsigned char value = pSrc[x];
+                pRow[x * 4 + 0] = value;
+                pRow[x * 4 + 1] = value;
+                pRow[x * 4 + 2] = value;
                 pRow[x * 4 + 3] = 255;
             }
         }
     }
 
-    // Static lifetime: the material system may release the callback during a
-    // mode switch, but the singleton itself must not be deleted.
     virtual void Release() {}
+
+private:
+    const unsigned char *m_pData;
 };
 
-static CRHGeometryTextureRegenerator g_RHGeometryTextureRegenerator;
+static CRHByteTextureRegenerator g_RHGeometryTextureRegenerator( g_RHGeometryData );
+static CRHByteTextureRegenerator g_RHGeometryDistanceTextureRegenerator( g_RHGeometryDistanceData );
 
 static CTextureReference g_tex_ProjectableVGUI[ NUM_PROJECTABLE_VGUI ];
 
@@ -153,6 +162,7 @@ const ImageFormat fmt_gbuffer0 =
     const ImageFormat fmt_radNormal = IMAGE_FORMAT_RGBA8888;
     const ImageFormat fmt_radBuffer = IMAGE_FORMAT_RGBA16161616F;
     const ImageFormat fmt_rhRSMFlux = IMAGE_FORMAT_RGBA16161616F;
+    const ImageFormat fmt_rhRSMAlbedo = IMAGE_FORMAT_RGBA8888;
     const ImageFormat fmt_rhHalf = IMAGE_FORMAT_RGBA16161616F;
 
 	if ( fmt_depth == IMAGE_FORMAT_D16_SHADOW )
@@ -174,6 +184,7 @@ const ImageFormat fmt_gbuffer0 =
     // Keep normals point-sampled so filtering never blends unrelated surfaces.
     unsigned int rhRSMFluxFlags =      TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT | TEXTUREFLAGS_RENDERTARGET;
     unsigned int rhRSMNormalFlags =    TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT | TEXTUREFLAGS_RENDERTARGET | TEXTUREFLAGS_POINTSAMPLE;
+    unsigned int rhRSMAlbedoFlags =    TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT | TEXTUREFLAGS_RENDERTARGET | TEXTUREFLAGS_POINTSAMPLE;
     unsigned int rhHalfFlags =         TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT | TEXTUREFLAGS_RENDERTARGET | TEXTUREFLAGS_POINTSAMPLE;
 
 	materials->BeginRenderTargetAllocation();
@@ -283,6 +294,14 @@ const ImageFormat fmt_gbuffer0 =
             MATERIAL_RT_DEPTH_NONE,
             rhRSMNormalFlags, 0 ) );
 
+        g_tex_RHRSMAlbedo.Init( materials->CreateNamedRenderTargetTextureEx2(
+            DEFRTNAME_RH_RSM_ALBEDO,
+            RH_RSM_RESOLUTION, RH_RSM_RESOLUTION,
+            RT_SIZE_NO_CHANGE,
+            fmt_rhRSMAlbedo,
+            MATERIAL_RT_DEPTH_NONE,
+            rhRSMAlbedoFlags, 0 ) );
+
 #endif
 
 		for ( int i = 0; i < MAX_SHADOW_ORTHO; i++ )
@@ -373,6 +392,22 @@ const ImageFormat fmt_gbuffer0 =
 
         g_tex_RHVisibility.Init( materials->CreateNamedRenderTargetTextureEx2(
             DEFRTNAME_RH_VISIBILITY,
+            RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT,
+            RT_SIZE_NO_CHANGE,
+            fmt_radBuffer,
+            MATERIAL_RT_DEPTH_NONE,
+            radBufferFlags, 0 ) );
+
+        g_tex_RHSurfaceAlbedo.Init( materials->CreateNamedRenderTargetTextureEx2(
+            DEFRTNAME_RH_SURFACE_ALBEDO,
+            RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT,
+            RT_SIZE_NO_CHANGE,
+            fmt_radBuffer,
+            MATERIAL_RT_DEPTH_NONE,
+            radBufferFlags, 0 ) );
+
+        g_tex_RHSurfaceNormal.Init( materials->CreateNamedRenderTargetTextureEx2(
+            DEFRTNAME_RH_SURFACE_NORMAL,
             RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT,
             RT_SIZE_NO_CHANGE,
             fmt_radBuffer,
@@ -550,6 +585,24 @@ const ImageFormat fmt_gbuffer0 =
             g_tex_RHGeometry->Download();
         }
     }
+
+    if ( bInitial && !g_tex_RHGeometryDistance.IsValid() )
+    {
+        memset( g_RHGeometryDistanceData, 255, sizeof( g_RHGeometryDistanceData ) );
+        g_tex_RHGeometryDistance.Init( materials->CreateProceduralTexture(
+            DEFRTNAME_RH_GEOMETRY_DISTANCE,
+            TEXTURE_GROUP_OTHER,
+            RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT,
+            IMAGE_FORMAT_RGBA8888,
+            TEXTUREFLAGS_PROCEDURAL | TEXTUREFLAGS_NOMIP |
+            TEXTUREFLAGS_POINTSAMPLE | TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT ) );
+        Assert( g_tex_RHGeometryDistance.IsValid() );
+        if ( g_tex_RHGeometryDistance.IsValid() )
+        {
+            g_tex_RHGeometryDistance->SetTextureRegenerator( &g_RHGeometryDistanceTextureRegenerator );
+            g_tex_RHGeometryDistance->Download();
+        }
+    }
 #endif
 	
 	if (!bInitial)
@@ -705,6 +758,24 @@ ITexture *GetDefRT_RHRSMNormal()
     return g_tex_RHRSMNormal;
 }
 
+ITexture *GetDefRT_RHRSMAlbedo()
+{
+    Assert( g_tex_RHRSMAlbedo.IsValid() );
+    return g_tex_RHRSMAlbedo;
+}
+
+ITexture *GetDefRT_RHSurfaceAlbedo()
+{
+    Assert( g_tex_RHSurfaceAlbedo.IsValid() );
+    return g_tex_RHSurfaceAlbedo;
+}
+
+ITexture *GetDefRT_RHSurfaceNormal()
+{
+    Assert( g_tex_RHSurfaceNormal.IsValid() );
+    return g_tex_RHSurfaceNormal;
+}
+
 ITexture *GetDefRT_RHVisibility()
 {
     Assert( g_tex_RHVisibility.IsValid() );
@@ -724,6 +795,12 @@ ITexture *GetDefRT_RHGeometry()
     return g_tex_RHGeometry;
 }
 
+ITexture *GetDefRT_RHGeometryDistance()
+{
+    Assert( g_tex_RHGeometryDistance.IsValid() );
+    return g_tex_RHGeometryDistance;
+}
+
 void UpdateDefRT_RHGeometry( const unsigned char *pData, int nDataSize )
 {
     const int expectedSize = RH_ATLAS_WIDTH * RH_ATLAS_HEIGHT;
@@ -734,6 +811,18 @@ void UpdateDefRT_RHGeometry( const unsigned char *pData, int nDataSize )
 
     memcpy( g_RHGeometryData, pData, expectedSize );
     g_tex_RHGeometry->Download();
+}
+
+void UpdateDefRT_RHGeometryDistance( const unsigned char *pData, int nDataSize )
+{
+    const int expectedSize = RH_ATLAS_WIDTH * RH_ATLAS_HEIGHT;
+    Assert( pData != NULL );
+    Assert( nDataSize == expectedSize );
+    if ( pData == NULL || nDataSize != expectedSize || !g_tex_RHGeometryDistance.IsValid() )
+        return;
+
+    memcpy( g_RHGeometryDistanceData, pData, expectedSize );
+    g_tex_RHGeometryDistance->Download();
 }
 
 ITexture *GetDefRT_RadianceHints( int setIndex, int channelIndex )

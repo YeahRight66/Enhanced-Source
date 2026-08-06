@@ -4,7 +4,7 @@
 #include "defconstruct_vs30.inc"
 #include "radiosity_blend_ps30.inc"
 
-BEGIN_VS_SHADER( RADIOSITY_BLEND, "RH 5.0 half-resolution production reconstruction" )
+BEGIN_VS_SHADER( RADIOSITY_BLEND, "RH 6.0 hemisphere surface-aware reconstruction" )
     BEGIN_SHADER_PARAMS
         SHADER_PARAM( SHR0, SHADER_PARAM_TYPE_TEXTURE, "", "Filtered first-bounce red SH" )
         SHADER_PARAM( SHG0, SHADER_PARAM_TYPE_TEXTURE, "", "Filtered first-bounce green SH" )
@@ -15,6 +15,7 @@ BEGIN_VS_SHADER( RADIOSITY_BLEND, "RH 5.0 half-resolution production reconstruct
         SHADER_PARAM( SHB1, SHADER_PARAM_TYPE_TEXTURE, "", "Second-bounce blue SH" )
         SHADER_PARAM( META0, SHADER_PARAM_TYPE_TEXTURE, "", "Filtered first-bounce metadata" )
         SHADER_PARAM( GEOMETRY, SHADER_PARAM_TYPE_TEXTURE, "", "Conservative geometry occupancy volume" )
+        SHADER_PARAM( DISTANCE, SHADER_PARAM_TYPE_TEXTURE, "", "Conservative geometry distance field" )
     END_SHADER_PARAMS
 
     SHADER_INIT_PARAMS() {}
@@ -24,6 +25,7 @@ BEGIN_VS_SHADER( RADIOSITY_BLEND, "RH 5.0 half-resolution production reconstruct
         LoadTexture( SHR0 ); LoadTexture( SHG0 ); LoadTexture( SHB0 ); LoadTexture( VIS0 );
         LoadTexture( SHR1 ); LoadTexture( SHG1 ); LoadTexture( SHB1 ); LoadTexture( META0 );
         LoadTexture( GEOMETRY );
+        LoadTexture( DISTANCE );
     }
 
     SHADER_FALLBACK { return 0; }
@@ -48,6 +50,7 @@ BEGIN_VS_SHADER( RADIOSITY_BLEND, "RH 5.0 half-resolution production reconstruct
             pShaderShadow->EnableTexture( SHADER_SAMPLER8, true );
             pShaderShadow->EnableTexture( SHADER_SAMPLER9, true );
             pShaderShadow->EnableTexture( SHADER_SAMPLER10, true );
+            pShaderShadow->EnableTexture( SHADER_SAMPLER11, true );
 
             pShaderShadow->VertexShaderVertexFormat( VERTEX_POSITION, 1, NULL, 0 );
 
@@ -78,6 +81,7 @@ BEGIN_VS_SHADER( RADIOSITY_BLEND, "RH 5.0 half-resolution production reconstruct
             BindTexture( SHADER_SAMPLER6, SHR1 ); BindTexture( SHADER_SAMPLER7, SHG1 );
             BindTexture( SHADER_SAMPLER8, SHB1 ); BindTexture( SHADER_SAMPLER9, META0 );
             BindTexture( SHADER_SAMPLER10, GEOMETRY );
+            BindTexture( SHADER_SAMPLER11, DISTANCE );
 
             CommitBaseDeferredConstants_Frustum( pShaderAPI, VERTEX_SHADER_SHADER_SPECIFIC_CONST_0 );
             CommitBaseDeferredConstants_Origin( pShaderAPI, 0 );
@@ -90,7 +94,7 @@ BEGIN_VS_SHADER( RADIOSITY_BLEND, "RH 5.0 half-resolution production reconstruct
             ConVarRef maxRadiance( "deferred_rh_max_radiance" );
             ConVarRef geometryEnable( "deferred_rh_geometry_enable" );
             ConVarRef visibilityStrength( "deferred_rh_visibility_strength" );
-            ConVarRef visibilityDecay( "deferred_rh_visibility_decay" );
+            ConVarRef shadowExtinction( "deferred_rh_shadow_extinction" );
             ConVarRef shadowStrength( "deferred_rh_soft_shadow_strength" );
             ConVarRef shadowDistance( "deferred_rh_soft_shadow_distance" );
             ConVarRef shadowSoftness( "deferred_rh_soft_shadow_softness" );
@@ -99,6 +103,10 @@ BEGIN_VS_SHADER( RADIOSITY_BLEND, "RH 5.0 half-resolution production reconstruct
             ConVarRef receiverRadius( "deferred_rh_receiver_radius" );
             ConVarRef confidenceFloor( "deferred_rh_reconstruction_confidence_floor" );
             ConVarRef isotropicShadow( "deferred_rh_shadow_isotropic_blend" );
+            ConVarRef shadowStartCells( "deferred_rh_shadow_start_cells" );
+            ConVarRef shadowClearance( "deferred_rh_shadow_receiver_clearance" );
+            ConVarRef shadowContactStrength( "deferred_rh_shadow_contact_strength" );
+            ConVarRef shadowFarStrength( "deferred_rh_shadow_far_strength" );
 
             const Vector &origin = GetDeferredExt()->GetRadiosityData().vecOrigin[0];
             float c1[4] = { origin.x, origin.y, origin.z, 0.0f };
@@ -118,7 +126,7 @@ BEGIN_VS_SHADER( RADIOSITY_BLEND, "RH 5.0 half-resolution production reconstruct
                 clamp( saturation.GetFloat(), 0.0f, 2.0f ),
                 MAX( maxRadiance.GetFloat(), 0.25f ),
                 geometryEnable.GetBool() ? MAX( visibilityStrength.GetFloat(), 0.0f ) : 0.0f,
-                MAX( visibilityDecay.GetFloat(), 0.0f ) * ( 1.20f - 0.55f * softness )
+                MAX( shadowExtinction.GetFloat(), 0.0f ) * ( 1.20f - 0.55f * softness )
             };
             pShaderAPI->SetPixelShaderConstant( 3, c3 );
 
@@ -137,6 +145,14 @@ BEGIN_VS_SHADER( RADIOSITY_BLEND, "RH 5.0 half-resolution production reconstruct
                 clamp( isotropicShadow.GetFloat(), 0.0f, 1.0f )
             };
             pShaderAPI->SetPixelShaderConstant( 5, c5 );
+
+            float c6[4] = {
+                clamp( shadowStartCells.GetFloat(), 0.25f, 3.0f ),
+                clamp( shadowClearance.GetFloat(), 0.25f, 2.0f ),
+                MAX( shadowContactStrength.GetFloat(), 0.0f ),
+                MAX( shadowFarStrength.GetFloat(), 0.0f )
+            };
+            pShaderAPI->SetPixelShaderConstant( 6, c6 );
         }
 
         Draw();

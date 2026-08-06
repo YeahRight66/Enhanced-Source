@@ -21,7 +21,7 @@ ConVar deferred_rh_bounce_count(
     "Secondary RH bounces; the production SM3 path supports 0 or 1." );
 
 ConVar deferred_rh_bounce_gain(
-    "deferred_rh_bounce_gain", "0.20", FCVAR_ARCHIVE,
+    "deferred_rh_bounce_gain", "0.24", FCVAR_ARCHIVE,
     "Energy-bounded secondary-bounce gain." );
 
 ConVar deferred_rh_receiver_offset(
@@ -98,7 +98,7 @@ ConVar deferred_rh_geometry_hull_scale(
     "Half-extent of the conservative static-geometry cell hull, relative to RH cell size." );
 
 ConVar deferred_rh_soft_shadow_strength(
-    "deferred_rh_soft_shadow_strength", "0.85", FCVAR_ARCHIVE,
+    "deferred_rh_soft_shadow_strength", "1.05", FCVAR_ARCHIVE,
     "Strength of low-frequency RH indirect shadows." );
 
 ConVar deferred_rh_soft_shadow_distance(
@@ -110,7 +110,7 @@ ConVar deferred_rh_soft_shadow_softness(
     "Cone widening and blocker averaging for indirect penumbrae." );
 
 ConVar deferred_rh_soft_shadow_min_visibility(
-    "deferred_rh_soft_shadow_min_visibility", "0.12", FCVAR_ARCHIVE,
+    "deferred_rh_soft_shadow_min_visibility", "0.07", FCVAR_ARCHIVE,
     "Minimum indirect visibility under RH soft shadows." );
 
 ConVar deferred_rh_upsample_depth_scale(
@@ -170,6 +170,59 @@ ConVar deferred_rh_shadow_isotropic_blend(
     "deferred_rh_shadow_isotropic_blend", "0.25", FCVAR_ARCHIVE,
     "Adds local isotropic blocking when radiance direction is ambiguous." );
 
+
+// Hemisphere skylight projected into the RH volume. The colours come from the
+// global light's ambient-high/ambient-low values.
+ConVar deferred_rh_sky_enable(
+    "deferred_rh_sky_enable", "1", FCVAR_ARCHIVE,
+    "Injects geometry-shadowed upper/lower hemisphere skylight into RH." );
+ConVar deferred_rh_sky_intensity(
+    "deferred_rh_sky_intensity", "0.55", FCVAR_ARCHIVE,
+    "Overall hemisphere skylight intensity inside RH." );
+ConVar deferred_rh_sky_upper_scale(
+    "deferred_rh_sky_upper_scale", "1.0", FCVAR_ARCHIVE,
+    "Multiplier for global ambient-high hemisphere colour." );
+ConVar deferred_rh_sky_lower_scale(
+    "deferred_rh_sky_lower_scale", "0.30", FCVAR_ARCHIVE,
+    "Multiplier for global ambient-low hemisphere colour; true lower light is also produced by surface bounce." );
+ConVar deferred_rh_sky_occlusion(
+    "deferred_rh_sky_occlusion", "1.25", FCVAR_ARCHIVE,
+    "Geometry extinction applied to RH hemisphere skylight." );
+ConVar deferred_rh_sky_trace_distance(
+    "deferred_rh_sky_trace_distance", "8.0", FCVAR_ARCHIVE,
+    "Maximum local hemisphere visibility distance in RH cells." );
+ConVar deferred_rh_sky_replace_global_ambient(
+    "deferred_rh_sky_replace_global_ambient", "1", FCVAR_ARCHIVE,
+    "Uses ambient-high/ambient-low as shadowed RH sky only and suppresses the duplicate unshadowed global ambient pass." );
+
+// Surface-aware secondary bounce.
+ConVar deferred_rh_surface_bounce_gain(
+    "deferred_rh_surface_bounce_gain", "0.85", FCVAR_ARCHIVE,
+    "Lambertian surface re-emission gain before secondary transport." );
+ConVar deferred_rh_surface_radius(
+    "deferred_rh_surface_radius", "1.35", FCVAR_ARCHIVE,
+    "RSM surface-material gather radius in RH cell units." );
+ConVar deferred_rh_surface_min_coverage(
+    "deferred_rh_surface_min_coverage", "0.04", FCVAR_ARCHIVE,
+    "Minimum RSM surface coverage required to generate a secondary bounce." );
+
+// Receiver/cone anti-self-intersection and independent shadow extinction.
+ConVar deferred_rh_shadow_extinction(
+    "deferred_rh_shadow_extinction", "1.30", FCVAR_ARCHIVE,
+    "Optical extinction for low-frequency indirect shadows." );
+ConVar deferred_rh_shadow_start_cells(
+    "deferred_rh_shadow_start_cells", "0.70", FCVAR_ARCHIVE,
+    "Distance from the cleared receiver at which the indirect-shadow cone starts." );
+ConVar deferred_rh_shadow_receiver_clearance(
+    "deferred_rh_shadow_receiver_clearance", "0.70", FCVAR_ARCHIVE,
+    "Normal-space receiver clearance in RH cells used to avoid floor/wall self-shadowing." );
+ConVar deferred_rh_shadow_contact_strength(
+    "deferred_rh_shadow_contact_strength", "1.0", FCVAR_ARCHIVE,
+    "Near-field blocker weight in RH indirect shadows." );
+ConVar deferred_rh_shadow_far_strength(
+    "deferred_rh_shadow_far_strength", "0.65", FCVAR_ARCHIVE,
+    "Far-field blocker weight in RH indirect shadows." );
+
 ConVar deferred_rh_debug_mode(
     "deferred_rh_debug_mode", "0", FCVAR_NONE,
     "RH debug mode. 0=off, 1=volume bounds/RSM status." );
@@ -180,7 +233,7 @@ ConVar deferred_rh_min_visibility(
     "Legacy compatibility setting; retained for existing configs." );
 ConVar deferred_rh_validity_boost(
     "deferred_rh_validity_boost", "1.0", FCVAR_ARCHIVE,
-    "Legacy compatibility setting; RH 4.0 derives confidence from SH energy." );
+    "Legacy compatibility setting; RH6 derives confidence from SH energy." );
 ConVar deferred_rh_geometry_enable(
     "deferred_rh_geometry_enable", "1", FCVAR_ARCHIVE,
     "Enables directional RH visibility and soft indirect shadows." );

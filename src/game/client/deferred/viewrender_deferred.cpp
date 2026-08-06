@@ -381,6 +381,11 @@ abstract_class CBaseShadowView : public CBaseWorldViewDeferred
 public:
 	CBaseShadowView(CViewRender *pMainView) : CBaseWorldViewDeferred( pMainView )
 	{
+		m_pDepthTexture = NULL;
+		m_pDummyTexture = NULL;
+		m_pRadAlbedoTexture = NULL;
+		m_pRadNormalTexture = NULL;
+		m_pRadRawAlbedoTexture = NULL;
 		m_bOutputRadiosity = false;
 	};
 
@@ -388,8 +393,9 @@ public:
 						ITexture *pDepthTexture,
 						ITexture *pDummyTexture );
 	void			SetupRadiosityTargets(
-						ITexture *pAlbedoTexture,
-						ITexture *pNormalTexture );
+						ITexture *pFluxTexture,
+						ITexture *pNormalTexture,
+						ITexture *pRawAlbedoTexture );
 
 	void SetRadiosityOutputEnabled( bool bEnabled );
 	void AddVisibilityOrigin( const Vector &visibilityOrigin );
@@ -410,6 +416,7 @@ private:
 	ITexture *m_pDummyTexture;
 	ITexture *m_pRadAlbedoTexture;
 	ITexture *m_pRadNormalTexture;
+	ITexture *m_pRadRawAlbedoTexture;
 	ViewCustomVisibility_t shadowVis;
 
 	bool m_bOutputRadiosity;
@@ -981,6 +988,20 @@ void CDeferredViewRender::PerformLighting( const CViewSetup &view )
 				render->ViewSetupVis( false, 2, origins );
 				RenderCascadedShadows( view );
 			}
+
+			// The stock global-light pass adds ambient-high/ambient-low directly and
+			// without RH geometry visibility. RH6 already consumed the original
+			// colours during PerformRadiositySky(), so commit a direct-light copy with
+			// zero ambient before the fullscreen global pass. This avoids double
+			// lighting and allows RH sky occlusion to remain visible.
+			if ( bRHEnabled && deferred_rh_sky_enable.GetBool() &&
+				deferred_rh_sky_replace_global_ambient.GetBool() )
+			{
+				defData_setGlobalLightState directLightState = lightDataState;
+				directLightState.state.ambh.Init();
+				directLightState.state.ambl.Init();
+				QUEUE_FIRE( defData_setGlobalLightState, Fire, directLightState );
+			}
 		}
 		else
 		{
@@ -1063,6 +1084,18 @@ void CDeferredViewRender::BeginRadiosity( const CViewSetup &view )
 	}
 
 	pRenderContext->PushRenderTargetAndViewport( GetDefRT_RHVisibility(), NULL,
+		0, 0, RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT );
+	pRenderContext->ClearColor4ub( 0, 0, 0, 0 );
+	pRenderContext->ClearBuffers( true, false );
+	pRenderContext->PopRenderTargetAndViewport();
+
+	pRenderContext->PushRenderTargetAndViewport( GetDefRT_RHSurfaceAlbedo(), NULL,
+		0, 0, RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT );
+	pRenderContext->ClearColor4ub( 0, 0, 0, 0 );
+	pRenderContext->ClearBuffers( true, false );
+	pRenderContext->PopRenderTargetAndViewport();
+
+	pRenderContext->PushRenderTargetAndViewport( GetDefRT_RHSurfaceNormal(), NULL,
 		0, 0, RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT );
 	pRenderContext->ClearColor4ub( 0, 0, 0, 0 );
 	pRenderContext->ClearBuffers( true, false );
@@ -1169,6 +1202,43 @@ void CDeferredViewRender::StampRadiosityDynamicModels( const Vector &origin, flo
     }
 }
 
+void CDeferredViewRender::BuildRadiosityDistanceField()
+{
+    const int cellCount = RH_ATLAS_WIDTH * RH_ATLAS_HEIGHT;
+    if ( m_RHGeometryDistance.Count() != cellCount )
+        m_RHGeometryDistance.SetCount( cellCount );
+
+    // Conservative six-neighbour chamfer distance in cell units. The field is
+    // intentionally Manhattan rather than Euclidean: it is cheap, monotonic,
+    // and safe for adaptive cone stepping near thin Source brush geometry.
+    for ( int i = 0; i < cellCount; ++i )
+        m_RHGeometryDistance[i] = m_RHCombinedGeometry[i] > 0 ? 0 : 255;
+
+    for ( int z = 0; z < RH_VOLUME_SIZE; ++z )
+    for ( int y = 0; y < RH_VOLUME_SIZE; ++y )
+    for ( int x = 0; x < RH_VOLUME_SIZE; ++x )
+    {
+        const int index = RHGeometryAtlasIndex( x, y, z );
+        int value = m_RHGeometryDistance[index];
+        if ( x > 0 ) value = MIN( value, (int)m_RHGeometryDistance[ RHGeometryAtlasIndex( x - 1, y, z ) ] + 1 );
+        if ( y > 0 ) value = MIN( value, (int)m_RHGeometryDistance[ RHGeometryAtlasIndex( x, y - 1, z ) ] + 1 );
+        if ( z > 0 ) value = MIN( value, (int)m_RHGeometryDistance[ RHGeometryAtlasIndex( x, y, z - 1 ) ] + 1 );
+        m_RHGeometryDistance[index] = (unsigned char)MIN( value, 255 );
+    }
+
+    for ( int z = RH_VOLUME_SIZE - 1; z >= 0; --z )
+    for ( int y = RH_VOLUME_SIZE - 1; y >= 0; --y )
+    for ( int x = RH_VOLUME_SIZE - 1; x >= 0; --x )
+    {
+        const int index = RHGeometryAtlasIndex( x, y, z );
+        int value = m_RHGeometryDistance[index];
+        if ( x + 1 < RH_VOLUME_SIZE ) value = MIN( value, (int)m_RHGeometryDistance[ RHGeometryAtlasIndex( x + 1, y, z ) ] + 1 );
+        if ( y + 1 < RH_VOLUME_SIZE ) value = MIN( value, (int)m_RHGeometryDistance[ RHGeometryAtlasIndex( x, y + 1, z ) ] + 1 );
+        if ( z + 1 < RH_VOLUME_SIZE ) value = MIN( value, (int)m_RHGeometryDistance[ RHGeometryAtlasIndex( x, y, z + 1 ) ] + 1 );
+        m_RHGeometryDistance[index] = (unsigned char)MIN( value, 255 );
+    }
+}
+
 void CDeferredViewRender::UpdateRadiosityGeometry()
 {
     const int cellCount = RH_ATLAS_WIDTH * RH_ATLAS_HEIGHT;
@@ -1184,8 +1254,12 @@ void CDeferredViewRender::UpdateRadiosityGeometry()
     {
         memset( m_RHStaticGeometry.Base(), 0, cellCount );
         memset( m_RHCombinedGeometry.Base(), 0, cellCount );
+        if ( m_RHGeometryDistance.Count() != cellCount )
+            m_RHGeometryDistance.SetCount( cellCount );
+        memset( m_RHGeometryDistance.Base(), 255, cellCount );
         m_bRHGeometryValid = false;
         UpdateDefRT_RHGeometry( m_RHCombinedGeometry.Base(), cellCount );
+        UpdateDefRT_RHGeometryDistance( m_RHGeometryDistance.Base(), cellCount );
         return;
     }
 
@@ -1248,7 +1322,9 @@ void CDeferredViewRender::UpdateRadiosityGeometry()
 
     memcpy( m_RHCombinedGeometry.Base(), m_RHStaticGeometry.Base(), cellCount );
     StampRadiosityDynamicModels( origin, cellSize );
+    BuildRadiosityDistanceField();
     UpdateDefRT_RHGeometry( m_RHCombinedGeometry.Base(), cellCount );
+    UpdateDefRT_RHGeometryDistance( m_RHGeometryDistance.Base(), cellCount );
 }
 
 void CDeferredViewRender::UpdateRadiosityPosition()
@@ -1282,7 +1358,7 @@ void CDeferredViewRender::RenderRadianceHintsRSM( const CViewSetup &view )
 		CRefPtr<CRadianceHintsRSMView> pBackRSM = new CRadianceHintsRSMView(
 			this, m_vecRadiosityOrigin[0], extent, cellSize, true );
 		pBackRSM->Setup( view, GetDefRT_RHRSMDepth(), GetDefRT_RHRSMColor() );
-		pBackRSM->SetupRadiosityTargets( GetDefRT_RHRSMFlux(), GetDefRT_RHRSMNormal() );
+		pBackRSM->SetupRadiosityTargets( GetDefRT_RHRSMFlux(), GetDefRT_RHRSMNormal(), GetDefRT_RHRSMAlbedo() );
 		pBackRSM->SetRadiosityOutputEnabled( true );
 		pBackRSM->AddVisibilityOrigin( view.origin );
 		for ( int sx = -1; sx <= 1; sx += 2 )
@@ -1294,6 +1370,7 @@ void CDeferredViewRender::RenderRadianceHintsRSM( const CViewSetup &view )
 		CMatRenderContextPtr pRenderContext( materials );
 		pRenderContext->SetIntRenderingParameter( INT_RENDERPARM_DEFERRED_RADIOSITY_CASCADE, 1 );
 		PerformRadiosityVisibility();
+		PerformRadiositySurface();
 	}
 
 	// Sun-facing RSM supplies actual reflected flux and the other half of the
@@ -1302,7 +1379,7 @@ void CDeferredViewRender::RenderRadianceHintsRSM( const CViewSetup &view )
 	CRefPtr<CRadianceHintsRSMView> pRSM = new CRadianceHintsRSMView(
 		this, m_vecRadiosityOrigin[0], extent, cellSize, false );
 	pRSM->Setup( view, GetDefRT_RHRSMDepth(), GetDefRT_RHRSMColor() );
-	pRSM->SetupRadiosityTargets( GetDefRT_RHRSMFlux(), GetDefRT_RHRSMNormal() );
+	pRSM->SetupRadiosityTargets( GetDefRT_RHRSMFlux(), GetDefRT_RHRSMNormal(), GetDefRT_RHRSMAlbedo() );
 	pRSM->SetRadiosityOutputEnabled( true );
 	pRSM->AddVisibilityOrigin( view.origin );
 	for ( int sx = -1; sx <= 1; sx += 2 )
@@ -1312,11 +1389,14 @@ void CDeferredViewRender::RenderRadianceHintsRSM( const CViewSetup &view )
 	AddViewToScene( pRSM );
 
 	PerformRadiosityGlobal();
+	if ( deferred_rh_sky_enable.GetBool() )
+		PerformRadiositySky();
 	{
 		CMatRenderContextPtr pRenderContext( materials );
 		pRenderContext->SetIntRenderingParameter( INT_RENDERPARM_DEFERRED_RADIOSITY_CASCADE, 0 );
 	}
 	PerformRadiosityVisibility();
+	PerformRadiositySurface();
 	PerformRadiosityFilter();
 	m_bRadianceHintsInjected = true;
 }
@@ -1331,6 +1411,30 @@ void CDeferredViewRender::PerformRadiosityGlobal()
 	pRenderContext->SetRenderTargetEx( 2, GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_B ) );
 	pRenderContext->SetRenderTargetEx( 3, GetDefRT_RadianceHints( 0, RH_CHANNEL_META ) );
 	pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_GLOBAL ) );
+	GetRadianceHintsVolumeMesh()->Draw();
+	pRenderContext->PopRenderTargetAndViewport();
+}
+
+void CDeferredViewRender::PerformRadiositySky()
+{
+	CMatRenderContextPtr pRenderContext( materials );
+	pRenderContext->PushRenderTargetAndViewport( GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_R ), NULL,
+		0, 0, RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT );
+	pRenderContext->SetRenderTargetEx( 1, GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_G ) );
+	pRenderContext->SetRenderTargetEx( 2, GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_B ) );
+	pRenderContext->SetRenderTargetEx( 3, GetDefRT_RadianceHints( 0, RH_CHANNEL_META ) );
+	pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_SKY ) );
+	GetRadianceHintsVolumeMesh()->Draw();
+	pRenderContext->PopRenderTargetAndViewport();
+}
+
+void CDeferredViewRender::PerformRadiositySurface()
+{
+	CMatRenderContextPtr pRenderContext( materials );
+	pRenderContext->PushRenderTargetAndViewport( GetDefRT_RHSurfaceAlbedo(), NULL,
+		0, 0, RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT );
+	pRenderContext->SetRenderTargetEx( 1, GetDefRT_RHSurfaceNormal() );
+	pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_SURFACE ) );
 	GetRadianceHintsVolumeMesh()->Draw();
 	pRenderContext->PopRenderTargetAndViewport();
 }
@@ -1359,7 +1463,7 @@ void CDeferredViewRender::PerformRadiosityFilter()
 	GetRadianceHintsVolumeMesh()->Draw();
 	pRenderContext->PopRenderTargetAndViewport();
 
-	// Pass 1: tetrahedral reconstruction, set 1 -> set 0. This is the final first-bounce field.
+	// Pass 1: reflection-invariant eight-corner reconstruction, set 1 -> set 0. This is the final first-bounce field.
 	pRenderContext->PushRenderTargetAndViewport( GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_R ), NULL,
 		0, 0, RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT );
 	pRenderContext->SetRenderTargetEx( 1, GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_G ) );
@@ -1376,11 +1480,23 @@ void CDeferredViewRender::EndRadiosity( const CViewSetup &view )
 	if ( bounceCount > 0 )
 	{
 		CMatRenderContextPtr pRenderContext( materials );
+
+		// Stage 1: convert incoming first-bounce/hemisphere irradiance at RSM
+		// surfaces into an outward Lambertian radiance hemisphere.
 		pRenderContext->PushRenderTargetAndViewport( GetDefRT_RadianceHints( 1, RH_CHANNEL_SH_R ), NULL,
 			0, 0, RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT );
 		pRenderContext->SetRenderTargetEx( 1, GetDefRT_RadianceHints( 1, RH_CHANNEL_SH_G ) );
 		pRenderContext->SetRenderTargetEx( 2, GetDefRT_RadianceHints( 1, RH_CHANNEL_SH_B ) );
 		pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_0 ) );
+		GetRadianceHintsVolumeMesh()->Draw();
+		pRenderContext->PopRenderTargetAndViewport();
+
+		// Stage 2: move the generated surface radiance through the blocker field.
+		pRenderContext->PushRenderTargetAndViewport( GetDefRT_RadianceHints( 2, RH_CHANNEL_SH_R ), NULL,
+			0, 0, RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT );
+		pRenderContext->SetRenderTargetEx( 1, GetDefRT_RadianceHints( 2, RH_CHANNEL_SH_G ) );
+		pRenderContext->SetRenderTargetEx( 2, GetDefRT_RadianceHints( 2, RH_CHANNEL_SH_B ) );
+		pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_1 ) );
 		GetRadianceHintsVolumeMesh()->Draw();
 		pRenderContext->PopRenderTargetAndViewport();
 	}
@@ -1410,7 +1526,7 @@ void CDeferredViewRender::DebugRadiosity( const CViewSetup &view )
 	const Vector maximum = origin + Vector( extent, extent, extent );
 	DebugDrawCross( origin, cellSize * 0.4f, -1.0f );
 	DebugDrawCross( maximum, cellSize * 0.4f, -1.0f );
-	engine->Con_NPrintf( 20, "RH5.0 preset %s | grid %i | RSM %i | origin %.1f %.1f %.1f | injected %i",
+	engine->Con_NPrintf( 20, "RH6.0 HEMISPHERE preset %s | grid %i | RSM %i | origin %.1f %.1f %.1f | injected %i",
 		RH_QUALITY_PRESET == RH_PRESET_HIGH ? "HIGH" : "BALANCED",
 		RH_VOLUME_SIZE, RH_RSM_RESOLUTION, origin.x, origin.y, origin.z,
 		m_bRadianceHintsInjected ? 1 : 0 );
@@ -3521,10 +3637,11 @@ void CBaseShadowView::Setup( const CViewSetup &view, ITexture *pDepthTexture, IT
 	shadowVis.AddVisOrigin( origin );
 }
 
-void CBaseShadowView::SetupRadiosityTargets( ITexture *pAlbedoTexture, ITexture *pNormalTexture )
+void CBaseShadowView::SetupRadiosityTargets( ITexture *pFluxTexture, ITexture *pNormalTexture, ITexture *pRawAlbedoTexture )
 {
-	m_pRadAlbedoTexture = pAlbedoTexture;
+	m_pRadAlbedoTexture = pFluxTexture;
 	m_pRadNormalTexture = pNormalTexture;
+	m_pRadRawAlbedoTexture = pRawAlbedoTexture;
 }
 
 void CBaseShadowView::Draw()
@@ -3572,6 +3689,7 @@ void CBaseShadowView::PushView( float waterHeight )
 	{
 		Assert( !IsErrorTexture( m_pRadAlbedoTexture ) );
 		Assert( !IsErrorTexture( m_pRadNormalTexture ) );
+		Assert( !IsErrorTexture( m_pRadRawAlbedoTexture ) );
 
 		pRenderContext->PushRenderTargetAndViewport( m_pRadAlbedoTexture );
 		pRenderContext->ClearColor4ub( 0, 0, 0, 0 );
@@ -3579,6 +3697,11 @@ void CBaseShadowView::PushView( float waterHeight )
 		pRenderContext->PopRenderTargetAndViewport();
 
 		pRenderContext->PushRenderTargetAndViewport( m_pRadNormalTexture );
+		pRenderContext->ClearColor4ub( 0, 0, 0, 0 );
+		pRenderContext->ClearBuffers( true, false );
+		pRenderContext->PopRenderTargetAndViewport();
+
+		pRenderContext->PushRenderTargetAndViewport( m_pRadRawAlbedoTexture );
 		pRenderContext->ClearColor4ub( 0, 0, 0, 0 );
 		pRenderContext->ClearBuffers( true, false );
 		pRenderContext->PopRenderTargetAndViewport();
@@ -3598,6 +3721,7 @@ void CBaseShadowView::PushView( float waterHeight )
 	{
 		pRenderContext->SetRenderTargetEx( 1, m_pRadAlbedoTexture );
 		pRenderContext->SetRenderTargetEx( 2, m_pRadNormalTexture );
+		pRenderContext->SetRenderTargetEx( 3, m_pRadRawAlbedoTexture );
 	}
 }
 
