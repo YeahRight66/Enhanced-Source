@@ -3,6 +3,7 @@
 
 // Runtime controls. None of these require shader recompilation.
 extern ConVar deferred_rh_cell_size;
+extern ConVar deferred_rh_gather_radius_cells;
 extern ConVar deferred_rh_world_spread;
 extern ConVar deferred_rh_injection_gain;
 extern ConVar deferred_rh_bounce_count;
@@ -24,6 +25,9 @@ extern ConVar deferred_rh_visibility_decay;
 extern ConVar deferred_rh_geometry_strength;
 extern ConVar deferred_rh_geometry_min_transmittance;
 extern ConVar deferred_rh_geometry_bias;
+extern ConVar deferred_rh_cpu_geometry_enable;
+extern ConVar deferred_rh_dynamic_model_blockers;
+extern ConVar deferred_rh_geometry_hull_scale;
 
 // Low-frequency indirect shadows.
 extern ConVar deferred_rh_soft_shadow_strength;

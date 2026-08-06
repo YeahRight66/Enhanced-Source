@@ -101,10 +101,12 @@ PS_OUTPUT main( const PS_INPUT In )
 	lightDirection = lerp( float3( 0.0f, 0.0f, 1.0f ), lightDirection, lightValid );
 
 	float directCosine = saturate( dot( normal, lightDirection ) );
-	// Store HDR directly-lit diffuse flux. Negative material/light values are
-	// rejected before they can poison the signed SH volume.
-	float3 flux = max( albedo.rgb, 0.0f ) * max( g_vecRHLightDiffuse, 0.0f ) * directCosine;
-	Out.vColor_1 = float4( min( flux, 60000.0f ), saturate( albedo.a ) );
+	// Store Lambertian exitant radiance. Injection integrates this over the
+	// projected RSM area; the sun cosine belongs here while the separate
+	// emitter-to-cell cosine belongs to the transport geometry term.
+	float3 reflectedRadiance = max( albedo.rgb, 0.0f )
+		* max( g_vecRHLightDiffuse, 0.0f ) * ( directCosine * 0.3183098862f );
+	Out.vColor_1 = float4( min( reflectedRadiance, 60000.0f ), saturate( albedo.a ) );
 	Out.vColor_2 = float4( normal * 0.5f + 0.5f, 1.0f );
 #endif
 

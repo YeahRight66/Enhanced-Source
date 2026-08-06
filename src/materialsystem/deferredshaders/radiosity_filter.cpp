@@ -4,16 +4,22 @@
 #include "radiosity_filter_ps30.inc"
 #include "radiosity_propagate_vs30.inc"
 
-BEGIN_VS_SHADER( RADIOSITY_FILTER, "RH 4.2 confidence/visibility-aware spatial reconstruction" )
+BEGIN_VS_SHADER( RADIOSITY_FILTER, "RH 5.0 confidence/visibility-aware spatial reconstruction" )
     BEGIN_SHADER_PARAMS
         SHADER_PARAM( SHR, SHADER_PARAM_TYPE_TEXTURE, "", "Raw red SH volume" )
         SHADER_PARAM( SHG, SHADER_PARAM_TYPE_TEXTURE, "", "Raw green SH volume" )
         SHADER_PARAM( SHB, SHADER_PARAM_TYPE_TEXTURE, "", "Raw blue SH volume" )
         SHADER_PARAM( META, SHADER_PARAM_TYPE_TEXTURE, "", "Raw injection metadata" )
         SHADER_PARAM( VIS, SHADER_PARAM_TYPE_TEXTURE, "", "Directional visibility volume" )
+        SHADER_PARAM( GEOMETRY, SHADER_PARAM_TYPE_TEXTURE, "", "Conservative geometry occupancy volume" )
+        SHADER_PARAM( FILTERPHASE, SHADER_PARAM_TYPE_INTEGER, "0", "0=axial, 1=tetrahedral" )
     END_SHADER_PARAMS
 
-    SHADER_INIT_PARAMS() {}
+    SHADER_INIT_PARAMS()
+    {
+        if ( !params[FILTERPHASE]->IsDefined() )
+            params[FILTERPHASE]->SetIntValue( 0 );
+    }
 
     SHADER_INIT
     {
@@ -22,6 +28,7 @@ BEGIN_VS_SHADER( RADIOSITY_FILTER, "RH 4.2 confidence/visibility-aware spatial r
         LoadTexture( SHB );
         LoadTexture( META );
         LoadTexture( VIS );
+        LoadTexture( GEOMETRY );
     }
 
     SHADER_FALLBACK { return 0; }
@@ -39,6 +46,7 @@ BEGIN_VS_SHADER( RADIOSITY_FILTER, "RH 4.2 confidence/visibility-aware spatial r
             pShaderShadow->EnableTexture( SHADER_SAMPLER2, true );
             pShaderShadow->EnableTexture( SHADER_SAMPLER3, true );
             pShaderShadow->EnableTexture( SHADER_SAMPLER4, true );
+            pShaderShadow->EnableTexture( SHADER_SAMPLER5, true );
 
             int texCoordDimensions[] = { 2 };
             pShaderShadow->VertexShaderVertexFormat(
@@ -47,6 +55,7 @@ BEGIN_VS_SHADER( RADIOSITY_FILTER, "RH 4.2 confidence/visibility-aware spatial r
             DECLARE_STATIC_VERTEX_SHADER( radiosity_propagate_vs30 );
             SET_STATIC_VERTEX_SHADER( radiosity_propagate_vs30 );
             DECLARE_STATIC_PIXEL_SHADER( radiosity_filter_ps30 );
+            SET_STATIC_PIXEL_SHADER_COMBO( FILTER_PHASE, params[FILTERPHASE]->GetIntValue() != 0 ? 1 : 0 );
             SET_STATIC_PIXEL_SHADER( radiosity_filter_ps30 );
         }
         DYNAMIC_STATE
@@ -62,6 +71,7 @@ BEGIN_VS_SHADER( RADIOSITY_FILTER, "RH 4.2 confidence/visibility-aware spatial r
             BindTexture( SHADER_SAMPLER2, SHB );
             BindTexture( SHADER_SAMPLER3, META );
             BindTexture( SHADER_SAMPLER4, VIS );
+            BindTexture( SHADER_SAMPLER5, GEOMETRY );
 
             ConVarRef filterStrength( "deferred_rh_filter_strength" );
             ConVarRef fillBoost( "deferred_rh_filter_fill_boost" );
@@ -91,6 +101,7 @@ BEGIN_VS_SHADER( RADIOSITY_FILTER, "RH 4.2 confidence/visibility-aware spatial r
 
             float c2[4] = { MAX( maxRadiance.GetFloat(), 0.25f ), 0.0f, 0.0f, 0.0f };
             pShaderAPI->SetPixelShaderConstant( 2, c2 );
+
         }
         Draw();
     }

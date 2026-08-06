@@ -3,7 +3,7 @@
 #include "screenspace_vs30.inc"
 #include "radiosity_upsample_ps30.inc"
 
-BEGIN_VS_SHADER( RADIOSITY_UPSAMPLE, "RH 4.2 depth/normal bilateral upsample" )
+BEGIN_VS_SHADER( RADIOSITY_UPSAMPLE, "RH 5.0 depth/normal bilateral upsample" )
 	BEGIN_SHADER_PARAMS
 		SHADER_PARAM( BASETEXTURE, SHADER_PARAM_TYPE_TEXTURE, "", "Half-resolution RH indirect buffer" )
 	END_SHADER_PARAMS

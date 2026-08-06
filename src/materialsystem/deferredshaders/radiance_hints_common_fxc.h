@@ -119,8 +119,12 @@ float RH_MetaBlockerDistance( float4 meta, float maximumDistanceCells )
 
 float RH_EnergySimilarity( float centerEnergy, float sampleEnergy, float scale )
 {
-    float difference = abs( centerEnergy - sampleEnergy );
-    return 1.0f / ( 1.0f + max( scale, 0.0f ) * difference );
+    // Compare logarithmic energy so the same threshold works in dark rooms and
+    // near bright sun-bounce cells. Raw normalized differences over-reject
+    // useful gradients while still allowing isolated fireflies to spread.
+    float centerLog = log2( 1.0f + max( centerEnergy, 0.0f ) * 16.0f );
+    float sampleLog = log2( 1.0f + max( sampleEnergy, 0.0f ) * 16.0f );
+    return exp2( -abs( centerLog - sampleLog ) * max( scale, 0.0f ) );
 }
 
 float RH_DirectionalConfidence( float4 shR, float4 shG, float4 shB )

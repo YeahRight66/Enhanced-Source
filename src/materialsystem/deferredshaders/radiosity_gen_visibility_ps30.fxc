@@ -94,7 +94,7 @@ float4 main( const PS_INPUT In ) : COLOR0
     const float normalInfluence = saturate( g_vecDecay.w );
 
     float4 visibilitySH = 0.0f;
-    float validWeight = 0.0f;
+    const float sampleNormalization = 1.0f / RH_VISIBILITY_SAMPLE_COUNT;
 
     // Critical for the legacy ps_3_0 compiler: keep one loop body and reuse
     // temporaries. The previous six compile-time-expanded helper calls could
@@ -206,14 +206,12 @@ float4 main( const PS_INPUT In ) : COLOR0
                 visibilitySH +=
                     RH_ProjectDirection(
                         directionToBlocker ) *
-                    ( occupancy * g_vecPass.x );
-
-                validWeight += valid;
+                    ( occupancy * g_vecPass.x * sampleNormalization );
             }
         }
     }
 
-    visibilitySH /= max( validWeight, 1.0f );
-
+    // Fixed pattern normalization is essential: blocker strength must not
+    // change because unrelated RSM samples happened to contain valid depth.
     return RH_LimitVisibilitySH( visibilitySH );
 }

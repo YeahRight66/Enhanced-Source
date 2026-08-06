@@ -1,10 +1,11 @@
 "RADIOSITY_BLEND"
 {
-	"$SHR0"		"_rt_rh_sh_r_00"
-	"$SHG0"		"_rt_rh_sh_g_00"
-	"$SHB0"		"_rt_rh_sh_b_00"
-	"$VIS0"		"_rt_rh_visibility_00"
-	"$SHR1"		"_rt_rh_sh_r_01"
-	"$SHG1"		"_rt_rh_sh_g_01"
-	"$SHB1"		"_rt_rh_sh_b_01"
+	"$SHR0"		"_rt_rh_sh_r_01"
+	"$SHG0"		"_rt_rh_sh_g_01"
+	"$SHB0"		"_rt_rh_sh_b_01"
+	"$VIS0"		"_rt_rh_visibility"
+	"$SHR1"		"_rt_rh_sh_r_00"
+	"$SHG1"		"_rt_rh_sh_g_00"
+	"$SHB1"		"_rt_rh_sh_b_00"
+	"$META0"		"_rt_rh_meta_01"
 }

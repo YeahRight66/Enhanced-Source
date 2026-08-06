@@ -4,6 +4,10 @@
 #include "../../../materialsystem/deferredshaders/radiance_hints_config.h"
 
 #include "materialsystem/itexture.h"
+#include "materialsystem/imaterialsystem.h"
+#include "vtf/vtf.h"
+#include "texture_group_names.h"
+#include <string.h>
 
 static CTextureReference g_tex_Normals;
 static CTextureReference g_tex_Depth;
@@ -40,6 +44,46 @@ static CTextureReference g_tex_ShadowDepth_DP[ MAX_SHADOW_DP ];
 static CTextureReference g_tex_RadianceHints[ RH_SET_COUNT ][ RH_CHANNEL_COUNT ];
 static CTextureReference g_tex_RHVisibility;
 static CTextureReference g_tex_RHIndirectHalf;
+static CTextureReference g_tex_RHGeometry;
+
+static unsigned char g_RHGeometryData[ RH_ATLAS_WIDTH * RH_ATLAS_HEIGHT ];
+
+class CRHGeometryTextureRegenerator : public ITextureRegenerator
+{
+public:
+    virtual void RegenerateTextureBits( ITexture *pTexture, IVTFTexture *pVTFTexture, Rect_t *pRect )
+    {
+        (void)pTexture;
+        (void)pRect;
+        Assert( pTexture != NULL );
+        Assert( pVTFTexture != NULL );
+        Assert( pVTFTexture->Width() == RH_ATLAS_WIDTH );
+        Assert( pVTFTexture->Height() == RH_ATLAS_HEIGHT );
+        Assert( pVTFTexture->Format() == IMAGE_FORMAT_RGBA8888 );
+
+        unsigned char *pDst = pVTFTexture->ImageData( 0, 0, 0 );
+        const int rowStride = pVTFTexture->RowSizeInBytes( 0 );
+        for ( int y = 0; y < RH_ATLAS_HEIGHT; ++y )
+        {
+            unsigned char *pRow = pDst + y * rowStride;
+            const unsigned char *pSrc = g_RHGeometryData + y * RH_ATLAS_WIDTH;
+            for ( int x = 0; x < RH_ATLAS_WIDTH; ++x )
+            {
+                const unsigned char occupancy = pSrc[x];
+                pRow[x * 4 + 0] = occupancy;
+                pRow[x * 4 + 1] = occupancy;
+                pRow[x * 4 + 2] = occupancy;
+                pRow[x * 4 + 3] = 255;
+            }
+        }
+    }
+
+    // Static lifetime: the material system may release the callback during a
+    // mode switch, but the singleton itself must not be deleted.
+    virtual void Release() {}
+};
+
+static CRHGeometryTextureRegenerator g_RHGeometryTextureRegenerator;
 
 static CTextureReference g_tex_ProjectableVGUI[ NUM_PROJECTABLE_VGUI ];
 
@@ -485,6 +529,28 @@ const ImageFormat fmt_gbuffer0 =
 	
 
 	materials->EndRenderTargetAllocation();
+
+
+#if DEFCFG_ENABLE_RADIOSITY
+    if ( bInitial && !g_tex_RHGeometry.IsValid() )
+    {
+        memset( g_RHGeometryData, 0, sizeof( g_RHGeometryData ) );
+        g_tex_RHGeometry.Init( materials->CreateProceduralTexture(
+            DEFRTNAME_RH_GEOMETRY,
+            TEXTURE_GROUP_OTHER,
+            RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT,
+            IMAGE_FORMAT_RGBA8888,
+            TEXTUREFLAGS_PROCEDURAL | TEXTUREFLAGS_NOMIP |
+            TEXTUREFLAGS_POINTSAMPLE | TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT ) );
+
+        Assert( g_tex_RHGeometry.IsValid() );
+        if ( g_tex_RHGeometry.IsValid() )
+        {
+            g_tex_RHGeometry->SetTextureRegenerator( &g_RHGeometryTextureRegenerator );
+            g_tex_RHGeometry->Download();
+        }
+    }
+#endif
 	
 	if (!bInitial)
 		materials->FinishRenderTargetAllocation();
@@ -649,6 +715,25 @@ ITexture *GetDefRT_RHIndirectHalf()
 {
     Assert( g_tex_RHIndirectHalf.IsValid() );
     return g_tex_RHIndirectHalf;
+}
+
+
+ITexture *GetDefRT_RHGeometry()
+{
+    Assert( g_tex_RHGeometry.IsValid() );
+    return g_tex_RHGeometry;
+}
+
+void UpdateDefRT_RHGeometry( const unsigned char *pData, int nDataSize )
+{
+    const int expectedSize = RH_ATLAS_WIDTH * RH_ATLAS_HEIGHT;
+    Assert( pData != NULL );
+    Assert( nDataSize == expectedSize );
+    if ( pData == NULL || nDataSize != expectedSize || !g_tex_RHGeometry.IsValid() )
+        return;
+
+    memcpy( g_RHGeometryData, pData, expectedSize );
+    g_tex_RHGeometry->Download();
 }
 
 ITexture *GetDefRT_RadianceHints( int setIndex, int channelIndex )

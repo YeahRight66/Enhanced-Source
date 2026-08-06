@@ -4,7 +4,7 @@
 #include "radiosity_gen_global_ps30.inc"
 #include "radiosity_gen_vs30.inc"
 
-BEGIN_VS_SHADER( RADIOSITY_GLOBAL, "RH 4.2 deterministic radiance injection" )
+BEGIN_VS_SHADER( RADIOSITY_GLOBAL, "RH 5.0 deterministic radiance injection" )
     BEGIN_SHADER_PARAMS
     END_SHADER_PARAMS
 
@@ -60,16 +60,21 @@ BEGIN_VS_SHADER( RADIOSITY_GLOBAL, "RH 4.2 deterministic radiance injection" )
             pShaderAPI->SetPixelShaderConstant( 8, originConstant );
 
             ConVarRef cellSize( "deferred_rh_cell_size" );
+            ConVarRef gatherRadiusCells( "deferred_rh_gather_radius_cells" );
             ConVarRef worldSpread( "deferred_rh_world_spread" );
             ConVarRef injectionGain( "deferred_rh_injection_gain" );
             ConVarRef edgeFade( "deferred_rh_rsm_edge_fade" );
             ConVarRef maxRadiance( "deferred_rh_max_radiance" );
 
             const float cell = MAX( cellSize.GetFloat(), 1.0f );
+            const float legacyWorldRadius = worldSpread.GetFloat();
+            const float gatherWorldRadius = legacyWorldRadius > 0.0f
+                ? legacyWorldRadius
+                : cell * clamp( gatherRadiusCells.GetFloat(), 1.5f, 10.0f );
             float settings[4] = {
                 cell * RH_VOLUME_SIZE,
                 cell,
-                MAX( worldSpread.GetFloat(), cell * 1.5f ),
+                gatherWorldRadius,
                 MAX( injectionGain.GetFloat(), 0.0f )
             };
             pShaderAPI->SetPixelShaderConstant( 9, settings );

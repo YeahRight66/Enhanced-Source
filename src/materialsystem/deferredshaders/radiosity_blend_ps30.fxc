@@ -14,6 +14,7 @@ sampler sSecondR    : register( s6 );
 sampler sSecondG    : register( s7 );
 sampler sSecondB    : register( s8 );
 sampler sMeta       : register( s9 );
+sampler sGeometry   : register( s10 );
 
 const float3 g_vecViewOrigin : register( c0 );
 const float3 g_vecRHOrigin   : register( c1 );
@@ -62,57 +63,83 @@ float3 RH_SampleFirstDiffuse( float3 uvw, float4 diffuseBasis, out float confide
 
 float RH_ConeVisibility( float3 uvw, float3 towardSource, float3 surfaceNormal, float4 receiverMeta )
 {
-    float cellUV = 1.0f / RH_VOLUME_SIZE_F;
-    float distanceStep = g_RHShadow.y / RH_SOFT_SHADOW_TAP_COUNT;
+    const float cellUV = 1.0f / RH_VOLUME_SIZE_F;
     float3 tangent = RH_BuildTangent( towardSource );
     float3 bitangent = RH_SafeNormalize( cross( towardSource, tangent ), surfaceNormal );
-    float opticalDepth = 0.0f;
-    float totalWeight = 0.0f;
+    float traceDistance = max( g_RHShadow.y, 0.5f );
+    float coneSlope = max( g_RHReconstruct.z, 0.0f );
     float adaptiveBias = g_RHShadow.w + ( 1.0f - saturate( receiverMeta.y ) ) * 0.08f;
+    float opticalDepth = 0.0f;
 
+    // Ordered segment integration. Each tap represents a different length of the
+    // cone rather than another sample in an averaged blur kernel. This preserves
+    // contact blocking while allowing the penumbra to widen with distance.
 #if RH_SOFT_SHADOW_TAP_COUNT >= 1
-    float d0 = distanceStep * 0.75f;
-    float3 p0 = uvw + towardSource * ( d0 * cellUV )
-        + tangent * ( g_RHReconstruct.z * d0 * cellUV );
-    float i0 = RH_InsideVolume( p0 );
-    float b0 = RH_EvaluateVisibilityTwoSided( RH_SampleAtlas( sVisibility, p0 ), towardSource );
-    opticalDepth += max( b0 * g_RHQuality.z - adaptiveBias, 0.0f ) * i0 * 0.70f;
-    totalWeight += i0 * 0.70f;
+    {
+        float distanceCells = traceDistance * 0.17f;
+        float segmentCells = traceDistance * 0.17f;
+        float3 sampleUVW = uvw + towardSource * ( distanceCells * cellUV )
+            + tangent * ( coneSlope * distanceCells * 0.30f * cellUV );
+        float directionalBlocker = RH_EvaluateVisibilityTwoSided(
+            RH_SampleAtlas( sVisibility, sampleUVW ), towardSource );
+        float blocker = max( directionalBlocker, RH_SampleAtlas( sGeometry, sampleUVW ).r );
+        opticalDepth += max( blocker * g_RHQuality.z - adaptiveBias, 0.0f )
+            * segmentCells * RH_InsideVolume( sampleUVW );
+    }
 #endif
 #if RH_SOFT_SHADOW_TAP_COUNT >= 2
-    float d1 = distanceStep * 1.75f;
-    float3 p1 = uvw + towardSource * ( d1 * cellUV )
-        - tangent * ( g_RHReconstruct.z * d1 * cellUV );
-    float i1 = RH_InsideVolume( p1 );
-    float b1 = RH_EvaluateVisibilityTwoSided( RH_SampleAtlas( sVisibility, p1 ), towardSource );
-    opticalDepth += max( b1 * g_RHQuality.z - adaptiveBias, 0.0f ) * i1 * 0.85f;
-    totalWeight += i1 * 0.85f;
+    {
+        float distanceCells = traceDistance * 0.36f;
+        float segmentCells = traceDistance * 0.19f;
+        float3 sampleUVW = uvw + towardSource * ( distanceCells * cellUV )
+            - tangent * ( coneSlope * distanceCells * 0.55f * cellUV );
+        float directionalBlocker = RH_EvaluateVisibilityTwoSided(
+            RH_SampleAtlas( sVisibility, sampleUVW ), towardSource );
+        float blocker = max( directionalBlocker, RH_SampleAtlas( sGeometry, sampleUVW ).r );
+        opticalDepth += max( blocker * g_RHQuality.z - adaptiveBias, 0.0f )
+            * segmentCells * RH_InsideVolume( sampleUVW );
+    }
 #endif
 #if RH_SOFT_SHADOW_TAP_COUNT >= 3
-    float d2 = distanceStep * 2.75f;
-    float3 p2 = uvw + towardSource * ( d2 * cellUV )
-        + bitangent * ( g_RHReconstruct.z * d2 * cellUV );
-    float i2 = RH_InsideVolume( p2 );
-    float b2 = RH_EvaluateVisibilityTwoSided( RH_SampleAtlas( sVisibility, p2 ), towardSource );
-    opticalDepth += max( b2 * g_RHQuality.z - adaptiveBias, 0.0f ) * i2;
-    totalWeight += i2;
+    {
+        float distanceCells = traceDistance * 0.62f;
+        float segmentCells = traceDistance * 0.26f;
+        float3 sampleUVW = uvw + towardSource * ( distanceCells * cellUV )
+            + bitangent * ( coneSlope * distanceCells * 0.78f * cellUV );
+        float directionalBlocker = RH_EvaluateVisibilityTwoSided(
+            RH_SampleAtlas( sVisibility, sampleUVW ), towardSource );
+        float blocker = max( directionalBlocker, RH_SampleAtlas( sGeometry, sampleUVW ).r );
+        opticalDepth += max( blocker * g_RHQuality.z - adaptiveBias, 0.0f )
+            * segmentCells * RH_InsideVolume( sampleUVW );
+    }
 #endif
 #if RH_SOFT_SHADOW_TAP_COUNT >= 4
-    float d3 = distanceStep * 3.75f;
-    float3 p3 = uvw + towardSource * ( d3 * cellUV )
-        - bitangent * ( g_RHReconstruct.z * d3 * cellUV );
-    float i3 = RH_InsideVolume( p3 );
-    float b3 = RH_EvaluateVisibilityTwoSided( RH_SampleAtlas( sVisibility, p3 ), towardSource );
-    opticalDepth += max( b3 * g_RHQuality.z - adaptiveBias, 0.0f ) * i3 * 1.15f;
-    totalWeight += i3 * 1.15f;
+    {
+        float distanceCells = traceDistance * 0.96f;
+        float segmentCells = traceDistance * 0.34f;
+        float3 sampleUVW = uvw + towardSource * ( distanceCells * cellUV )
+            - bitangent * ( coneSlope * distanceCells * cellUV );
+        float directionalBlocker = RH_EvaluateVisibilityTwoSided(
+            RH_SampleAtlas( sVisibility, sampleUVW ), towardSource );
+        float blocker = max( directionalBlocker, RH_SampleAtlas( sGeometry, sampleUVW ).r );
+        opticalDepth += max( blocker * g_RHQuality.z - adaptiveBias, 0.0f )
+            * segmentCells * RH_InsideVolume( sampleUVW );
+    }
 #endif
 
-    opticalDepth /= max( totalWeight, 1.0f );
-    float directionalVisibility = exp2( -g_RHShadow.x * g_RHQuality.w * 6.0f * opticalDepth );
+    float directionalVisibility = exp2(
+        -max( g_RHShadow.x, 0.0f ) * max( g_RHQuality.w, 0.0f ) * 2.2f * opticalDepth );
+
+    // The local term handles ambiguous/isotropic radiance cells and stabilizes
+    // wall contact. It is blended conservatively so it cannot turn RH into AO.
     float localBlocker = RH_EvaluateVisibilityTwoSided(
         RH_SampleAtlas( sVisibility, uvw ), -surfaceNormal );
-    float isotropicVisibility = exp2( -g_RHShadow.x * g_RHQuality.w * 2.5f
-        * max( localBlocker * g_RHQuality.z - adaptiveBias, 0.0f ) );
+    float3 localGeometryUVW = uvw + surfaceNormal * ( 0.35f * cellUV );
+    localBlocker = max( localBlocker, RH_SampleAtlas( sGeometry, localGeometryUVW ).r );
+    float localOpticalDepth = max( localBlocker * g_RHQuality.z - adaptiveBias, 0.0f );
+    float isotropicVisibility = exp2(
+        -max( g_RHShadow.x, 0.0f ) * max( g_RHQuality.w, 0.0f ) * 1.6f * localOpticalDepth );
+
     float visibility = lerp(
         directionalVisibility,
         min( directionalVisibility, isotropicVisibility ),
@@ -157,19 +184,36 @@ float4 main( const PS_INPUT In ) : COLOR0
         dcEnergy += max( sh.w, 0.0f ) * 0.0722f;
     }
 
-    firstIndirect *= centerConfidence * 0.60f;
-    float reconstructionWeight = centerConfidence * 0.60f + 1.0e-5f;
+    firstIndirect *= centerConfidence * 0.40f;
+    float reconstructionWeight = centerConfidence * 0.40f + 1.0e-5f;
 
-#if RH_RECEIVER_SAMPLE_COUNT >= 3
+#if RH_RECEIVER_SAMPLE_COUNT == 4
+    // Center + three samples 120 degrees apart. Unlike the previous +/- tangent
+    // pair, this is rotationally balanced and actually implements the declared
+    // four receiver samples.
     float3 tangent = RH_BuildTangent( normal );
+    float3 bitangent = RH_SafeNormalize( cross( normal, tangent ), float3( 0.0f, 1.0f, 0.0f ) );
     float receiverUV = g_RHReconstruct.x / RH_VOLUME_SIZE_F;
     float sideConfidence;
-    float3 side = RH_SampleFirstDiffuse( uvw + tangent * receiverUV, diffuseBasis, sideConfidence );
+    float3 side;
+
+    side = RH_SampleFirstDiffuse( uvw + tangent * receiverUV, diffuseBasis, sideConfidence );
     firstIndirect += side * ( sideConfidence * 0.20f );
     reconstructionWeight += sideConfidence * 0.20f;
-    side = RH_SampleFirstDiffuse( uvw - tangent * receiverUV, diffuseBasis, sideConfidence );
+
+    float3 offsetDirection = tangent * -0.5f + bitangent * 0.8660254f;
+    side = RH_SampleFirstDiffuse( uvw + offsetDirection * receiverUV, diffuseBasis, sideConfidence );
     firstIndirect += side * ( sideConfidence * 0.20f );
     reconstructionWeight += sideConfidence * 0.20f;
+
+    offsetDirection = tangent * -0.5f - bitangent * 0.8660254f;
+    side = RH_SampleFirstDiffuse( uvw + offsetDirection * receiverUV, diffuseBasis, sideConfidence );
+    firstIndirect += side * ( sideConfidence * 0.20f );
+    reconstructionWeight += sideConfidence * 0.20f;
+#else
+    // Balanced preset: preserve the center result exactly.
+    firstIndirect *= 2.5f;
+    reconstructionWeight = centerConfidence + 1.0e-5f;
 #endif
 
     firstIndirect /= max( reconstructionWeight, 1.0e-5f );

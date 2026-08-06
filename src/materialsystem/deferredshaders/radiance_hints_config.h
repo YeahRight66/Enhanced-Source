@@ -1,7 +1,7 @@
 #ifndef RADIANCE_HINTS_CONFIG_H
 #define RADIANCE_HINTS_CONFIG_H
 
-// Radiance Hints 4.2 compile-time configuration.
+// Radiance Hints 5.0 compile-time configuration.
 // This header intentionally overrides legacy RH macros locally. Do not include
 // it from deferred_global_common.h or common_deferred_fxc.h.
 
@@ -65,10 +65,10 @@
 #   define RH_BOUNCE_SAMPLE_COUNT         4
 #   define RH_RECEIVER_SAMPLE_COUNT       1
 #   define RH_SOFT_SHADOW_TAP_COUNT       3
-#   define RH_UPSAMPLE_TAP_COUNT          5
+#   define RH_UPSAMPLE_TAP_COUNT          4
 #elif RH_QUALITY_PRESET == RH_PRESET_HIGH
     // GTX 1050 target.
-#   define RH_VOLUME_SIZE                 40
+#   define RH_VOLUME_SIZE                 48
 #   define RH_RSM_RESOLUTION              768
 #   define RH_RADIANCE_SAMPLE_COUNT       6
 #   define RH_VISIBILITY_SAMPLE_COUNT     6
@@ -76,7 +76,7 @@
 #   define RH_BOUNCE_SAMPLE_COUNT         6
 #   define RH_RECEIVER_SAMPLE_COUNT       4
 #   define RH_SOFT_SHADOW_TAP_COUNT       4
-#   define RH_UPSAMPLE_TAP_COUNT          9
+#   define RH_UPSAMPLE_TAP_COUNT          4
 #else
 # error Invalid RH_QUALITY_PRESET.
 #endif
@@ -88,8 +88,9 @@
 #define RH_ATLAS_HEIGHT_F                  ( RH_ATLAS_HEIGHT * 1.0f )
 #define RH_RSM_RESOLUTION_F                ( RH_RSM_RESOLUTION * 1.0f )
 
-// Raw first bounce and filtered first bounce share two four-MRT sets.
-// After filtering, set 0 RGB may be overwritten by the optional second bounce.
+// Raw/filtered radiance ping-pongs through two four-MRT sets.
+// The final twice-filtered first bounce is set 0; optional secondary transport
+// is written to set 1 RGB while set 0 metadata remains authoritative.
 #define RH_SET_COUNT                       2
 #define RH_CHANNEL_COUNT                   4
 #define RH_CHANNEL_SH_R                    0
@@ -121,8 +122,8 @@
 #if RH_SOFT_SHADOW_TAP_COUNT < 2 || RH_SOFT_SHADOW_TAP_COUNT > 4
 # error RH_SOFT_SHADOW_TAP_COUNT must be in the range 2..4.
 #endif
-#if RH_UPSAMPLE_TAP_COUNT != 5 && RH_UPSAMPLE_TAP_COUNT != 9
-# error RH_UPSAMPLE_TAP_COUNT must be 5 or 9.
+#if RH_UPSAMPLE_TAP_COUNT != 4
+# error RH_UPSAMPLE_TAP_COUNT must be 4.
 #endif
 
 // Remove legacy target-name definitions locally.
@@ -159,6 +160,9 @@
 #ifdef DEFRTNAME_RH_INDIRECT_HALF
 # undef DEFRTNAME_RH_INDIRECT_HALF
 #endif
+#ifdef DEFRTNAME_RH_GEOMETRY
+# undef DEFRTNAME_RH_GEOMETRY
+#endif
 
 #define DEFRTNAME_RH_SH_R                  "_rt_RH_SH_R_"
 #define DEFRTNAME_RH_SH_G                  "_rt_RH_SH_G_"
@@ -172,6 +176,7 @@
 #define DEFRTNAME_RH_RSM_FLUX              "_rt_RH_RSM_Flux"
 #define DEFRTNAME_RH_RSM_NORMAL            "_rt_RH_RSM_Normal"
 #define DEFRTNAME_RH_INDIRECT_HALF         "_rt_RH_IndirectHalf"
+#define DEFRTNAME_RH_GEOMETRY              "_rt_RH_Geometry"
 
 #endif // RADIANCE_HINTS_CONFIG_H
 

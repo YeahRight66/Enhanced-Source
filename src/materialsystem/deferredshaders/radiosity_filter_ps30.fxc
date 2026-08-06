@@ -1,3 +1,5 @@
+// STATIC: "FILTER_PHASE" "0..1"
+
 #include "common_ps_fxc.h"
 #include "common_deferred_fxc.h"
 #include "radiance_hints_common_fxc.h"
@@ -7,8 +9,9 @@ sampler sSH_G       : register( s1 );
 sampler sSH_B       : register( s2 );
 sampler sMeta       : register( s3 );
 sampler sVisibility : register( s4 );
+sampler sGeometry   : register( s5 );
 
-// x filter strength, y confidence fill boost, z normalized-energy similarity,
+// x filter strength, y confidence fill boost, z log-energy similarity,
 // w reliable-cell anchor strength.
 const float4 g_RHFilter : register( c0 );
 // x blocker strength, y blocker bias, z minimum transmittance,
@@ -33,9 +36,17 @@ struct PS_OUTPUT
 
 float RH_FilterTransmittance( float3 centerUVW, float3 sampleUVW, float3 direction )
 {
-    float3 midpointUVW = ( centerUVW + sampleUVW ) * 0.5f;
-    float blocker = RH_EvaluateVisibilityTwoSided(
-        RH_SampleAtlas( sVisibility, midpointUVW ), direction );
+    float3 trace0 = lerp( centerUVW, sampleUVW, 0.35f );
+    float3 trace1 = lerp( centerUVW, sampleUVW, 0.70f );
+    float blocker0 = RH_EvaluateVisibilityTwoSided(
+        RH_SampleAtlas( sVisibility, trace0 ), direction );
+    float blocker1 = RH_EvaluateVisibilityTwoSided(
+        RH_SampleAtlas( sVisibility, trace1 ), direction );
+    float directionalBlocker = max( blocker0, blocker1 );
+    float staticBlocker = max(
+        RH_SampleAtlas( sGeometry, trace0 ).r,
+        RH_SampleAtlas( sGeometry, trace1 ).r );
+    float blocker = max( directionalBlocker, staticBlocker );
     float bias = clamp( g_RHBlocker.y, 0.0f, 0.95f );
     blocker = saturate( ( blocker - bias ) / max( 1.0f - bias, 0.05f ) );
     float transmittance = exp2( -4.0f * max( g_RHBlocker.x, 0.0f ) * blocker );
@@ -61,17 +72,15 @@ void RH_FilterNeighbour(
     float sampleConfidence = RH_MetaConfidence( sampleMeta );
     float sampleValid = saturate( sampleMeta.w ) * step( 1.0e-5f, sampleMeta.z );
 
-    float energySimilarity = 1.0f / (
-        1.0f + max( g_RHFilter.z, 0.0f ) * 8.0f * abs( centerEnergy - sampleMeta.z ) );
+    float energySimilarity = RH_EnergySimilarity(
+        centerEnergy, sampleMeta.z, g_RHFilter.z );
     energySimilarity = lerp( 1.0f, energySimilarity, centerConfidence );
 
     float transmittance = RH_FilterTransmittance( centerUVW, sampleUVW, direction );
     float fillBoost = lerp( 1.0f, max( g_RHFilter.y, 1.0f ), 1.0f - centerConfidence );
-    float weight = inside * sampleValid * max( sampleConfidence, 0.04f )
+    float weight = inside * sampleValid * max( sampleConfidence, 0.035f )
         * energySimilarity * transmittance * saturate( g_RHFilter.x ) * fillBoost;
 
-    // Sample and consume one colour channel at a time. This intentionally keeps
-    // ps_3_0 temporary-register pressure far below the previous all-channel path.
     {
         float4 sampleSH = RH_LimitRadianceSH( RH_SampleAtlas( sSH_R, sampleUVW ) );
         sumR += sampleSH * weight;
@@ -97,8 +106,8 @@ PS_OUTPUT main( const PS_INPUT In )
 
     float4 centerMeta = RH_SampleAtlas( sMeta, In.vVolumeUVW );
     float centerConfidence = RH_MetaConfidence( centerMeta );
-    float centerAnchor = lerp( 1.0f, 2.0f, saturate( g_RHFilter.w ) * centerConfidence );
-    float centerWeight = lerp( 0.15f, 1.0f + centerConfidence * centerAnchor, saturate( centerMeta.w ) );
+    float centerAnchor = lerp( 1.0f, 2.25f, saturate( g_RHFilter.w ) * centerConfidence );
+    float centerWeight = lerp( 0.12f, 1.0f + centerConfidence * centerAnchor, saturate( centerMeta.w ) );
 
     float4 sumR = RH_LimitRadianceSH( RH_SampleAtlas( sSH_R, In.vVolumeUVW ) ) * centerWeight;
     float4 sumG = RH_LimitRadianceSH( RH_SampleAtlas( sSH_G, In.vVolumeUVW ) ) * centerWeight;
@@ -108,18 +117,22 @@ PS_OUTPUT main( const PS_INPUT In )
     float energySum = centerMeta.z * centerWeight;
     float weightSum = centerWeight;
 
-#if RH_FILTER_NEIGHBOUR_COUNT == 4
-    RH_FilterNeighbour( In.vVolumeUVW, float3( 0.5773503f,  0.5773503f,  0.5773503f ), centerConfidence, centerMeta.z, sumR, sumG, sumB, confidenceSum, distanceSum, energySum, weightSum );
-    RH_FilterNeighbour( In.vVolumeUVW, float3(-0.5773503f, -0.5773503f,  0.5773503f ), centerConfidence, centerMeta.z, sumR, sumG, sumB, confidenceSum, distanceSum, energySum, weightSum );
-    RH_FilterNeighbour( In.vVolumeUVW, float3(-0.5773503f,  0.5773503f, -0.5773503f ), centerConfidence, centerMeta.z, sumR, sumG, sumB, confidenceSum, distanceSum, energySum, weightSum );
-    RH_FilterNeighbour( In.vVolumeUVW, float3( 0.5773503f, -0.5773503f, -0.5773503f ), centerConfidence, centerMeta.z, sumR, sumG, sumB, confidenceSum, distanceSum, energySum, weightSum );
+#if FILTER_PHASE == 0
+    {
+        RH_FilterNeighbour( In.vVolumeUVW, float3( 1.0f, 0.0f, 0.0f ), centerConfidence, centerMeta.z, sumR, sumG, sumB, confidenceSum, distanceSum, energySum, weightSum );
+        RH_FilterNeighbour( In.vVolumeUVW, float3(-1.0f, 0.0f, 0.0f ), centerConfidence, centerMeta.z, sumR, sumG, sumB, confidenceSum, distanceSum, energySum, weightSum );
+        RH_FilterNeighbour( In.vVolumeUVW, float3( 0.0f, 1.0f, 0.0f ), centerConfidence, centerMeta.z, sumR, sumG, sumB, confidenceSum, distanceSum, energySum, weightSum );
+        RH_FilterNeighbour( In.vVolumeUVW, float3( 0.0f,-1.0f, 0.0f ), centerConfidence, centerMeta.z, sumR, sumG, sumB, confidenceSum, distanceSum, energySum, weightSum );
+        RH_FilterNeighbour( In.vVolumeUVW, float3( 0.0f, 0.0f, 1.0f ), centerConfidence, centerMeta.z, sumR, sumG, sumB, confidenceSum, distanceSum, energySum, weightSum );
+        RH_FilterNeighbour( In.vVolumeUVW, float3( 0.0f, 0.0f,-1.0f ), centerConfidence, centerMeta.z, sumR, sumG, sumB, confidenceSum, distanceSum, energySum, weightSum );
+    }
 #else
-    RH_FilterNeighbour( In.vVolumeUVW, float3( 1.0f, 0.0f, 0.0f ), centerConfidence, centerMeta.z, sumR, sumG, sumB, confidenceSum, distanceSum, energySum, weightSum );
-    RH_FilterNeighbour( In.vVolumeUVW, float3(-1.0f, 0.0f, 0.0f ), centerConfidence, centerMeta.z, sumR, sumG, sumB, confidenceSum, distanceSum, energySum, weightSum );
-    RH_FilterNeighbour( In.vVolumeUVW, float3( 0.0f, 1.0f, 0.0f ), centerConfidence, centerMeta.z, sumR, sumG, sumB, confidenceSum, distanceSum, energySum, weightSum );
-    RH_FilterNeighbour( In.vVolumeUVW, float3( 0.0f,-1.0f, 0.0f ), centerConfidence, centerMeta.z, sumR, sumG, sumB, confidenceSum, distanceSum, energySum, weightSum );
-    RH_FilterNeighbour( In.vVolumeUVW, float3( 0.0f, 0.0f, 1.0f ), centerConfidence, centerMeta.z, sumR, sumG, sumB, confidenceSum, distanceSum, energySum, weightSum );
-    RH_FilterNeighbour( In.vVolumeUVW, float3( 0.0f, 0.0f,-1.0f ), centerConfidence, centerMeta.z, sumR, sumG, sumB, confidenceSum, distanceSum, energySum, weightSum );
+    {
+        RH_FilterNeighbour( In.vVolumeUVW, float3( 0.5773503f, 0.5773503f, 0.5773503f ), centerConfidence, centerMeta.z, sumR, sumG, sumB, confidenceSum, distanceSum, energySum, weightSum );
+        RH_FilterNeighbour( In.vVolumeUVW, float3(-0.5773503f,-0.5773503f, 0.5773503f ), centerConfidence, centerMeta.z, sumR, sumG, sumB, confidenceSum, distanceSum, energySum, weightSum );
+        RH_FilterNeighbour( In.vVolumeUVW, float3(-0.5773503f, 0.5773503f,-0.5773503f ), centerConfidence, centerMeta.z, sumR, sumG, sumB, confidenceSum, distanceSum, energySum, weightSum );
+        RH_FilterNeighbour( In.vVolumeUVW, float3( 0.5773503f,-0.5773503f,-0.5773503f ), centerConfidence, centerMeta.z, sumR, sumG, sumB, confidenceSum, distanceSum, energySum, weightSum );
+    }
 #endif
 
     float inverseWeight = 1.0f / max( weightSum, 1.0e-5f );
@@ -136,7 +149,7 @@ PS_OUTPUT main( const PS_INPUT In )
     Out.vMeta = float4(
         confidence,
         saturate( distanceSum * inverseWeight ),
-        max( outputEnergy, saturate( energySum * inverseWeight ) * 0.25f ),
+        max( outputEnergy, saturate( energySum * inverseWeight ) * 0.20f ),
         valid );
     return Out;
 }

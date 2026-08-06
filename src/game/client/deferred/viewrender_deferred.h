@@ -4,6 +4,7 @@
 #include "viewrender.h"
 
 #include "deferred/deferred_shared_common.h"
+#include "tier1/utlvector.h"
 
 
 class CDeferredViewRender : public CViewRender
@@ -57,6 +58,9 @@ private:
 	void PerformRadiosityGlobal();
 	void PerformRadiosityVisibility();
 	void PerformRadiosityFilter();
+	void UpdateRadiosityGeometry();
+	unsigned char BuildRadiosityStaticCell( const Vector &cellCenter, float cellSize ) const;
+	void StampRadiosityDynamicModels( const Vector &origin, float cellSize );
 	void EndRadiosity( const CViewSetup &view );
 	void DebugRadiosity( const CViewSetup &view );
 
@@ -70,6 +74,12 @@ private:
 	bool m_bRadianceHintsInjected;
 	bool m_bRadianceHintsOriginValid;
 	float m_flRadianceHintsCellSize;
+
+	Vector m_vecRHGeometryOrigin;
+	float m_flRHGeometryCellSize;
+	bool m_bRHGeometryValid;
+	CUtlVector< unsigned char > m_RHStaticGeometry;
+	CUtlVector< unsigned char > m_RHCombinedGeometry;
 };
 
 

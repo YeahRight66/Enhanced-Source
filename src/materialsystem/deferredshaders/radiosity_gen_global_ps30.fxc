@@ -5,9 +5,9 @@
 const float4x4 g_matWorldToRSM  : register( c0 );
 const float4x4 g_matRSMToWorld  : register( c4 );
 const float3   g_vecGridOrigin  : register( c8 );
-// x = volume extent, y = cell size, z = gather radius, w = injection gain
+// x = volume extent, y = cell size, z = gather radius, w = injection gain.
 const float4   g_vecRHSettings  : register( c9 );
-// x = RSM edge fade, y = max radiance, z = inverse RSM resolution, w = RSM world side
+// x = RSM edge fade, y = max radiance, z = inverse RSM resolution, w = RSM world side.
 const float4   g_vecRHQuality   : register( c10 );
 
 sampler sRSMFlux   : register( s0 );
@@ -41,10 +41,11 @@ void RH_AccumulateRadiance(
     float2 diskOffset,
     float2 patternSinCos,
     float3 cellCenterWS,
+    float sampleProjectedArea,
     inout float4 shR,
     inout float4 shG,
     inout float4 shB,
-    inout float totalWeight,
+    inout float confidenceSum,
     inout float nearestDistanceCells )
 {
     diskOffset = RH_Rotate2D( diskOffset, patternSinCos.x, patternSinCos.y );
@@ -75,28 +76,32 @@ void RH_AccumulateRadiance(
             float distanceCells = distanceValue / max( g_vecRHSettings.y, 1.0f );
             nearestDistanceCells = min( nearestDistanceCells, distanceCells );
 
-            float distanceNormalized = distanceValue / max( g_vecRHSettings.z, 1.0f );
-            float radial = saturate( 1.0f - distanceNormalized );
-            radial *= radial;
+            float distanceNormalized = saturate( distanceValue / max( g_vecRHSettings.z, 1.0f ) );
+            // Epanechnikov disk kernel. Its mean over a unit disk is 0.5, so
+            // sampleProjectedArea is pre-multiplied by two.
+            float radial = max( 1.0f - distanceNormalized * distanceNormalized, 0.0f );
 
-            float3 flux = tex2Dlod( sRSMFlux, float4( uv, 0.0f, 0.0f ) ).rgb;
-            float fluxValid = step( 1.0e-8f, dot( flux, flux ) );
+            float4 fluxSample = tex2Dlod( sRSMFlux, float4( uv, 0.0f, 0.0f ) );
+            float fluxValid = step( 1.0e-8f, dot( fluxSample.rgb, fluxSample.rgb ) )
+                * step( 1.0e-4f, fluxSample.a );
             float3 normal = tex2Dlod( sRSMNormal, float4( uv, 0.0f, 0.0f ) ).xyz * 2.0f - 1.0f;
             normal = RH_SafeNormalize( normal, float3( 0.0f, 0.0f, 1.0f ) );
 
             float3 travelDirection = ray * inverseDistance;
             float emitterCosine = saturate( dot( normal, travelDirection ) );
-            float sampleWeight = validDepth * fluxValid * radial * emitterCosine;
-            float attenuation = sampleWeight / ( 0.12f + distanceNormalized * distanceNormalized );
+            float softening = g_vecRHSettings.y * g_vecRHSettings.y * 0.1225f;
+            float geometryTerm = emitterCosine * sampleProjectedArea
+                / max( distanceSquared + softening, 1.0f );
+            float sampleWeight = validDepth * fluxValid * radial;
             float3 transported = RH_ClampRadiance(
-                flux * ( attenuation * g_vecRHSettings.w ),
+                fluxSample.rgb * ( geometryTerm * sampleWeight * g_vecRHSettings.w ),
                 max( g_vecRHQuality.y, 0.25f ) );
 
             float4 basis = RH_ProjectDirection( travelDirection );
             shR += basis * transported.r;
             shG += basis * transported.g;
             shB += basis * transported.b;
-            totalWeight += sampleWeight;
+            confidenceSum += sampleWeight;
         }
     }
 }
@@ -120,42 +125,43 @@ PS_OUTPUT main( const PS_INPUT In )
     float4 shR = 0.0f;
     float4 shG = 0.0f;
     float4 shB = 0.0f;
-    float totalWeight = 0.0f;
+    float confidenceSum = 0.0f;
     float nearestDistanceCells = 65504.0f;
+    float sampleProjectedArea = 2.0f * RH_PI * g_vecRHSettings.z * g_vecRHSettings.z
+        / RH_RADIANCE_SAMPLE_COUNT;
 
 #if RH_RADIANCE_SAMPLE_COUNT >= 1
-    RH_AccumulateRadiance( centerUV, float2( 0.000f,  0.000f ), patternSinCos, cellCenterWS, shR, shG, shB, totalWeight, nearestDistanceCells );
+    RH_AccumulateRadiance( centerUV, float2( 0.000f,  0.000f ), patternSinCos, cellCenterWS, sampleProjectedArea, shR, shG, shB, confidenceSum, nearestDistanceCells );
 #endif
 #if RH_RADIANCE_SAMPLE_COUNT >= 2
-    RH_AccumulateRadiance( centerUV, float2( 0.527f,  0.143f ), patternSinCos, cellCenterWS, shR, shG, shB, totalWeight, nearestDistanceCells );
+    RH_AccumulateRadiance( centerUV, float2( 0.527f,  0.143f ), patternSinCos, cellCenterWS, sampleProjectedArea, shR, shG, shB, confidenceSum, nearestDistanceCells );
 #endif
 #if RH_RADIANCE_SAMPLE_COUNT >= 3
-    RH_AccumulateRadiance( centerUV, float2(-0.401f,  0.388f ), patternSinCos, cellCenterWS, shR, shG, shB, totalWeight, nearestDistanceCells );
+    RH_AccumulateRadiance( centerUV, float2(-0.401f,  0.388f ), patternSinCos, cellCenterWS, sampleProjectedArea, shR, shG, shB, confidenceSum, nearestDistanceCells );
 #endif
 #if RH_RADIANCE_SAMPLE_COUNT >= 4
-    RH_AccumulateRadiance( centerUV, float2( 0.118f, -0.591f ), patternSinCos, cellCenterWS, shR, shG, shB, totalWeight, nearestDistanceCells );
+    RH_AccumulateRadiance( centerUV, float2( 0.118f, -0.591f ), patternSinCos, cellCenterWS, sampleProjectedArea, shR, shG, shB, confidenceSum, nearestDistanceCells );
 #endif
 #if RH_RADIANCE_SAMPLE_COUNT >= 5
-    RH_AccumulateRadiance( centerUV, float2(-0.684f, -0.104f ), patternSinCos, cellCenterWS, shR, shG, shB, totalWeight, nearestDistanceCells );
+    RH_AccumulateRadiance( centerUV, float2(-0.684f, -0.104f ), patternSinCos, cellCenterWS, sampleProjectedArea, shR, shG, shB, confidenceSum, nearestDistanceCells );
 #endif
 #if RH_RADIANCE_SAMPLE_COUNT >= 6
-    RH_AccumulateRadiance( centerUV, float2( 0.632f, -0.477f ), patternSinCos, cellCenterWS, shR, shG, shB, totalWeight, nearestDistanceCells );
+    RH_AccumulateRadiance( centerUV, float2( 0.632f, -0.477f ), patternSinCos, cellCenterWS, sampleProjectedArea, shR, shG, shB, confidenceSum, nearestDistanceCells );
 #endif
 #if RH_RADIANCE_SAMPLE_COUNT >= 7
-    RH_AccumulateRadiance( centerUV, float2(-0.214f,  0.779f ), patternSinCos, cellCenterWS, shR, shG, shB, totalWeight, nearestDistanceCells );
+    RH_AccumulateRadiance( centerUV, float2(-0.214f,  0.779f ), patternSinCos, cellCenterWS, sampleProjectedArea, shR, shG, shB, confidenceSum, nearestDistanceCells );
 #endif
 #if RH_RADIANCE_SAMPLE_COUNT >= 8
-    RH_AccumulateRadiance( centerUV, float2( 0.806f,  0.326f ), patternSinCos, cellCenterWS, shR, shG, shB, totalWeight, nearestDistanceCells );
+    RH_AccumulateRadiance( centerUV, float2( 0.806f,  0.326f ), patternSinCos, cellCenterWS, sampleProjectedArea, shR, shG, shB, confidenceSum, nearestDistanceCells );
 #endif
 
-    float valid = step( 1.0e-5f, totalWeight );
-    float normalization = valid / max( totalWeight * RH_PI, 1.0e-5f );
-    Out.vSH_R = RH_LimitRadianceSH( shR * normalization );
-    Out.vSH_G = RH_LimitRadianceSH( shG * normalization );
-    Out.vSH_B = RH_LimitRadianceSH( shB * normalization );
+    Out.vSH_R = RH_LimitRadianceSH( shR );
+    Out.vSH_G = RH_LimitRadianceSH( shG );
+    Out.vSH_B = RH_LimitRadianceSH( shB );
 
+    float valid = step( 1.0e-5f, confidenceSum );
     float gatherCells = max( g_vecRHSettings.z / max( g_vecRHSettings.y, 1.0f ), 1.0f );
-    float confidence = saturate( totalWeight * ( 2.0f / RH_RADIANCE_SAMPLE_COUNT ) );
+    float confidence = saturate( confidenceSum / RH_RADIANCE_SAMPLE_COUNT );
     float normalizedEnergy = saturate(
         RH_RadianceEnergy( Out.vSH_R, Out.vSH_G, Out.vSH_B )
         / max( g_vecRHQuality.y, 0.25f ) );

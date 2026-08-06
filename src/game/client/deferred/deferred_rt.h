@@ -23,6 +23,8 @@ ITexture *GetDefRT_RHRSMFlux();
 ITexture *GetDefRT_RHRSMNormal();
 ITexture *GetDefRT_RHVisibility();
 ITexture *GetDefRT_RHIndirectHalf();
+ITexture *GetDefRT_RHGeometry();
+void UpdateDefRT_RHGeometry( const unsigned char *pData, int nDataSize );
 
 ITexture *GetDefRT_RadianceHints( int setIndex, int channelIndex );
 // Compatibility aliases used by the existing deferred extension/debug code.

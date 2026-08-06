@@ -4,7 +4,7 @@
 #include "defconstruct_vs30.inc"
 #include "radiosity_blend_ps30.inc"
 
-BEGIN_VS_SHADER( RADIOSITY_BLEND, "RH 4.2 half-resolution production reconstruction" )
+BEGIN_VS_SHADER( RADIOSITY_BLEND, "RH 5.0 half-resolution production reconstruction" )
     BEGIN_SHADER_PARAMS
         SHADER_PARAM( SHR0, SHADER_PARAM_TYPE_TEXTURE, "", "Filtered first-bounce red SH" )
         SHADER_PARAM( SHG0, SHADER_PARAM_TYPE_TEXTURE, "", "Filtered first-bounce green SH" )
@@ -14,6 +14,7 @@ BEGIN_VS_SHADER( RADIOSITY_BLEND, "RH 4.2 half-resolution production reconstruct
         SHADER_PARAM( SHG1, SHADER_PARAM_TYPE_TEXTURE, "", "Second-bounce green SH" )
         SHADER_PARAM( SHB1, SHADER_PARAM_TYPE_TEXTURE, "", "Second-bounce blue SH" )
         SHADER_PARAM( META0, SHADER_PARAM_TYPE_TEXTURE, "", "Filtered first-bounce metadata" )
+        SHADER_PARAM( GEOMETRY, SHADER_PARAM_TYPE_TEXTURE, "", "Conservative geometry occupancy volume" )
     END_SHADER_PARAMS
 
     SHADER_INIT_PARAMS() {}
@@ -22,6 +23,7 @@ BEGIN_VS_SHADER( RADIOSITY_BLEND, "RH 4.2 half-resolution production reconstruct
     {
         LoadTexture( SHR0 ); LoadTexture( SHG0 ); LoadTexture( SHB0 ); LoadTexture( VIS0 );
         LoadTexture( SHR1 ); LoadTexture( SHG1 ); LoadTexture( SHB1 ); LoadTexture( META0 );
+        LoadTexture( GEOMETRY );
     }
 
     SHADER_FALLBACK { return 0; }
@@ -45,6 +47,7 @@ BEGIN_VS_SHADER( RADIOSITY_BLEND, "RH 4.2 half-resolution production reconstruct
             pShaderShadow->EnableTexture( SHADER_SAMPLER7, true );
             pShaderShadow->EnableTexture( SHADER_SAMPLER8, true );
             pShaderShadow->EnableTexture( SHADER_SAMPLER9, true );
+            pShaderShadow->EnableTexture( SHADER_SAMPLER10, true );
 
             pShaderShadow->VertexShaderVertexFormat( VERTEX_POSITION, 1, NULL, 0 );
 
@@ -74,6 +77,7 @@ BEGIN_VS_SHADER( RADIOSITY_BLEND, "RH 4.2 half-resolution production reconstruct
             BindTexture( SHADER_SAMPLER4, SHB0 ); BindTexture( SHADER_SAMPLER5, VIS0 );
             BindTexture( SHADER_SAMPLER6, SHR1 ); BindTexture( SHADER_SAMPLER7, SHG1 );
             BindTexture( SHADER_SAMPLER8, SHB1 ); BindTexture( SHADER_SAMPLER9, META0 );
+            BindTexture( SHADER_SAMPLER10, GEOMETRY );
 
             CommitBaseDeferredConstants_Frustum( pShaderAPI, VERTEX_SHADER_SHADER_SPECIFIC_CONST_0 );
             CommitBaseDeferredConstants_Origin( pShaderAPI, 0 );

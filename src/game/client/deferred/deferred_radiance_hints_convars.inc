@@ -1,12 +1,16 @@
 // Included exactly once by deferred_client_common.cpp.
 
 ConVar deferred_rh_cell_size(
-    "deferred_rh_cell_size", "44", FCVAR_ARCHIVE,
-    "World-space RH cell size. Use 48 for the 32^3 balanced preset." );
+    "deferred_rh_cell_size", "18", FCVAR_ARCHIVE,
+    "World-space RH cell size. High preset uses a detailed 48^3 volume." );
+
+ConVar deferred_rh_gather_radius_cells(
+    "deferred_rh_gather_radius_cells", "5.5", FCVAR_ARCHIVE,
+    "RSM radiance gather radius measured in RH cells; independent of cell size." );
 
 ConVar deferred_rh_world_spread(
-    "deferred_rh_world_spread", "240", FCVAR_ARCHIVE,
-    "World-space radius used by deterministic RSM radiance gathers." );
+    "deferred_rh_world_spread", "0", FCVAR_ARCHIVE,
+    "Legacy override for gather radius in world units. Zero uses deferred_rh_gather_radius_cells." );
 
 ConVar deferred_rh_injection_gain(
     "deferred_rh_injection_gain", "1.0", FCVAR_ARCHIVE,
@@ -17,11 +21,11 @@ ConVar deferred_rh_bounce_count(
     "Secondary RH bounces; the production SM3 path supports 0 or 1." );
 
 ConVar deferred_rh_bounce_gain(
-    "deferred_rh_bounce_gain", "0.30", FCVAR_ARCHIVE,
+    "deferred_rh_bounce_gain", "0.20", FCVAR_ARCHIVE,
     "Energy-bounded secondary-bounce gain." );
 
 ConVar deferred_rh_receiver_offset(
-    "deferred_rh_receiver_offset", "16", FCVAR_ARCHIVE,
+    "deferred_rh_receiver_offset", "5", FCVAR_ARCHIVE,
     "Normal offset used while reconstructing indirect light." );
 
 ConVar deferred_rh_intensity(
@@ -61,7 +65,7 @@ ConVar deferred_rh_visibility_outer(
     "Directional blocker falloff radius, in RH cell units." );
 
 ConVar deferred_rh_visibility_strength(
-    "deferred_rh_visibility_strength", "1.0", FCVAR_ARCHIVE,
+    "deferred_rh_visibility_strength", "1.25", FCVAR_ARCHIVE,
     "Amplitude of the directional blocker field." );
 
 ConVar deferred_rh_visibility_decay(
@@ -69,7 +73,7 @@ ConVar deferred_rh_visibility_decay(
     "Distance decay used by the blocker injection pass." );
 
 ConVar deferred_rh_geometry_strength(
-    "deferred_rh_geometry_strength", "1.0", FCVAR_ARCHIVE,
+    "deferred_rh_geometry_strength", "1.20", FCVAR_ARCHIVE,
     "Directional visibility strength during secondary transport." );
 
 ConVar deferred_rh_geometry_min_transmittance(
@@ -80,8 +84,21 @@ ConVar deferred_rh_geometry_bias(
     "deferred_rh_geometry_bias", "0.05", FCVAR_ARCHIVE,
     "Visibility-field bias used to suppress receiver self-blocking." );
 
+
+ConVar deferred_rh_cpu_geometry_enable(
+    "deferred_rh_cpu_geometry_enable", "1", FCVAR_ARCHIVE,
+    "Builds a conservative world/static-prop occupancy atlas for RH transport and shadows." );
+
+ConVar deferred_rh_dynamic_model_blockers(
+    "deferred_rh_dynamic_model_blockers", "1", FCVAR_ARCHIVE,
+    "Stamps opaque client models into the RH geometry atlas each frame." );
+
+ConVar deferred_rh_geometry_hull_scale(
+    "deferred_rh_geometry_hull_scale", "0.42", FCVAR_ARCHIVE,
+    "Half-extent of the conservative static-geometry cell hull, relative to RH cell size." );
+
 ConVar deferred_rh_soft_shadow_strength(
-    "deferred_rh_soft_shadow_strength", "0.75", FCVAR_ARCHIVE,
+    "deferred_rh_soft_shadow_strength", "0.85", FCVAR_ARCHIVE,
     "Strength of low-frequency RH indirect shadows." );
 
 ConVar deferred_rh_soft_shadow_distance(
@@ -93,11 +110,11 @@ ConVar deferred_rh_soft_shadow_softness(
     "Cone widening and blocker averaging for indirect penumbrae." );
 
 ConVar deferred_rh_soft_shadow_min_visibility(
-    "deferred_rh_soft_shadow_min_visibility", "0.20", FCVAR_ARCHIVE,
+    "deferred_rh_soft_shadow_min_visibility", "0.12", FCVAR_ARCHIVE,
     "Minimum indirect visibility under RH soft shadows." );
 
 ConVar deferred_rh_upsample_depth_scale(
-    "deferred_rh_upsample_depth_scale", "0.025", FCVAR_ARCHIVE,
+    "deferred_rh_upsample_depth_scale", "0.035", FCVAR_ARCHIVE,
     "Depth rejection scale for half-resolution bilateral upsampling." );
 
 ConVar deferred_rh_upsample_normal_power(
@@ -122,7 +139,7 @@ ConVar deferred_rh_filter_fill_boost(
     "Neighbour contribution boost for low-confidence RH cells." );
 
 ConVar deferred_rh_filter_energy_scale(
-    "deferred_rh_filter_energy_scale", "0.30", FCVAR_ARCHIVE,
+    "deferred_rh_filter_energy_scale", "1.20", FCVAR_ARCHIVE,
     "Rejects neighbours with strongly different radiance energy." );
 
 ConVar deferred_rh_filter_direction_preserve(
@@ -142,7 +159,7 @@ ConVar deferred_rh_bounce_min_confidence(
     "Minimum filtered-cell confidence accepted by secondary transport." );
 
 ConVar deferred_rh_receiver_radius(
-    "deferred_rh_receiver_radius", "0.45", FCVAR_ARCHIVE,
+    "deferred_rh_receiver_radius", "0.55", FCVAR_ARCHIVE,
     "High-preset receiver reconstruction radius in RH cell units." );
 
 ConVar deferred_rh_reconstruction_confidence_floor(

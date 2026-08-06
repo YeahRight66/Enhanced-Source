@@ -4,13 +4,14 @@
 #include "radiosity_propagate_ps30.inc"
 #include "radiosity_propagate_vs30.inc"
 
-BEGIN_VS_SHADER( RADIOSITY_PROPAGATE, "RH 4.2 confidence/visibility-aware secondary bounce" )
+BEGIN_VS_SHADER( RADIOSITY_PROPAGATE, "RH 5.0 confidence/visibility-aware secondary bounce" )
     BEGIN_SHADER_PARAMS
         SHADER_PARAM( SHR, SHADER_PARAM_TYPE_TEXTURE, "", "Filtered red SH volume" )
         SHADER_PARAM( SHG, SHADER_PARAM_TYPE_TEXTURE, "", "Filtered green SH volume" )
         SHADER_PARAM( SHB, SHADER_PARAM_TYPE_TEXTURE, "", "Filtered blue SH volume" )
         SHADER_PARAM( VIS, SHADER_PARAM_TYPE_TEXTURE, "", "Directional visibility volume" )
         SHADER_PARAM( META, SHADER_PARAM_TYPE_TEXTURE, "", "Filtered injection metadata" )
+        SHADER_PARAM( GEOMETRY, SHADER_PARAM_TYPE_TEXTURE, "", "Conservative geometry occupancy volume" )
     END_SHADER_PARAMS
 
     SHADER_INIT_PARAMS() {}
@@ -22,6 +23,7 @@ BEGIN_VS_SHADER( RADIOSITY_PROPAGATE, "RH 4.2 confidence/visibility-aware second
         LoadTexture( SHB );
         LoadTexture( VIS );
         LoadTexture( META );
+        LoadTexture( GEOMETRY );
     }
 
     SHADER_FALLBACK { return 0; }
@@ -40,6 +42,7 @@ BEGIN_VS_SHADER( RADIOSITY_PROPAGATE, "RH 4.2 confidence/visibility-aware second
             pShaderShadow->EnableTexture( SHADER_SAMPLER2, true );
             pShaderShadow->EnableTexture( SHADER_SAMPLER3, true );
             pShaderShadow->EnableTexture( SHADER_SAMPLER4, true );
+            pShaderShadow->EnableTexture( SHADER_SAMPLER5, true );
 
             int texCoordDimensions[] = { 2 };
             pShaderShadow->VertexShaderVertexFormat(
@@ -63,6 +66,7 @@ BEGIN_VS_SHADER( RADIOSITY_PROPAGATE, "RH 4.2 confidence/visibility-aware second
             BindTexture( SHADER_SAMPLER2, SHB );
             BindTexture( SHADER_SAMPLER3, VIS );
             BindTexture( SHADER_SAMPLER4, META );
+            BindTexture( SHADER_SAMPLER5, GEOMETRY );
 
             ConVarRef bounceGain( "deferred_rh_bounce_gain" );
             ConVarRef maxRadiance( "deferred_rh_max_radiance" );

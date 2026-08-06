@@ -28,6 +28,10 @@
 #include "vstdlib/jobthread.h"
 #include "datacache/imdlcache.h"
 #include "engine/IEngineTrace.h"
+#include "icliententity.h"
+#include "icliententitylist.h"
+#include "iclientrenderable.h"
+#include "mathlib/mathlib.h"
 #include "engine/ivmodelinfo.h"
 #include "tier0/icommandline.h"
 #include "view_scene.h"
@@ -50,6 +54,7 @@
 #include "modelrendersystem.h"
 #include "vgui/ISurface.h"
 #include "tier1/callqueue.h"
+#include <string.h>
 
 
 #include "rendertexture.h"
@@ -630,6 +635,9 @@ CDeferredViewRender::CDeferredViewRender()
 	m_bRadianceHintsInjected = false;
 	m_bRadianceHintsOriginValid = false;
 	m_flRadianceHintsCellSize = 0.0f;
+	m_vecRHGeometryOrigin.Init();
+	m_flRHGeometryCellSize = 0.0f;
+	m_bRHGeometryValid = false;
 }
 
 void CDeferredViewRender::Init()
@@ -646,6 +654,10 @@ void CDeferredViewRender::Shutdown()
 		m_pMesh_RadianceHintsVolume = NULL;
 	}
 
+	m_RHStaticGeometry.Purge();
+	m_RHCombinedGeometry.Purge();
+	m_bRHGeometryValid = false;
+
 	BaseClass::Shutdown();
 }
 
@@ -653,6 +665,10 @@ void CDeferredViewRender::LevelInit()
 {
 	m_bRadianceHintsOriginValid = false;
 	m_flRadianceHintsCellSize = 0.0f;
+	m_bRHGeometryValid = false;
+	m_flRHGeometryCellSize = 0.0f;
+	m_RHStaticGeometry.Purge();
+	m_RHCombinedGeometry.Purge();
 	BaseClass::LevelInit();
 }
 
@@ -660,6 +676,10 @@ void CDeferredViewRender::LevelShutdown()
 {
 	m_bRadianceHintsOriginValid = false;
 	m_flRadianceHintsCellSize = 0.0f;
+	m_bRHGeometryValid = false;
+	m_flRHGeometryCellSize = 0.0f;
+	m_RHStaticGeometry.Purge();
+	m_RHCombinedGeometry.Purge();
 	BaseClass::LevelShutdown();
 }
 
@@ -1027,6 +1047,7 @@ void CDeferredViewRender::BeginRadiosity( const CViewSetup &view )
 	m_vecRadiosityOrigin[0] = origin;
 	m_vecRadiosityOrigin[1] = origin;
 	m_bRadianceHintsInjected = false;
+	UpdateRadiosityGeometry();
 
 	CMatRenderContextPtr pRenderContext( materials );
 	for ( int set = 0; set < RH_SET_COUNT; ++set )
@@ -1048,6 +1069,185 @@ void CDeferredViewRender::BeginRadiosity( const CViewSetup &view )
 	pRenderContext->PopRenderTargetAndViewport();
 
 	UpdateRadiosityPosition();
+}
+
+
+namespace
+{
+    inline int RHGeometryAtlasIndex( int x, int y, int z )
+    {
+        return y * RH_ATLAS_WIDTH + z * RH_VOLUME_SIZE + x;
+    }
+
+    inline int RHClampCellIndex( int value )
+    {
+        return clamp( value, 0, RH_VOLUME_SIZE - 1 );
+    }
+}
+
+unsigned char CDeferredViewRender::BuildRadiosityStaticCell( const Vector &cellCenter, float cellSize ) const
+{
+    const float hullScale = clamp( deferred_rh_geometry_hull_scale.GetFloat(), 0.10f, 0.49f );
+    const float halfExtent = cellSize * hullScale;
+    const Vector hullMins( -halfExtent, -halfExtent, -halfExtent );
+    const Vector hullMaxs(  halfExtent,  halfExtent,  halfExtent );
+    const Vector epsilon( 0.0f, 0.0f, MAX( cellSize * 0.0025f, 0.01f ) );
+
+    Ray_t ray;
+    ray.Init( cellCenter - epsilon, cellCenter + epsilon, hullMins, hullMaxs );
+
+    CTraceFilterWorldAndPropsOnly filter;
+    trace_t trace;
+    enginetrace->TraceRay( ray, MASK_SOLID, &filter, &trace );
+
+    return ( trace.startsolid || trace.allsolid || trace.fraction < 1.0f ) ? 255 : 0;
+}
+
+void CDeferredViewRender::StampRadiosityDynamicModels( const Vector &origin, float cellSize )
+{
+    if ( !deferred_rh_dynamic_model_blockers.GetBool() || entitylist == NULL )
+        return;
+
+    const float conservativeRadius = cellSize * 0.8660254f;
+    const int highestEntity = entitylist->GetHighestEntityIndex();
+
+    for ( int entityIndex = 1; entityIndex <= highestEntity; ++entityIndex )
+    {
+        IClientEntity *pEntity = entitylist->GetClientEntity( entityIndex );
+        IClientRenderable *pRenderable = pEntity != NULL ? pEntity->GetClientRenderable() : NULL;
+        if ( pRenderable == NULL || !pRenderable->ShouldDraw() || pRenderable->IsTransparent() )
+            continue;
+
+        const model_t *pModel = pRenderable->GetModel();
+        if ( pModel == NULL || modelinfo->GetModelType( pModel ) != mod_studio )
+            continue;
+
+        Vector worldMins, worldMaxs;
+        pRenderable->GetRenderBoundsWorldspace( worldMins, worldMaxs );
+
+        int minCell[3];
+        int maxCell[3];
+        bool overlapsVolume = true;
+        for ( int axis = 0; axis < 3; ++axis )
+        {
+            minCell[axis] = (int)floor( ( worldMins[axis] - origin[axis] ) / cellSize ) - 1;
+            maxCell[axis] = (int)floor( ( worldMaxs[axis] - origin[axis] ) / cellSize ) + 1;
+            if ( maxCell[axis] < 0 || minCell[axis] >= RH_VOLUME_SIZE )
+                overlapsVolume = false;
+            minCell[axis] = RHClampCellIndex( minCell[axis] );
+            maxCell[axis] = RHClampCellIndex( maxCell[axis] );
+        }
+        if ( !overlapsVolume )
+            continue;
+
+        Vector localMins, localMaxs;
+        pRenderable->GetRenderBounds( localMins, localMaxs );
+        localMins -= Vector( conservativeRadius, conservativeRadius, conservativeRadius );
+        localMaxs += Vector( conservativeRadius, conservativeRadius, conservativeRadius );
+        const matrix3x4_t &renderToWorld = pRenderable->RenderableToWorldTransform();
+
+        for ( int z = minCell[2]; z <= maxCell[2]; ++z )
+        for ( int y = minCell[1]; y <= maxCell[1]; ++y )
+        for ( int x = minCell[0]; x <= maxCell[0]; ++x )
+        {
+            const Vector cellCenter = origin + Vector(
+                ( x + 0.5f ) * cellSize,
+                ( y + 0.5f ) * cellSize,
+                ( z + 0.5f ) * cellSize );
+
+            Vector localCenter;
+            VectorITransform( cellCenter, renderToWorld, localCenter );
+            const bool inside =
+                localCenter.x >= localMins.x && localCenter.x <= localMaxs.x &&
+                localCenter.y >= localMins.y && localCenter.y <= localMaxs.y &&
+                localCenter.z >= localMins.z && localCenter.z <= localMaxs.z;
+
+            if ( inside )
+                m_RHCombinedGeometry[ RHGeometryAtlasIndex( x, y, z ) ] = 255;
+        }
+    }
+}
+
+void CDeferredViewRender::UpdateRadiosityGeometry()
+{
+    const int cellCount = RH_ATLAS_WIDTH * RH_ATLAS_HEIGHT;
+    const float cellSize = MAX( m_flRadianceHintsCellSize, 1.0f );
+    const Vector origin = m_vecRadiosityOrigin[0];
+
+    if ( m_RHStaticGeometry.Count() != cellCount )
+        m_RHStaticGeometry.SetCount( cellCount );
+    if ( m_RHCombinedGeometry.Count() != cellCount )
+        m_RHCombinedGeometry.SetCount( cellCount );
+
+    if ( !deferred_rh_cpu_geometry_enable.GetBool() )
+    {
+        memset( m_RHStaticGeometry.Base(), 0, cellCount );
+        memset( m_RHCombinedGeometry.Base(), 0, cellCount );
+        m_bRHGeometryValid = false;
+        UpdateDefRT_RHGeometry( m_RHCombinedGeometry.Base(), cellCount );
+        return;
+    }
+
+    const bool sameCellSize = m_bRHGeometryValid && fabs( m_flRHGeometryCellSize - cellSize ) <= 0.01f;
+    int shift[3] = { RH_VOLUME_SIZE, RH_VOLUME_SIZE, RH_VOLUME_SIZE };
+    bool integerShift = sameCellSize;
+    if ( sameCellSize )
+    {
+        for ( int axis = 0; axis < 3; ++axis )
+        {
+            const float deltaCells = ( origin[axis] - m_vecRHGeometryOrigin[axis] ) / cellSize;
+            shift[axis] = (int)( deltaCells >= 0.0f ? floor( deltaCells + 0.5f ) : ceil( deltaCells - 0.5f ) );
+            if ( fabs( deltaCells - shift[axis] ) > 0.01f )
+                integerShift = false;
+        }
+    }
+
+    const bool originChanged = !m_bRHGeometryValid || !sameCellSize ||
+        origin.DistToSqr( m_vecRHGeometryOrigin ) > 0.01f;
+
+    if ( originChanged )
+    {
+        // Preserve the previous static field as a read-only source while the
+        // new camera-aligned atlas is rebuilt. Cells that remain at the same
+        // world location are copied; only newly exposed slabs are traced.
+        memcpy( m_RHCombinedGeometry.Base(), m_RHStaticGeometry.Base(), cellCount );
+
+        for ( int z = 0; z < RH_VOLUME_SIZE; ++z )
+        for ( int y = 0; y < RH_VOLUME_SIZE; ++y )
+        for ( int x = 0; x < RH_VOLUME_SIZE; ++x )
+        {
+            const int newIndex = RHGeometryAtlasIndex( x, y, z );
+            const int oldX = x + shift[0];
+            const int oldY = y + shift[1];
+            const int oldZ = z + shift[2];
+            const bool reusable = integerShift &&
+                oldX >= 0 && oldX < RH_VOLUME_SIZE &&
+                oldY >= 0 && oldY < RH_VOLUME_SIZE &&
+                oldZ >= 0 && oldZ < RH_VOLUME_SIZE;
+
+            if ( reusable )
+            {
+                m_RHStaticGeometry[newIndex] =
+                    m_RHCombinedGeometry[ RHGeometryAtlasIndex( oldX, oldY, oldZ ) ];
+            }
+            else
+            {
+                const Vector cellCenter = origin + Vector(
+                    ( x + 0.5f ) * cellSize,
+                    ( y + 0.5f ) * cellSize,
+                    ( z + 0.5f ) * cellSize );
+                m_RHStaticGeometry[newIndex] = BuildRadiosityStaticCell( cellCenter, cellSize );
+            }
+        }
+
+        m_vecRHGeometryOrigin = origin;
+        m_flRHGeometryCellSize = cellSize;
+        m_bRHGeometryValid = true;
+    }
+
+    memcpy( m_RHCombinedGeometry.Base(), m_RHStaticGeometry.Base(), cellCount );
+    StampRadiosityDynamicModels( origin, cellSize );
+    UpdateDefRT_RHGeometry( m_RHCombinedGeometry.Base(), cellCount );
 }
 
 void CDeferredViewRender::UpdateRadiosityPosition()
@@ -1147,12 +1347,24 @@ void CDeferredViewRender::PerformRadiosityVisibility()
 void CDeferredViewRender::PerformRadiosityFilter()
 {
 	CMatRenderContextPtr pRenderContext( materials );
+
+	// Pass 0: axial reconstruction, raw set 0 -> set 1.
 	pRenderContext->PushRenderTargetAndViewport( GetDefRT_RadianceHints( 1, RH_CHANNEL_SH_R ), NULL,
 		0, 0, RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT );
 	pRenderContext->SetRenderTargetEx( 1, GetDefRT_RadianceHints( 1, RH_CHANNEL_SH_G ) );
 	pRenderContext->SetRenderTargetEx( 2, GetDefRT_RadianceHints( 1, RH_CHANNEL_SH_B ) );
 	pRenderContext->SetRenderTargetEx( 3, GetDefRT_RadianceHints( 1, RH_CHANNEL_META ) );
 	pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_FILTER ) );
+	GetRadianceHintsVolumeMesh()->Draw();
+	pRenderContext->PopRenderTargetAndViewport();
+
+	// Pass 1: tetrahedral reconstruction, set 1 -> set 0. This is the final first-bounce field.
+	pRenderContext->PushRenderTargetAndViewport( GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_R ), NULL,
+		0, 0, RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT );
+	pRenderContext->SetRenderTargetEx( 1, GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_G ) );
+	pRenderContext->SetRenderTargetEx( 2, GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_B ) );
+	pRenderContext->SetRenderTargetEx( 3, GetDefRT_RadianceHints( 0, RH_CHANNEL_META ) );
+	pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_FILTER_1 ) );
 	GetRadianceHintsVolumeMesh()->Draw();
 	pRenderContext->PopRenderTargetAndViewport();
 }
@@ -1163,11 +1375,11 @@ void CDeferredViewRender::EndRadiosity( const CViewSetup &view )
 	if ( bounceCount > 0 )
 	{
 		CMatRenderContextPtr pRenderContext( materials );
-		pRenderContext->PushRenderTargetAndViewport( GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_R ), NULL,
+		pRenderContext->PushRenderTargetAndViewport( GetDefRT_RadianceHints( 1, RH_CHANNEL_SH_R ), NULL,
 			0, 0, RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT );
-		pRenderContext->SetRenderTargetEx( 1, GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_G ) );
-		pRenderContext->SetRenderTargetEx( 2, GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_B ) );
-		pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_1 ) );
+		pRenderContext->SetRenderTargetEx( 1, GetDefRT_RadianceHints( 1, RH_CHANNEL_SH_G ) );
+		pRenderContext->SetRenderTargetEx( 2, GetDefRT_RadianceHints( 1, RH_CHANNEL_SH_B ) );
+		pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_0 ) );
 		GetRadianceHintsVolumeMesh()->Draw();
 		pRenderContext->PopRenderTargetAndViewport();
 	}
@@ -1197,7 +1409,7 @@ void CDeferredViewRender::DebugRadiosity( const CViewSetup &view )
 	const Vector maximum = origin + Vector( extent, extent, extent );
 	DebugDrawCross( origin, cellSize * 0.4f, -1.0f );
 	DebugDrawCross( maximum, cellSize * 0.4f, -1.0f );
-	engine->Con_NPrintf( 20, "RH4.2 preset %s | grid %i | RSM %i | origin %.1f %.1f %.1f | injected %i",
+	engine->Con_NPrintf( 20, "RH5.0 preset %s | grid %i | RSM %i | origin %.1f %.1f %.1f | injected %i",
 		RH_QUALITY_PRESET == RH_PRESET_HIGH ? "HIGH" : "BALANCED",
 		RH_VOLUME_SIZE, RH_RSM_RESOLUTION, origin.x, origin.y, origin.z,
 		m_bRadianceHintsInjected ? 1 : 0 );

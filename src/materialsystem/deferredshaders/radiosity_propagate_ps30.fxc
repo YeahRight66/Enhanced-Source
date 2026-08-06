@@ -7,6 +7,7 @@ sampler sSH_G       : register( s1 );
 sampler sSH_B       : register( s2 );
 sampler sVisibility : register( s3 );
 sampler sMeta       : register( s4 );
+sampler sGeometry   : register( s5 );
 
 // x = sample radius UV, y = bounce gain, z = max radiance, w = radius cells.
 const float4 g_vecRHBounceSettings : register( c0 );
@@ -46,28 +47,45 @@ float3 RH_TraceTangent( float3 direction )
 
 float RH_TransferVisibility( float3 sourceUVW, float3 destinationUVW, float3 travelDirection )
 {
-    float blocker = 0.0f;
     float3 tangent = RH_TraceTangent( travelDirection );
     float coneUV = max( g_vecRHTraceSettings.x, 0.0f ) / RH_VOLUME_SIZE_F;
+    float opticalDepth = 0.0f;
 
 #if RH_GEOMETRY_TRACE_TAP_COUNT >= 1
-    float3 traceUVW0 = lerp( sourceUVW, destinationUVW, 0.36f );
-    float3 traceSide0 = traceUVW0 + tangent * ( coneUV * 0.35f );
-    float blocker0 = RH_EvaluateVisibilityTwoSided( RH_SampleAtlas( sVisibility, traceUVW0 ), travelDirection );
-    float blockerSide0 = RH_EvaluateVisibilityTwoSided( RH_SampleAtlas( sVisibility, traceSide0 ), travelDirection );
-    blocker = max( blocker, max( blocker0, blockerSide0 ) * RH_InsideVolume( traceUVW0 ) );
+    {
+        float3 traceUVW = lerp( sourceUVW, destinationUVW, 0.36f );
+        float3 traceSide = traceUVW + tangent * ( coneUV * 0.35f );
+        float centerBlocker = RH_EvaluateVisibilityTwoSided(
+            RH_SampleAtlas( sVisibility, traceUVW ), travelDirection );
+        float sideBlocker = RH_EvaluateVisibilityTwoSided(
+            RH_SampleAtlas( sVisibility, traceSide ), travelDirection );
+        float staticBlocker = max(
+            RH_SampleAtlas( sGeometry, traceUVW ).r,
+            RH_SampleAtlas( sGeometry, traceSide ).r );
+        opticalDepth += max( max( centerBlocker, sideBlocker ), staticBlocker )
+            * RH_InsideVolume( traceUVW ) * 0.50f;
+    }
 #endif
 #if RH_GEOMETRY_TRACE_TAP_COUNT >= 2
-    float3 traceUVW1 = lerp( sourceUVW, destinationUVW, 0.70f );
-    float3 traceSide1 = traceUVW1 - tangent * ( coneUV * 0.70f );
-    float blocker1 = RH_EvaluateVisibilityTwoSided( RH_SampleAtlas( sVisibility, traceUVW1 ), travelDirection );
-    float blockerSide1 = RH_EvaluateVisibilityTwoSided( RH_SampleAtlas( sVisibility, traceSide1 ), travelDirection );
-    blocker = max( blocker, max( blocker1, blockerSide1 ) * RH_InsideVolume( traceUVW1 ) );
+    {
+        float3 traceUVW = lerp( sourceUVW, destinationUVW, 0.72f );
+        float3 traceSide = traceUVW - tangent * ( coneUV * 0.75f );
+        float centerBlocker = RH_EvaluateVisibilityTwoSided(
+            RH_SampleAtlas( sVisibility, traceUVW ), travelDirection );
+        float sideBlocker = RH_EvaluateVisibilityTwoSided(
+            RH_SampleAtlas( sVisibility, traceSide ), travelDirection );
+        float staticBlocker = max(
+            RH_SampleAtlas( sGeometry, traceUVW ).r,
+            RH_SampleAtlas( sGeometry, traceSide ).r );
+        opticalDepth += max( max( centerBlocker, sideBlocker ), staticBlocker )
+            * RH_InsideVolume( traceUVW ) * 0.50f;
+    }
 #endif
 
     float bias = clamp( g_vecRHVisibilitySettings.w, 0.0f, 0.95f );
-    blocker = saturate( ( blocker - bias ) / max( 1.0f - bias, 0.05f ) );
-    float transmittance = exp2( -4.0f * max( g_vecRHVisibilitySettings.y, 0.0f ) * blocker );
+    opticalDepth = max( opticalDepth - bias, 0.0f ) / max( 1.0f - bias, 0.05f );
+    float transmittance = exp2(
+        -4.0f * max( g_vecRHVisibilitySettings.y, 0.0f ) * opticalDepth );
     transmittance = max( transmittance, saturate( g_vecRHVisibilitySettings.z ) );
     return lerp( 1.0f, transmittance, saturate( g_vecRHVisibilitySettings.x ) );
 }
