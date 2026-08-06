@@ -29,7 +29,7 @@
 #include "datacache/imdlcache.h"
 #include "engine/IEngineTrace.h"
 #include "icliententity.h"
-#include "icliententitylist.h"
+#include "cliententitylist.h"
 #include "iclientrenderable.h"
 #include "mathlib/mathlib.h"
 #include "engine/ivmodelinfo.h"
@@ -1105,15 +1105,16 @@ unsigned char CDeferredViewRender::BuildRadiosityStaticCell( const Vector &cellC
 
 void CDeferredViewRender::StampRadiosityDynamicModels( const Vector &origin, float cellSize )
 {
-    if ( !deferred_rh_dynamic_model_blockers.GetBool() || entitylist == NULL )
+    CClientEntityList *pEntityList = cl_entitylist;
+    if ( !deferred_rh_dynamic_model_blockers.GetBool() || pEntityList == NULL )
         return;
 
     const float conservativeRadius = cellSize * 0.8660254f;
-    const int highestEntity = entitylist->GetHighestEntityIndex();
+    const int highestEntity = pEntityList->GetHighestEntityIndex();
 
     for ( int entityIndex = 1; entityIndex <= highestEntity; ++entityIndex )
     {
-        IClientEntity *pEntity = entitylist->GetClientEntity( entityIndex );
+        IClientEntity *pEntity = pEntityList->GetClientEntity( entityIndex );
         IClientRenderable *pRenderable = pEntity != NULL ? pEntity->GetClientRenderable() : NULL;
         if ( pRenderable == NULL || !pRenderable->ShouldDraw() )
             continue;
