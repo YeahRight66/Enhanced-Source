@@ -20,26 +20,22 @@ float3 DecodeRHNormal( float2 uv )
     return normal * rsqrt( max( dot( normal, normal ), 1.0e-8f ) );
 }
 
-void AccumulateRH(
-    float2 uv, float spatialWeight, float centerDepth, float3 centerNormal,
-    inout float3 colourSum, inout float weightSum,
-    inout float3 fallbackColour, inout float fallbackError )
-{
-    uv = saturate( uv );
-    float4 gi = tex2Dlod( sHalfGI, float4( uv, 0.0f, 0.0f ) );
-    float valid = step( 0.1f, gi.a ) * step( gi.a, DEPTH_RECONSTRUCTION_LIMIT );
-    float depthDifference = abs( gi.a - centerDepth );
-    float depthWeight = exp2( -depthDifference * g_Filter.x );
-    float normalWeight = pow( saturate( dot( centerNormal, DecodeRHNormal( uv ) ) ), g_Filter.y );
-    float weight = spatialWeight * depthWeight * normalWeight * valid;
-    colourSum += gi.rgb * weight;
-    weightSum += weight;
-
-    float error = depthDifference + ( 1.0f - normalWeight ) * max( g_Filter.z, 0.0f )
-        + ( 1.0f - valid ) * 65504.0f;
-    float replaceFallback = step( error, fallbackError );
-    fallbackColour = lerp( fallbackColour, gi.rgb, replaceFallback );
-    fallbackError = lerp( fallbackError, error, replaceFallback );
+#define RH_ACCUMULATE_UPSAMPLE( SAMPLE_UV, SPATIAL_WEIGHT ) \
+{ \
+    float2 rhUV = saturate( SAMPLE_UV ); \
+    float4 rhGI = tex2Dlod( sHalfGI, float4( rhUV, 0.0f, 0.0f ) ); \
+    float rhValid = step( 0.1f, rhGI.a ) * step( rhGI.a, DEPTH_RECONSTRUCTION_LIMIT ); \
+    float rhDepthDifference = abs( rhGI.a - centerDepth ); \
+    float rhDepthWeight = exp2( -rhDepthDifference * g_Filter.x ); \
+    float rhNormalWeight = pow( saturate( dot( centerNormal, DecodeRHNormal( rhUV ) ) ), g_Filter.y ); \
+    float rhWeight = SPATIAL_WEIGHT * rhDepthWeight * rhNormalWeight * rhValid; \
+    sum += rhGI.rgb * rhWeight; \
+    weight += rhWeight; \
+    float rhError = rhDepthDifference + ( 1.0f - rhNormalWeight ) * max( g_Filter.z, 0.0f ) \
+        + ( 1.0f - rhValid ) * 65504.0f; \
+    float rhReplace = step( rhError, fallbackError ); \
+    fallbackColour = lerp( fallbackColour, rhGI.rgb, rhReplace ); \
+    fallbackError = lerp( fallbackError, rhError, rhReplace ); \
 }
 
 float4 main( const PS_INPUT In ) : COLOR0
@@ -48,9 +44,6 @@ float4 main( const PS_INPUT In ) : COLOR0
     clip( min( centerDepth - 0.1f, DEPTH_RECONSTRUCTION_LIMIT - centerDepth ) );
     float3 centerNormal = DecodeRHNormal( In.vTexCoord );
 
-    // Convert the full-resolution sample to continuous half-resolution pixel
-    // space. This preserves the real subpixel phase instead of snapping every
-    // 2x2 full-resolution block to one half-resolution texel.
     float2 halfPosition = In.vTexCoord * g_HalfSize.xy - 0.5f;
     float2 basePixel = floor( halfPosition );
     float2 fractionValue = frac( halfPosition );
@@ -70,10 +63,10 @@ float4 main( const PS_INPUT In ) : COLOR0
     float3 fallbackColour = 0.0f;
     float fallbackError = 65504.0f;
 
-    AccumulateRH( uv00, spatial.x, centerDepth, centerNormal, sum, weight, fallbackColour, fallbackError );
-    AccumulateRH( uv10, spatial.y, centerDepth, centerNormal, sum, weight, fallbackColour, fallbackError );
-    AccumulateRH( uv01, spatial.z, centerDepth, centerNormal, sum, weight, fallbackColour, fallbackError );
-    AccumulateRH( uv11, spatial.w, centerDepth, centerNormal, sum, weight, fallbackColour, fallbackError );
+    RH_ACCUMULATE_UPSAMPLE( uv00, spatial.x );
+    RH_ACCUMULATE_UPSAMPLE( uv10, spatial.y );
+    RH_ACCUMULATE_UPSAMPLE( uv01, spatial.z );
+    RH_ACCUMULATE_UPSAMPLE( uv11, spatial.w );
 
     float validWeight = step( 1.0e-5f, weight );
     float3 filtered = sum / max( weight, 1.0e-5f );

@@ -1,3 +1,8 @@
+// STATIC: "BOUNCE_MODE" "0..6"
+// 0 = true surface bounce generation.
+// 1..3 = physical X/Y/Z transport of the surface bounce.
+// 4..6 = low-energy Jason-style X/Y/Z RH diffusion from the first-bounce field.
+
 #include "common_ps_fxc.h"
 #include "common_deferred_fxc.h"
 #include "radiance_hints_common_fxc.h"
@@ -12,16 +17,21 @@ sampler sGeometryDist  : register( s6 );
 sampler sSurfaceAlbedo : register( s7 );
 sampler sSurfaceNormal : register( s8 );
 
-// x = sample radius UV, y = transport gain, z = max radiance, w = radius cells.
+// x = physical sample radius UV, y = physical transport gain,
+// z = max radiance, w = physical radius cells.
 const float4 g_vecRHBounceSettings : register( c0 );
 // x = visibility enable, y = extinction, z = min transmittance, w = blocker bias.
 const float4 g_vecRHVisibilitySettings : register( c1 );
 // xyz = RH origin, w = cell size.
 const float4 g_vecRHWorldGrid : register( c2 );
-// x = trace cone width cells, y = minimum confidence, z = mode, w = surface bounce gain.
+// x = trace cone width cells, y = physical minimum confidence,
+// z = bounce mode, w = surface-bounce generation gain.
 const float4 g_vecRHTraceSettings : register( c3 );
 // x = minimum surface coverage.
 const float4 g_vecRHSurfaceSettings : register( c4 );
+// x = diffusion gain, y = diffusion radius UV,
+// z = diffusion radius cells, w = diffusion minimum confidence.
+const float4 g_vecRHDiffusionSettings : register( c5 );
 
 struct PS_INPUT
 {
@@ -36,40 +46,21 @@ struct PS_OUTPUT
     float4 vSH_B : COLOR2;
 };
 
-float3 RH_TraceTangent( float3 direction )
+#if BOUNCE_MODE != 0
+float RH_TransferVisibilityCompact(
+    float3 sourceUVW,
+    float3 destinationUVW,
+    float3 travelDirection,
+    float radiusCells )
 {
-    float3 referenceAxis = abs( direction.z ) < 0.85f
-        ? float3( 0.0f, 0.0f, 1.0f )
-        : float3( 0.0f, 1.0f, 0.0f );
-    return RH_SafeNormalize( cross( referenceAxis, direction ), float3( 1.0f, 0.0f, 0.0f ) );
-}
-
-float RH_TransferVisibility( float3 sourceUVW, float3 destinationUVW, float3 travelDirection )
-{
-    float3 tangent = RH_TraceTangent( travelDirection );
-    float coneUV = max( g_vecRHTraceSettings.x, 0.0f ) / RH_VOLUME_SIZE_F;
-    float opticalDepth = 0.0f;
-
-    float3 trace0 = lerp( sourceUVW, destinationUVW, 0.36f );
-    float3 traceSide0 = trace0 + tangent * ( coneUV * 0.35f );
-    float blocker0 = max(
-        max( RH_EvaluateVisibilityTwoSided( RH_SampleAtlas( sVisibility, trace0 ), travelDirection ),
-             RH_EvaluateVisibilityTwoSided( RH_SampleAtlas( sVisibility, traceSide0 ), travelDirection ) ),
-        max( RH_SampleAtlas( sGeometry, trace0 ).r, RH_SampleAtlas( sGeometry, traceSide0 ).r ) );
-
-    float3 trace1 = lerp( sourceUVW, destinationUVW, 0.72f );
-    float3 traceSide1 = trace1 - tangent * ( coneUV * 0.75f );
-    float blocker1 = max(
-        max( RH_EvaluateVisibilityTwoSided( RH_SampleAtlas( sVisibility, trace1 ), travelDirection ),
-             RH_EvaluateVisibilityTwoSided( RH_SampleAtlas( sVisibility, traceSide1 ), travelDirection ) ),
-        max( RH_SampleAtlas( sGeometry, trace1 ).r, RH_SampleAtlas( sGeometry, traceSide1 ).r ) );
-
-    // Reduce trilinear blocker thickness as samples move away from a real
-    // occupied cell, while retaining strong extinction inside actual geometry.
-    float clearance0 = saturate( RH_SampleAtlas( sGeometryDist, trace0 ).r * 127.5f );
-    float clearance1 = saturate( RH_SampleAtlas( sGeometryDist, trace1 ).r * 127.5f );
-    opticalDepth = blocker0 * lerp( 0.55f, 0.35f, clearance0 )
-        + blocker1 * lerp( 0.55f, 0.35f, clearance1 );
+    float3 midpoint = lerp( sourceUVW, destinationUVW, 0.5f );
+    float directionalBlocker = RH_EvaluateVisibilityTwoSided(
+        RH_SampleAtlas( sVisibility, midpoint ), travelDirection );
+    float staticBlocker = RH_SampleAtlas( sGeometry, midpoint ).r;
+    float distanceCells = RH_SampleAtlas( sGeometryDist, midpoint ).r * 255.0f;
+    float clearance = saturate( distanceCells / max( radiusCells, 1.0f ) );
+    float opticalDepth = max( directionalBlocker, staticBlocker )
+        * lerp( 0.68f, 0.36f, clearance );
 
     float bias = clamp( g_vecRHVisibilitySettings.w, 0.0f, 0.95f );
     opticalDepth = max( opticalDepth - bias, 0.0f ) / max( 1.0f - bias, 0.05f );
@@ -78,91 +69,137 @@ float RH_TransferVisibility( float3 sourceUVW, float3 destinationUVW, float3 tra
     transmittance = max( transmittance, saturate( g_vecRHVisibilitySettings.z ) );
     return lerp( 1.0f, transmittance, saturate( g_vecRHVisibilitySettings.x ) );
 }
+#endif
 
-void RH_AccumulateTransport(
-    float3 destinationUVW,
-    float3 sourceDirection,
-    inout float4 outSH_R,
-    inout float4 outSH_G,
-    inout float4 outSH_B )
-{
-    float3 sourceUVW = destinationUVW + sourceDirection * g_vecRHBounceSettings.x;
-    float inside = RH_InsideVolume( sourceUVW );
-    float4 sourceMeta = RH_SampleAtlas( sMeta, sourceUVW );
-    float sourceConfidence = RH_MetaConfidence( sourceMeta );
-
-    float4 sourceR = RH_LimitRadianceSH( RH_SampleAtlas( sSH_R, sourceUVW ) );
-    float4 sourceG = RH_LimitRadianceSH( RH_SampleAtlas( sSH_G, sourceUVW ) );
-    float4 sourceB = RH_LimitRadianceSH( RH_SampleAtlas( sSH_B, sourceUVW ) );
-    float sourceEnergy = RH_RadianceEnergy( sourceR, sourceG, sourceB );
-    float confidenceValid = step( saturate( g_vecRHTraceSettings.y ), max( sourceConfidence, saturate( sourceEnergy ) ) );
-    float valid = inside * confidenceValid * step( 1.0e-5f, sourceEnergy );
-
-    float3 travelDirection = RH_SafeNormalize( -sourceDirection, float3( 0.0f, 0.0f, 1.0f ) );
-    float visibility = RH_TransferVisibility( sourceUVW, destinationUVW, travelDirection );
-    float weight = valid * visibility
-        / ( 1.0f + 0.45f * g_vecRHBounceSettings.w * g_vecRHBounceSettings.w );
-    float4 transferBasis = RH_ProjectDirection( travelDirection );
-    float maximumRadiance = max( g_vecRHBounceSettings.z, 0.25f );
-
-    outSH_R += transferBasis * ( min( max( dot( sourceR, transferBasis ), 0.0f ), maximumRadiance ) * weight );
-    outSH_G += transferBasis * ( min( max( dot( sourceG, transferBasis ), 0.0f ), maximumRadiance ) * weight );
-    outSH_B += transferBasis * ( min( max( dot( sourceB, transferBasis ), 0.0f ), maximumRadiance ) * weight );
+#if BOUNCE_MODE >= 1 && BOUNCE_MODE <= 3
+#define RH_ACCUMULATE_TRANSPORT( DX, DY, DZ ) \
+{ \
+    float3 rhSourceDirection = float3( DX, DY, DZ ); \
+    float3 rhSourceUVW = In.vVolumeUVW + rhSourceDirection * g_vecRHBounceSettings.x; \
+    float rhInside = RH_InsideVolume( rhSourceUVW ); \
+    float4 rhMeta = RH_SampleAtlas( sMeta, rhSourceUVW ); \
+    float rhConfidence = RH_MetaConfidence( rhMeta ); \
+    float4 rhR = RH_LimitRadianceSH( RH_SampleAtlas( sSH_R, rhSourceUVW ) ); \
+    float4 rhG = RH_LimitRadianceSH( RH_SampleAtlas( sSH_G, rhSourceUVW ) ); \
+    float4 rhB = RH_LimitRadianceSH( RH_SampleAtlas( sSH_B, rhSourceUVW ) ); \
+    float rhEnergy = RH_RadianceEnergy( rhR, rhG, rhB ); \
+    float rhConfidenceValid = step( saturate( g_vecRHTraceSettings.y ), max( rhConfidence, saturate( rhEnergy ) ) ); \
+    float rhValid = rhInside * rhConfidenceValid * step( 1.0e-5f, rhEnergy ); \
+    float3 rhTravelDirection = -rhSourceDirection; \
+    float rhVisibility = RH_TransferVisibilityCompact( rhSourceUVW, In.vVolumeUVW, rhTravelDirection, g_vecRHBounceSettings.w ); \
+    float rhWeight = rhValid * rhVisibility / ( 1.0f + 0.45f * g_vecRHBounceSettings.w * g_vecRHBounceSettings.w ); \
+    float4 rhBasis = RH_ProjectDirection( rhTravelDirection ); \
+    float rhMaximum = max( g_vecRHBounceSettings.z, 0.25f ); \
+    bouncedSH_R += rhBasis * ( min( max( dot( rhR, rhBasis ), 0.0f ), rhMaximum ) * rhWeight ); \
+    bouncedSH_G += rhBasis * ( min( max( dot( rhG, rhBasis ), 0.0f ), rhMaximum ) * rhWeight ); \
+    bouncedSH_B += rhBasis * ( min( max( dot( rhB, rhBasis ), 0.0f ), rhMaximum ) * rhWeight ); \
 }
+#endif
+
+#if BOUNCE_MODE >= 4
+// Jason-inspired diffusion: sample nearby first-bounce RH, use the stored
+// confidence plus our geometry-distance/visibility field as the visibility
+// test, then reproject only a small amount in the travel direction. Pairwise
+// +/- directions retain reflection symmetry and contain no temporal noise.
+#define RH_ACCUMULATE_DIFFUSION( DX, DY, DZ ) \
+{ \
+    float3 rhSourceDirection = float3( DX, DY, DZ ); \
+    float3 rhSourceUVW = In.vVolumeUVW + rhSourceDirection * g_vecRHDiffusionSettings.y; \
+    float rhInside = RH_InsideVolume( rhSourceUVW ); \
+    float4 rhMeta = RH_SampleAtlas( sMeta, rhSourceUVW ); \
+    float rhConfidence = RH_MetaConfidence( rhMeta ); \
+    float4 rhR = RH_LimitRadianceSH( RH_SampleAtlas( sSH_R, rhSourceUVW ) ); \
+    float4 rhG = RH_LimitRadianceSH( RH_SampleAtlas( sSH_G, rhSourceUVW ) ); \
+    float4 rhB = RH_LimitRadianceSH( RH_SampleAtlas( sSH_B, rhSourceUVW ) ); \
+    float rhEnergy = RH_RadianceEnergy( rhR, rhG, rhB ); \
+    float rhConfidenceValid = step( saturate( g_vecRHDiffusionSettings.w ), max( rhConfidence, saturate( rhEnergy ) ) ); \
+    float rhValid = rhInside * rhConfidenceValid * step( 1.0e-5f, rhEnergy ); \
+    float3 rhTravelDirection = -rhSourceDirection; \
+    float rhVisibility = RH_TransferVisibilityCompact( rhSourceUVW, In.vVolumeUVW, rhTravelDirection, g_vecRHDiffusionSettings.z ); \
+    float rhSourceDistanceCells = RH_SampleAtlas( sGeometryDist, rhSourceUVW ).r * 255.0f; \
+    float rhClearance = saturate( rhSourceDistanceCells / max( g_vecRHDiffusionSettings.z, 1.0f ) ); \
+    float rhWeight = rhValid * rhVisibility * lerp( 0.42f, 1.0f, rhClearance ) \
+        / ( 1.0f + 0.28f * g_vecRHDiffusionSettings.z * g_vecRHDiffusionSettings.z ); \
+    float4 rhBasis = RH_ProjectDirection( rhTravelDirection ); \
+    float rhMaximum = max( g_vecRHBounceSettings.z, 0.25f ); \
+    diffusedSH_R += rhBasis * ( min( max( dot( rhR, rhBasis ), 0.0f ), rhMaximum ) * rhWeight ); \
+    diffusedSH_G += rhBasis * ( min( max( dot( rhG, rhBasis ), 0.0f ), rhMaximum ) * rhWeight ); \
+    diffusedSH_B += rhBasis * ( min( max( dot( rhB, rhBasis ), 0.0f ), rhMaximum ) * rhWeight ); \
+}
+#endif
 
 PS_OUTPUT main( const PS_INPUT In )
 {
     PS_OUTPUT Out;
 
-    [branch]
-    if ( g_vecRHTraceSettings.z < 0.5f )
-    {
-        // True surface bounce: incoming first-bounce + hemisphere irradiance is
-        // reflected by RSM material albedo and re-emitted into the outward hemisphere.
-        float4 surfaceAlbedoAccum = RH_SampleAtlas( sSurfaceAlbedo, In.vVolumeUVW );
-        float4 surfaceNormalAccum = RH_SampleAtlas( sSurfaceNormal, In.vVolumeUVW );
-        float weight = min( surfaceAlbedoAccum.a, surfaceNormalAccum.a );
-        float valid = step( max( g_vecRHSurfaceSettings.x, 0.0f ), weight );
-        float inverseWeight = 1.0f / max( weight, 1.0e-4f );
-        float3 albedo = saturate( surfaceAlbedoAccum.rgb * inverseWeight );
-        float3 averagedNormal = surfaceNormalAccum.rgb * inverseWeight;
-        float normalCoherence = saturate( length( averagedNormal ) );
-        valid *= smoothstep( 0.20f, 0.55f, normalCoherence );
-        float3 normal = RH_SafeNormalize( averagedNormal, float3( 0.0f, 0.0f, 1.0f ) );
+#if BOUNCE_MODE == 0
+    // True surface bounce: first-bounce + hemisphere irradiance is reflected by
+    // RSM material albedo and re-emitted into the outward Lambertian hemisphere.
+    float4 surfaceAlbedoAccum = RH_SampleAtlas( sSurfaceAlbedo, In.vVolumeUVW );
+    float4 surfaceNormalAccum = RH_SampleAtlas( sSurfaceNormal, In.vVolumeUVW );
+    float weight = min( surfaceAlbedoAccum.a, surfaceNormalAccum.a );
+    float valid = step( max( g_vecRHSurfaceSettings.x, 0.0f ), weight );
+    float inverseWeight = 1.0f / max( weight, 1.0e-4f );
+    float3 albedo = saturate( surfaceAlbedoAccum.rgb * inverseWeight );
+    float3 averagedNormal = surfaceNormalAccum.rgb * inverseWeight;
+    float normalCoherence = saturate( length( averagedNormal ) );
+    valid *= smoothstep( 0.20f, 0.55f, normalCoherence );
+    float3 normal = RH_SafeNormalize( averagedNormal, float3( 0.0f, 0.0f, 1.0f ) );
 
-        float4 diffuseBasis = RH_DiffuseBasis( -normal );
-        float3 irradiance;
-        irradiance.r = max( dot( RH_SampleAtlas( sSH_R, In.vVolumeUVW ), diffuseBasis ), 0.0f );
-        irradiance.g = max( dot( RH_SampleAtlas( sSH_G, In.vVolumeUVW ), diffuseBasis ), 0.0f );
-        irradiance.b = max( dot( RH_SampleAtlas( sSH_B, In.vVolumeUVW ), diffuseBasis ), 0.0f );
+    float4 diffuseBasis = RH_DiffuseBasis( -normal );
+    float3 irradiance;
+    irradiance.r = max( dot( RH_SampleAtlas( sSH_R, In.vVolumeUVW ), diffuseBasis ), 0.0f );
+    irradiance.g = max( dot( RH_SampleAtlas( sSH_G, In.vVolumeUVW ), diffuseBasis ), 0.0f );
+    irradiance.b = max( dot( RH_SampleAtlas( sSH_B, In.vVolumeUVW ), diffuseBasis ), 0.0f );
 
-        float3 reflectedRadiance = albedo * irradiance
-            * ( 0.3183098862f * max( g_vecRHTraceSettings.w, 0.0f ) * valid );
-        reflectedRadiance = RH_ClampRadiance( reflectedRadiance, max( g_vecRHBounceSettings.z, 0.25f ) );
-        float4 hemisphereBasis = RH_ProjectHemisphere( normal );
-        Out.vSH_R = RH_LimitRadianceSH( hemisphereBasis * reflectedRadiance.r );
-        Out.vSH_G = RH_LimitRadianceSH( hemisphereBasis * reflectedRadiance.g );
-        Out.vSH_B = RH_LimitRadianceSH( hemisphereBasis * reflectedRadiance.b );
-        return Out;
-    }
-
+    float3 reflectedRadiance = albedo * irradiance
+        * ( 0.3183098862f * max( g_vecRHTraceSettings.w, 0.0f ) * valid );
+    reflectedRadiance = RH_ClampRadiance(
+        reflectedRadiance, max( g_vecRHBounceSettings.z, 0.25f ) );
+    float4 hemisphereBasis = RH_ProjectHemisphere( normal );
+    Out.vSH_R = RH_LimitRadianceSH( hemisphereBasis * reflectedRadiance.r );
+    Out.vSH_G = RH_LimitRadianceSH( hemisphereBasis * reflectedRadiance.g );
+    Out.vSH_B = RH_LimitRadianceSH( hemisphereBasis * reflectedRadiance.b );
+#elif BOUNCE_MODE <= 3
     float4 bouncedSH_R = 0.0f;
     float4 bouncedSH_G = 0.0f;
     float4 bouncedSH_B = 0.0f;
 
-    // Six-axis set is exactly reflection invariant and maps efficiently to RH cells.
-    RH_AccumulateTransport( In.vVolumeUVW, float3( 1.0f, 0.0f, 0.0f ), bouncedSH_R, bouncedSH_G, bouncedSH_B );
-    RH_AccumulateTransport( In.vVolumeUVW, float3(-1.0f, 0.0f, 0.0f ), bouncedSH_R, bouncedSH_G, bouncedSH_B );
-    RH_AccumulateTransport( In.vVolumeUVW, float3( 0.0f, 1.0f, 0.0f ), bouncedSH_R, bouncedSH_G, bouncedSH_B );
-    RH_AccumulateTransport( In.vVolumeUVW, float3( 0.0f,-1.0f, 0.0f ), bouncedSH_R, bouncedSH_G, bouncedSH_B );
-    RH_AccumulateTransport( In.vVolumeUVW, float3( 0.0f, 0.0f, 1.0f ), bouncedSH_R, bouncedSH_G, bouncedSH_B );
-    RH_AccumulateTransport( In.vVolumeUVW, float3( 0.0f, 0.0f,-1.0f ), bouncedSH_R, bouncedSH_G, bouncedSH_B );
+#if BOUNCE_MODE == 1
+    RH_ACCUMULATE_TRANSPORT( 1.0f, 0.0f, 0.0f );
+    RH_ACCUMULATE_TRANSPORT(-1.0f, 0.0f, 0.0f );
+#elif BOUNCE_MODE == 2
+    RH_ACCUMULATE_TRANSPORT( 0.0f, 1.0f, 0.0f );
+    RH_ACCUMULATE_TRANSPORT( 0.0f,-1.0f, 0.0f );
+#else
+    RH_ACCUMULATE_TRANSPORT( 0.0f, 0.0f, 1.0f );
+    RH_ACCUMULATE_TRANSPORT( 0.0f, 0.0f,-1.0f );
+#endif
 
-    // Fixed stencil normalization preserves additive energy. The old accepted-
-    // weight average made a real second bounce almost invisible.
     float normalization = max( g_vecRHBounceSettings.y, 0.0f ) / 6.0f;
     Out.vSH_R = RH_LimitRadianceSH( bouncedSH_R * normalization );
     Out.vSH_G = RH_LimitRadianceSH( bouncedSH_G * normalization );
     Out.vSH_B = RH_LimitRadianceSH( bouncedSH_B * normalization );
+#else
+    float4 diffusedSH_R = 0.0f;
+    float4 diffusedSH_G = 0.0f;
+    float4 diffusedSH_B = 0.0f;
+
+#if BOUNCE_MODE == 4
+    RH_ACCUMULATE_DIFFUSION( 1.0f, 0.0f, 0.0f );
+    RH_ACCUMULATE_DIFFUSION(-1.0f, 0.0f, 0.0f );
+#elif BOUNCE_MODE == 5
+    RH_ACCUMULATE_DIFFUSION( 0.0f, 1.0f, 0.0f );
+    RH_ACCUMULATE_DIFFUSION( 0.0f,-1.0f, 0.0f );
+#else
+    RH_ACCUMULATE_DIFFUSION( 0.0f, 0.0f, 1.0f );
+    RH_ACCUMULATE_DIFFUSION( 0.0f, 0.0f,-1.0f );
+#endif
+
+    float normalization = max( g_vecRHDiffusionSettings.x, 0.0f ) / 6.0f;
+    Out.vSH_R = RH_LimitRadianceSH( diffusedSH_R * normalization );
+    Out.vSH_G = RH_LimitRadianceSH( diffusedSH_G * normalization );
+    Out.vSH_B = RH_LimitRadianceSH( diffusedSH_B * normalization );
+#endif
     return Out;
 }

@@ -6,9 +6,14 @@
 
 BEGIN_VS_SHADER( RADIOSITY_VISIBILITY, "RH 6.0 symmetric directional blocker injection" )
     BEGIN_SHADER_PARAMS
+        SHADER_PARAM( VISIBILITYPHASE, SHADER_PARAM_TYPE_INTEGER, "0", "0=cardinal samples, 1=diagonal samples" )
     END_SHADER_PARAMS
 
-    SHADER_INIT_PARAMS() {}
+    SHADER_INIT_PARAMS()
+    {
+        if ( !params[ VISIBILITYPHASE ]->IsDefined() )
+            params[ VISIBILITYPHASE ]->SetIntValue( 0 );
+    }
     SHADER_INIT
     {
     }
@@ -35,6 +40,7 @@ BEGIN_VS_SHADER( RADIOSITY_VISIBILITY, "RH 6.0 symmetric directional blocker inj
             SET_STATIC_VERTEX_SHADER( radiosity_gen_vs30 );
 
             DECLARE_STATIC_PIXEL_SHADER( radiosity_gen_visibility_ps30 );
+            SET_STATIC_PIXEL_SHADER_COMBO( VISIBILITY_PHASE, clamp( params[ VISIBILITYPHASE ]->GetIntValue(), 0, 1 ) );
             SET_STATIC_PIXEL_SHADER( radiosity_gen_visibility_ps30 );
         }
         DYNAMIC_STATE

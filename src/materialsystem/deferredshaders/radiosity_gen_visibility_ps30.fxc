@@ -1,3 +1,6 @@
+// STATIC: "VISIBILITY_PHASE" "0..1"
+// 0 = cardinal D4 samples, 1 = diagonal D4 samples.
+
 #include "common_ps_fxc.h"
 #include "radiance_hints_common_fxc.h"
 
@@ -7,14 +10,11 @@ const float3   g_vecGridOrigin : register( c8 );
 
 // x = volume extent, y = cell size, z = edge fade, w = RSM world side
 const float4 g_vecRHSettings : register( c9 );
-
 // x = enable, y = inner radius cells, z = outer radius cells, w = strength
 const float4 g_vecVisibility : register( c10 );
-
 // x = distance decay, y = inverse RSM resolution,
 // z = dilation cells, w = normal-facing influence
 const float4 g_vecDecay : register( c11 );
-
 // x = per-view accumulation scale (0.5 for front/back dual capture)
 const float4 g_vecPass : register( c12 );
 
@@ -33,172 +33,71 @@ float3 RH_ReconstructRSMPositionVisibility( float2 uv, float depth )
     return world.xyz / max( abs( world.w ), 1.0e-6f );
 }
 
-// Kept as a function rather than an indexed constant array because old DX9
-// FXC is more reliable with integer flow control than relative addressing
-// into locally initialized arrays.
-float2 RH_GetVisibilityOffset( int sampleIndex )
-{
-    if ( sampleIndex == 0 ) return float2( 0.34f,  0.00f );
-    if ( sampleIndex == 1 ) return float2(-0.34f,  0.00f );
-    if ( sampleIndex == 2 ) return float2( 0.00f,  0.34f );
-    if ( sampleIndex == 3 ) return float2( 0.00f, -0.34f );
-    if ( sampleIndex == 4 ) return float2( 0.58f,  0.58f );
-    if ( sampleIndex == 5 ) return float2(-0.58f,  0.58f );
-    if ( sampleIndex == 6 ) return float2( 0.58f, -0.58f );
-    return float2(-0.58f, -0.58f );
+// Scoped macro rather than a sampler-heavy helper with eleven parameters.
+// Each compile permutation expands only four calls, which avoids the internal
+// compiler crash seen in the old Source FXC while retaining all eight samples
+// after the two additive volume draws.
+#define RH_ACCUMULATE_VISIBILITY_SAMPLE( OX, OY ) \
+{ \
+    float2 rhUV = centerUV + float2( OX, OY ) * sampleUVScale; \
+    float rhInside = step( 0.0f, rhUV.x ) * step( rhUV.x, 1.0f ) \
+        * step( 0.0f, rhUV.y ) * step( rhUV.y, 1.0f ); \
+    rhUV = saturate( rhUV ); \
+    float rhEdge = min( min( rhUV.x, rhUV.y ), min( 1.0f - rhUV.x, 1.0f - rhUV.y ) ); \
+    rhEdge = saturate( rhEdge / max( g_vecRHSettings.z, 1.0e-4f ) ); \
+    rhEdge = rhEdge * rhEdge * ( 3.0f - 2.0f * rhEdge ); \
+    float rhDepth = tex2Dlod( sRSMDepth, float4( rhUV, 0.0f, 0.0f ) ).r; \
+    float rhValidDepth = rhInside * rhEdge * step( rhDepth, 0.9999f ); \
+    float3 rhToSurface = RH_ReconstructRSMPositionVisibility( rhUV, rhDepth ) - cellCenterWS; \
+    float rhDistanceSquared = dot( rhToSurface, rhToSurface ); \
+    float rhValidDistance = step( 1.0e-5f, rhDistanceSquared ); \
+    float rhInverseDistance = rsqrt( max( rhDistanceSquared, 1.0e-5f ) ); \
+    float rhDistanceCells = rhDistanceSquared * rhInverseDistance / cellSize; \
+    float rhOccupancy = 1.0f - smoothstep( max( g_vecVisibility.y, 0.0f ), outerRadius, rhDistanceCells ); \
+    float3 rhDirectionToBlocker = rhToSurface * rhInverseDistance; \
+    float3 rhSurfaceNormal = tex2Dlod( sRSMNormal, float4( rhUV, 0.0f, 0.0f ) ).xyz * 2.0f - 1.0f; \
+    rhSurfaceNormal = RH_SafeNormalize( rhSurfaceNormal, -rhDirectionToBlocker ); \
+    float rhFacing = 0.35f + 0.65f * abs( dot( rhSurfaceNormal, -rhDirectionToBlocker ) ); \
+    rhFacing = lerp( 1.0f, rhFacing, normalInfluence ); \
+    rhOccupancy *= exp2( -distanceDecay * rhDistanceCells ); \
+    rhOccupancy *= rhValidDepth * rhValidDistance * visibilityEnable \
+        * visibilityStrength * rhFacing * sampleScale; \
+    visibilitySH += RH_ProjectDirection( rhDirectionToBlocker ) * rhOccupancy; \
 }
 
 float4 main( const PS_INPUT In ) : COLOR0
 {
-    const float cellSize = max( g_vecRHSettings.y, 1.0f );
-    const float inverseRSMWorldSide = 1.0f / max( g_vecRHSettings.w, 1.0f );
+    float cellSize = max( g_vecRHSettings.y, 1.0f );
+    float inverseRSMWorldSide = 1.0f / max( g_vecRHSettings.w, 1.0f );
+    float3 cellCenterWS = g_vecGridOrigin + In.vVolumeUVW * g_vecRHSettings.x;
+    float4 projected = mul( float4( cellCenterWS, 1.0f ), g_matWorldToRSM );
+    float2 centerUV = projected.xy / max( abs( projected.w ), 1.0e-6f );
 
-    float3 cellCenterWS =
-        g_vecGridOrigin + In.vVolumeUVW * g_vecRHSettings.x;
-
-    float4 projected =
-        mul( float4( cellCenterWS, 1.0f ), g_matWorldToRSM );
-
-    float2 centerUV =
-        projected.xy / max( abs( projected.w ), 1.0e-6f );
-
-    const float2 patternSinCos = float2( 0.0f, 1.0f );
-
-    const float footprintCells =
-        g_vecRHSettings.w * g_vecDecay.y / cellSize;
-
-    const float outerRadius =
-        max(
-            g_vecVisibility.z + g_vecDecay.z + footprintCells,
-            g_vecVisibility.y + 0.01f );
-
-    const float sampleUVScale =
-        cellSize * max( outerRadius, 1.0f ) * inverseRSMWorldSide;
-
-    const float visibilityEnable = saturate( g_vecVisibility.x );
-    const float visibilityStrength = max( g_vecVisibility.w, 0.0f );
-    const float distanceDecay = max( g_vecDecay.x, 0.0f );
-    const float normalInfluence = saturate( g_vecDecay.w );
+    float footprintCells = g_vecRHSettings.w * g_vecDecay.y / cellSize;
+    float outerRadius = max(
+        g_vecVisibility.z + g_vecDecay.z + footprintCells,
+        g_vecVisibility.y + 0.01f );
+    float sampleUVScale = cellSize * max( outerRadius, 1.0f ) * inverseRSMWorldSide;
+    float visibilityEnable = saturate( g_vecVisibility.x );
+    float visibilityStrength = max( g_vecVisibility.w, 0.0f );
+    float distanceDecay = max( g_vecDecay.x, 0.0f );
+    float normalInfluence = saturate( g_vecDecay.w );
+    float sampleScale = g_vecPass.x / RH_VISIBILITY_SAMPLE_COUNT;
 
     float4 visibilitySH = 0.0f;
-    const float sampleNormalization = 1.0f / RH_VISIBILITY_SAMPLE_COUNT;
+#if VISIBILITY_PHASE == 0
+    RH_ACCUMULATE_VISIBILITY_SAMPLE( 0.34f, 0.00f );
+    RH_ACCUMULATE_VISIBILITY_SAMPLE(-0.34f, 0.00f );
+    RH_ACCUMULATE_VISIBILITY_SAMPLE( 0.00f, 0.34f );
+    RH_ACCUMULATE_VISIBILITY_SAMPLE( 0.00f,-0.34f );
+#else
+#if RH_VISIBILITY_SAMPLE_COUNT == 8
+    RH_ACCUMULATE_VISIBILITY_SAMPLE( 0.58f, 0.58f );
+    RH_ACCUMULATE_VISIBILITY_SAMPLE(-0.58f, 0.58f );
+    RH_ACCUMULATE_VISIBILITY_SAMPLE( 0.58f,-0.58f );
+    RH_ACCUMULATE_VISIBILITY_SAMPLE(-0.58f,-0.58f );
+#endif
+#endif
 
-    // Critical for the legacy ps_3_0 compiler: keep one loop body and reuse
-    // temporaries. The previous six compile-time-expanded helper calls could
-    // make shadercompile.exe silently drop this shader.
-    [loop]
-    for ( int sampleIndex = 0;
-          sampleIndex < RH_VISIBILITY_SAMPLE_COUNT;
-          ++sampleIndex )
-    {
-        float2 diskOffset = RH_GetVisibilityOffset( sampleIndex );
-
-        diskOffset = RH_Rotate2D(
-            diskOffset,
-            patternSinCos.x,
-            patternSinCos.y );
-
-        float2 uv = centerUV + diskOffset * sampleUVScale;
-
-        float inside =
-            step( 0.0f, uv.x ) * step( uv.x, 1.0f ) *
-            step( 0.0f, uv.y ) * step( uv.y, 1.0f );
-
-        uv = saturate( uv );
-
-        float edge =
-            min(
-                min( uv.x, uv.y ),
-                min( 1.0f - uv.x, 1.0f - uv.y ) );
-
-        edge =
-            saturate(
-                edge / max( g_vecRHSettings.z, 1.0e-4f ) );
-
-        edge = edge * edge * ( 3.0f - 2.0f * edge );
-
-        float depth =
-            tex2Dlod(
-                sRSMDepth,
-                float4( uv, 0.0f, 0.0f ) ).r;
-
-        float valid =
-            inside * edge * step( depth, 0.9999f );
-
-        [branch]
-        if ( valid > 1.0e-4f )
-        {
-            float3 toSurface =
-                RH_ReconstructRSMPositionVisibility( uv, depth ) -
-                cellCenterWS;
-
-            float distanceSquared =
-                dot( toSurface, toSurface );
-
-            [branch]
-            if ( distanceSquared > 1.0e-5f )
-            {
-                float inverseDistance =
-                    rsqrt( distanceSquared );
-
-                float distanceCells =
-                    distanceSquared * inverseDistance / cellSize;
-
-                float occupancy =
-                    1.0f -
-                    smoothstep(
-                        max( g_vecVisibility.y, 0.0f ),
-                        outerRadius,
-                        distanceCells );
-
-                float3 directionToBlocker =
-                    toSurface * inverseDistance;
-
-                float3 surfaceNormal =
-                    tex2Dlod(
-                        sRSMNormal,
-                        float4( uv, 0.0f, 0.0f ) ).xyz *
-                    2.0f - 1.0f;
-
-                surfaceNormal =
-                    RH_SafeNormalize(
-                        surfaceNormal,
-                        -directionToBlocker );
-
-                float facing =
-                    0.35f +
-                    0.65f *
-                    abs(
-                        dot(
-                            surfaceNormal,
-                            -directionToBlocker ) );
-
-                facing =
-                    lerp(
-                        1.0f,
-                        facing,
-                        normalInfluence );
-
-                occupancy *=
-                    exp2(
-                        -distanceDecay *
-                        distanceCells );
-
-                occupancy *=
-                    valid *
-                    visibilityEnable *
-                    visibilityStrength *
-                    facing;
-
-                visibilitySH +=
-                    RH_ProjectDirection(
-                        directionToBlocker ) *
-                    ( occupancy * g_vecPass.x * sampleNormalization );
-            }
-        }
-    }
-
-    // Fixed pattern normalization is essential: blocker strength must not
-    // change because unrelated RSM samples happened to contain valid depth.
     return RH_LimitVisibilitySH( visibilitySH );
 }

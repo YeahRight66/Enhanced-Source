@@ -1,4 +1,5 @@
 // STATIC: "SURFACE_MODE" "0..2"
+// STATIC: "SAMPLE_PHASE" "0..3"
 // 0 = sun-RSM radiance, 1 = surface attributes, 2 = hemisphere skylight.
 
 #include "common_ps_fxc.h"
@@ -46,177 +47,103 @@ float3 RH_ReconstructRSMPosition( float2 uv, float depth )
     float4 world = mul( float4( uv, depth, 1.0f ), g_matRSMToWorld );
     return world.xyz / max( abs( world.w ), 1.0e-6f );
 }
-
-// Exact D4/reflection-symmetric set. Its centroid is zero, so mirrored rooms
-// receive mathematically mirrored RSM gathers.
-float2 RH_GetSymmetricRSMOffset( int sampleIndex )
-{
-    if ( sampleIndex == 0 ) return float2( 0.32f,  0.00f );
-    if ( sampleIndex == 1 ) return float2(-0.32f,  0.00f );
-    if ( sampleIndex == 2 ) return float2( 0.00f,  0.32f );
-    if ( sampleIndex == 3 ) return float2( 0.00f, -0.32f );
-    if ( sampleIndex == 4 ) return float2( 0.52f,  0.52f );
-    if ( sampleIndex == 5 ) return float2(-0.52f,  0.52f );
-    if ( sampleIndex == 6 ) return float2( 0.52f, -0.52f );
-    return float2(-0.52f, -0.52f );
-}
 #endif
 
 #if SURFACE_MODE == 1
-void RH_AccumulateSurface(
-    float2 centerUV,
-    float2 diskOffset,
-    float3 cellCenterWS,
-    inout float3 albedoSum,
-    inout float3 normalSum,
-    inout float weightSum )
-{
-    float surfaceRadiusWorld = max( g_vecRHSkySurface.z, 0.5f ) * max( g_vecRHSettings.y, 1.0f );
-    float2 uv = centerUV + diskOffset * ( surfaceRadiusWorld / max( g_vecRHQuality.w, 1.0f ) );
-    float inside = step( 0.0f, uv.x ) * step( uv.x, 1.0f )
-        * step( 0.0f, uv.y ) * step( uv.y, 1.0f );
-    uv = saturate( uv );
-
-    float depth = tex2Dlod( sRSMDepth, float4( uv, 0.0f, 0.0f ) ).r;
-    float valid = inside * step( depth, 0.9999f );
-    [branch]
-    if ( valid > 0.0f )
-    {
-        float3 surfacePosition = RH_ReconstructRSMPosition( uv, depth );
-        float3 delta = surfacePosition - cellCenterWS;
-        float distanceCells = length( delta ) / max( g_vecRHSettings.y, 1.0f );
-        float radiusCells = max( g_vecRHSkySurface.z, 0.5f );
-        float radial = saturate( 1.0f - distanceCells / radiusCells );
-        radial *= radial;
-
-        float4 albedo = tex2Dlod( sRSMAlbedo, float4( uv, 0.0f, 0.0f ) );
-        float3 normal = tex2Dlod( sRSMNormal, float4( uv, 0.0f, 0.0f ) ).xyz * 2.0f - 1.0f;
-        normal = RH_SafeNormalize( normal, float3( 0.0f, 0.0f, 1.0f ) );
-        float weight = valid * radial * step( 1.0e-4f, albedo.a );
-        albedoSum += max( albedo.rgb, 0.0f ) * weight;
-        normalSum += normal * weight;
-        weightSum += weight;
-    }
+// Scoped macro: old Source FXC reliably reuses the same temporaries for every
+// compile-time sample and does not need sampler-heavy accumulator helper calls.
+#define RH_ACCUMULATE_SURFACE_SAMPLE( OX, OY ) \
+{ \
+    float rhSurfaceRadiusWorld = max( g_vecRHSkySurface.z, 0.5f ) * max( g_vecRHSettings.y, 1.0f ); \
+    float2 rhUV = centerUV + float2( OX, OY ) * ( rhSurfaceRadiusWorld / max( g_vecRHQuality.w, 1.0f ) ); \
+    float rhInside = step( 0.0f, rhUV.x ) * step( rhUV.x, 1.0f ) * step( 0.0f, rhUV.y ) * step( rhUV.y, 1.0f ); \
+    rhUV = saturate( rhUV ); \
+    float rhDepth = tex2Dlod( sRSMDepth, float4( rhUV, 0.0f, 0.0f ) ).r; \
+    float rhValid = rhInside * step( rhDepth, 0.9999f ); \
+    float3 rhSurfacePosition = RH_ReconstructRSMPosition( rhUV, rhDepth ); \
+    float3 rhDelta = rhSurfacePosition - cellCenterWS; \
+    float rhDistanceCells = length( rhDelta ) / max( g_vecRHSettings.y, 1.0f ); \
+    float rhRadiusCells = max( g_vecRHSkySurface.z, 0.5f ); \
+    float rhRadial = saturate( 1.0f - rhDistanceCells / rhRadiusCells ); \
+    rhRadial *= rhRadial; \
+    float4 rhAlbedo = tex2Dlod( sRSMAlbedo, float4( rhUV, 0.0f, 0.0f ) ); \
+    float3 rhNormal = tex2Dlod( sRSMNormal, float4( rhUV, 0.0f, 0.0f ) ).xyz * 2.0f - 1.0f; \
+    rhNormal = RH_SafeNormalize( rhNormal, float3( 0.0f, 0.0f, 1.0f ) ); \
+    float rhWeight = rhValid * rhRadial * step( 1.0e-4f, rhAlbedo.a ); \
+    albedoSum += max( rhAlbedo.rgb, 0.0f ) * rhWeight; \
+    normalSum += rhNormal * rhWeight; \
+    weightSum += rhWeight; \
 }
 #elif SURFACE_MODE == 0
-void RH_AccumulateRadiance(
-    float2 centerUV,
-    float2 diskOffset,
-    float3 cellCenterWS,
-    float sampleProjectedArea,
-    inout float4 shR,
-    inout float4 shG,
-    inout float4 shB,
-    inout float confidenceSum,
-    inout float nearestDistanceCells )
-{
-    float2 uv = centerUV + diskOffset * ( g_vecRHSettings.z / max( g_vecRHQuality.w, 1.0f ) );
-    float inside = step( 0.0f, uv.x ) * step( uv.x, 1.0f )
-        * step( 0.0f, uv.y ) * step( uv.y, 1.0f );
-    uv = saturate( uv );
-
-    float edge = min( min( uv.x, uv.y ), min( 1.0f - uv.x, 1.0f - uv.y ) );
-    edge = saturate( edge / max( g_vecRHQuality.x, 1.0e-4f ) );
-    edge = edge * edge * ( 3.0f - 2.0f * edge );
-
-    float depth = tex2Dlod( sRSMDepth, float4( uv, 0.0f, 0.0f ) ).r;
-    float validDepth = inside * edge * step( depth, 0.9999f );
-    [branch]
-    if ( validDepth > 1.0e-4f )
-    {
-        float3 ray = cellCenterWS - RH_ReconstructRSMPosition( uv, depth );
-        float distanceSquared = dot( ray, ray );
-        [branch]
-        if ( distanceSquared > 1.0e-4f )
-        {
-            float inverseDistance = rsqrt( distanceSquared );
-            float distanceValue = distanceSquared * inverseDistance;
-            float distanceCells = distanceValue / max( g_vecRHSettings.y, 1.0f );
-            nearestDistanceCells = min( nearestDistanceCells, distanceCells );
-
-            float distanceNormalized = saturate( distanceValue / max( g_vecRHSettings.z, 1.0f ) );
-            float radial = max( 1.0f - distanceNormalized * distanceNormalized, 0.0f );
-            float4 fluxSample = tex2Dlod( sRSMFlux, float4( uv, 0.0f, 0.0f ) );
-            float fluxValid = step( 1.0e-8f, dot( fluxSample.rgb, fluxSample.rgb ) )
-                * step( 1.0e-4f, fluxSample.a );
-            float3 normal = tex2Dlod( sRSMNormal, float4( uv, 0.0f, 0.0f ) ).xyz * 2.0f - 1.0f;
-            normal = RH_SafeNormalize( normal, float3( 0.0f, 0.0f, 1.0f ) );
-
-            float3 travelDirection = ray * inverseDistance;
-            float emitterCosine = saturate( dot( normal, travelDirection ) );
-            float softening = g_vecRHSettings.y * g_vecRHSettings.y * 0.1225f;
-            float geometryTerm = emitterCosine * sampleProjectedArea
-                / max( distanceSquared + softening, 1.0f );
-            float sampleWeight = validDepth * fluxValid * radial;
-            float3 transported = RH_ClampRadiance(
-                fluxSample.rgb * ( geometryTerm * sampleWeight * g_vecRHSettings.w ),
-                max( g_vecRHQuality.y, 0.25f ) );
-
-            float4 basis = RH_ProjectDirection( travelDirection );
-            shR += basis * transported.r;
-            shG += basis * transported.g;
-            shB += basis * transported.b;
-            confidenceSum += sampleWeight;
-        }
-    }
+// RH7: each compile-time sample evaluates a different stable point inside the
+// RH cell as well as a stratified RSM location. The 16-sample set has zero
+// centroid and paired reflections, so it keeps the RH6 mirror-stability fix while
+// removing the cell-centre correlation that made sparse injection look blocky.
+#define RH_ACCUMULATE_RADIANCE_SAMPLE( OX, OY, SX, SY, SZ ) \
+{ \
+    float3 rhCellSampleWS = cellCenterWS + float3( SX, SY, SZ ) * g_vecRHSettings.y; \
+    float4 rhProjectedCell = mul( float4( rhCellSampleWS, 1.0f ), g_matWorldToRSM ); \
+    float2 rhSampleCenterUV = rhProjectedCell.xy / max( abs( rhProjectedCell.w ), 1.0e-6f ); \
+    float2 rhUV = rhSampleCenterUV + float2( OX, OY ) * ( g_vecRHSettings.z / max( g_vecRHQuality.w, 1.0f ) ); \
+    float rhInside = step( 0.0f, rhUV.x ) * step( rhUV.x, 1.0f ) * step( 0.0f, rhUV.y ) * step( rhUV.y, 1.0f ); \
+    rhUV = saturate( rhUV ); \
+    float rhEdge = min( min( rhUV.x, rhUV.y ), min( 1.0f - rhUV.x, 1.0f - rhUV.y ) ); \
+    rhEdge = saturate( rhEdge / max( g_vecRHQuality.x, 1.0e-4f ) ); \
+    rhEdge = rhEdge * rhEdge * ( 3.0f - 2.0f * rhEdge ); \
+    float rhDepth = tex2Dlod( sRSMDepth, float4( rhUV, 0.0f, 0.0f ) ).r; \
+    float rhValidDepth = rhInside * rhEdge * step( rhDepth, 0.9999f ); \
+    float3 rhRay = rhCellSampleWS - RH_ReconstructRSMPosition( rhUV, rhDepth ); \
+    float rhDistanceSquared = dot( rhRay, rhRay ); \
+    float rhValidDistance = step( 1.0e-4f, rhDistanceSquared ); \
+    float rhInverseDistance = rsqrt( max( rhDistanceSquared, 1.0e-4f ) ); \
+    float rhDistanceValue = rhDistanceSquared * rhInverseDistance; \
+    float rhDistanceCells = rhDistanceValue / max( g_vecRHSettings.y, 1.0f ); \
+    float rhDistanceNormalized = saturate( rhDistanceValue / max( g_vecRHSettings.z, 1.0f ) ); \
+    float rhRadial = max( 1.0f - rhDistanceNormalized * rhDistanceNormalized, 0.0f ); \
+    float4 rhFlux = tex2Dlod( sRSMFlux, float4( rhUV, 0.0f, 0.0f ) ); \
+    float rhFluxValid = step( 1.0e-8f, dot( rhFlux.rgb, rhFlux.rgb ) ) * step( 1.0e-4f, rhFlux.a ); \
+    float3 rhNormal = tex2Dlod( sRSMNormal, float4( rhUV, 0.0f, 0.0f ) ).xyz * 2.0f - 1.0f; \
+    rhNormal = RH_SafeNormalize( rhNormal, float3( 0.0f, 0.0f, 1.0f ) ); \
+    float3 rhTravelDirection = rhRay * rhInverseDistance; \
+    float rhEmitterCosine = saturate( dot( rhNormal, rhTravelDirection ) ); \
+    float rhSoftening = g_vecRHSettings.y * g_vecRHSettings.y * 0.1225f; \
+    float rhGeometryTerm = rhEmitterCosine * sampleProjectedArea / max( rhDistanceSquared + rhSoftening, 1.0f ); \
+    float rhSampleWeight = rhValidDepth * rhValidDistance * rhFluxValid * rhRadial; \
+    float3 rhTransported = RH_ClampRadiance( rhFlux.rgb * ( rhGeometryTerm * rhSampleWeight * g_vecRHSettings.w ), max( g_vecRHQuality.y, 0.25f ) ); \
+    float4 rhBasis = RH_ProjectDirection( rhTravelDirection ); \
+    shR += rhBasis * rhTransported.r; \
+    shG += rhBasis * rhTransported.g; \
+    shB += rhBasis * rhTransported.b; \
+    confidenceSum += rhSampleWeight; \
+    nearestDistanceCells = min( nearestDistanceCells, lerp( 65504.0f, rhDistanceCells, step( 1.0e-5f, rhSampleWeight ) ) ); \
 }
 #else
-float RH_SkyVisibility( float3 uvw, float3 directionToEnvironment )
-{
-    float traceCells = clamp( g_vecRHSkySurface.y, 1.0f, 16.0f );
-    float travelCells = 0.70f;
-    float opticalDepth = 0.0f;
-
-    [unroll]
-    for ( int traceIndex = 0; traceIndex < 4; ++traceIndex )
-    {
-        float remainingCells = max( traceCells - travelCells, 0.0f );
-        float active = step( 0.05f, remainingCells );
-        float3 sampleUVW = uvw + directionToEnvironment * ( travelCells / RH_VOLUME_SIZE_F );
-        float inside = RH_InsideVolume( sampleUVW );
-        float blocker = RH_SampleAtlas( sGeometry, sampleUVW ).r;
-        float distanceCells = RH_SampleAtlas( sGeometryDist, sampleUVW ).r * 255.0f;
-        float segmentCells = min( clamp( distanceCells * 0.65f, 0.70f, 3.0f ), remainingCells );
-        opticalDepth += blocker * max( segmentCells, 0.25f ) * inside * active;
-        travelCells += segmentCells * active;
-    }
-    return exp2( -max( g_vecRHSkySurface.x, 0.0f ) * opticalDepth );
+// Five explicit lobes per permutation. The complete sky is assembled by two
+// additive draws, avoiding nested sampler-heavy helper calls in legacy FXC.
+#define RH_ACCUMULATE_UPPER_SKY( DX, DY, DZ, WEIGHT ) \
+{ \
+    float3 rhSkyDirection = float3( DX, DY, DZ ); \
+    float rhTraceCells = clamp( g_vecRHSkySurface.y, 1.0f, 16.0f ); \
+    float rhSampleCells = clamp( rhTraceCells * 0.45f, 0.80f, 5.0f ); \
+    float3 rhSampleUVW = In.vVolumeUVW + rhSkyDirection * ( rhSampleCells / RH_VOLUME_SIZE_F ); \
+    float rhInside = RH_InsideVolume( rhSampleUVW ); \
+    float rhBlocker = RH_SampleAtlas( sGeometry, rhSampleUVW ).r; \
+    float rhDistanceCells = RH_SampleAtlas( sGeometryDist, rhSampleUVW ).r * 255.0f; \
+    float rhProximity = saturate( 1.0f - rhDistanceCells / max( rhTraceCells, 1.0f ) ); \
+    float rhOpticalDepth = max( rhBlocker, rhProximity * 0.35f ) * rhSampleCells * rhInside; \
+    float rhVisibility = exp2( -max( g_vecRHSkySurface.x, 0.0f ) * rhOpticalDepth ); \
+    skyBasis += RH_ProjectDirection( -rhSkyDirection ) * ( WEIGHT * rhVisibility ); \
 }
 
-float3 RH_GetHemisphereEnvironmentDirection( int sampleIndex, float verticalSign )
-{
-    const float horizontal = 0.9682458366f; // sqrt( 1 - 0.25^2 )
-    if ( sampleIndex == 0 ) return float3( 0.0f, 0.0f, verticalSign );
-    if ( sampleIndex == 1 ) return float3( horizontal, 0.0f, 0.25f * verticalSign );
-    if ( sampleIndex == 2 ) return float3(-horizontal, 0.0f, 0.25f * verticalSign );
-    if ( sampleIndex == 3 ) return float3( 0.0f, horizontal, 0.25f * verticalSign );
-    return float3( 0.0f,-horizontal, 0.25f * verticalSign );
-}
-
-float RH_GetHemisphereQuadratureWeight( int sampleIndex )
-{
-    return sampleIndex == 0 ? 2.0943951024f : 1.0471975512f;
-}
-
-void RH_AccumulateHemisphereSky(
-    float3 uvw,
-    float verticalSign,
-    float3 skyRadiance,
-    inout float4 shR,
-    inout float4 shG,
-    inout float4 shB )
-{
-    [loop]
-    for ( int skyIndex = 0; skyIndex < 5; ++skyIndex )
-    {
-        float3 directionToEnvironment = RH_GetHemisphereEnvironmentDirection( skyIndex, verticalSign );
-        float visibility = RH_SkyVisibility( uvw, directionToEnvironment );
-        float weight = RH_GetHemisphereQuadratureWeight( skyIndex ) * visibility;
-        float4 basis = RH_ProjectDirection( -directionToEnvironment );
-        shR += basis * ( skyRadiance.r * weight );
-        shG += basis * ( skyRadiance.g * weight );
-        shB += basis * ( skyRadiance.b * weight );
-    }
+#define RH_ACCUMULATE_LOWER_SKY( DX, DY, DZ, WEIGHT ) \
+{ \
+    float3 rhSkyDirection = float3( DX, DY, DZ ); \
+    float rhTraceCells = clamp( g_vecRHSkySurface.y, 1.0f, 16.0f ); \
+    float rhSampleCells = clamp( rhTraceCells * 0.30f, 0.70f, 3.5f ); \
+    float3 rhSampleUVW = In.vVolumeUVW + rhSkyDirection * ( rhSampleCells / RH_VOLUME_SIZE_F ); \
+    float rhBlocker = RH_SampleAtlas( sGeometry, rhSampleUVW ).r * RH_InsideVolume( rhSampleUVW ); \
+    float rhVisibility = exp2( -max( g_vecRHSkySurface.x, 0.0f ) * rhBlocker * rhSampleCells ); \
+    skyBasis += RH_ProjectDirection( -rhSkyDirection ) * ( WEIGHT * rhVisibility ); \
 }
 #endif
 
@@ -231,10 +158,18 @@ PS_OUTPUT main( const PS_INPUT In )
     float3 albedoSum = 0.0f;
     float3 normalSum = 0.0f;
     float weightSum = 0.0f;
-    [loop]
-    for ( int sampleIndex = 0; sampleIndex < RH_RADIANCE_SAMPLE_COUNT; ++sampleIndex )
-        RH_AccumulateSurface( centerUV, RH_GetSymmetricRSMOffset( sampleIndex ), cellCenterWS,
-            albedoSum, normalSum, weightSum );
+
+#if SAMPLE_PHASE == 0
+    RH_ACCUMULATE_SURFACE_SAMPLE( 0.32f, 0.00f );
+    RH_ACCUMULATE_SURFACE_SAMPLE(-0.32f, 0.00f );
+    RH_ACCUMULATE_SURFACE_SAMPLE( 0.00f, 0.32f );
+    RH_ACCUMULATE_SURFACE_SAMPLE( 0.00f,-0.32f );
+#elif SAMPLE_PHASE == 1
+    RH_ACCUMULATE_SURFACE_SAMPLE( 0.52f, 0.52f );
+    RH_ACCUMULATE_SURFACE_SAMPLE(-0.52f, 0.52f );
+    RH_ACCUMULATE_SURFACE_SAMPLE( 0.52f,-0.52f );
+    RH_ACCUMULATE_SURFACE_SAMPLE(-0.52f,-0.52f );
+#endif
 
     Out.vSH_R = float4( albedoSum, weightSum );
     Out.vSH_G = float4( normalSum, weightSum );
@@ -242,8 +177,6 @@ PS_OUTPUT main( const PS_INPUT In )
     Out.vMeta = 0.0f;
 #elif SURFACE_MODE == 0
     float3 cellCenterWS = g_vecGridOrigin + In.vVolumeUVW * g_vecRHSettings.x;
-    float4 projected = mul( float4( cellCenterWS, 1.0f ), g_matWorldToRSM );
-    float2 centerUV = projected.xy / max( abs( projected.w ), 1.0e-6f );
     float4 shR = 0.0f;
     float4 shG = 0.0f;
     float4 shB = 0.0f;
@@ -252,10 +185,37 @@ PS_OUTPUT main( const PS_INPUT In )
     float sampleProjectedArea = 2.0f * RH_PI * g_vecRHSettings.z * g_vecRHSettings.z
         / RH_RADIANCE_SAMPLE_COUNT;
 
-    [loop]
-    for ( int sampleIndex = 0; sampleIndex < RH_RADIANCE_SAMPLE_COUNT; ++sampleIndex )
-        RH_AccumulateRadiance( centerUV, RH_GetSymmetricRSMOffset( sampleIndex ), cellCenterWS,
-            sampleProjectedArea, shR, shG, shB, confidenceSum, nearestDistanceCells );
+#if SAMPLE_PHASE == 0
+    // Cardinal stratum above the cell centre. Phase 1 is its exact Z reflection.
+    RH_ACCUMULATE_RADIANCE_SAMPLE( 0.32f, 0.00f,  0.24f, 0.00f, 0.25f );
+    RH_ACCUMULATE_RADIANCE_SAMPLE(-0.32f, 0.00f, -0.24f, 0.00f, 0.25f );
+    RH_ACCUMULATE_RADIANCE_SAMPLE( 0.00f, 0.32f,  0.00f, 0.24f, 0.25f );
+    RH_ACCUMULATE_RADIANCE_SAMPLE( 0.00f,-0.32f,  0.00f,-0.24f, 0.25f );
+#elif SAMPLE_PHASE == 1
+#if RH_RADIANCE_SAMPLE_COUNT >= 8
+    // Exact Z-reflected cardinal stratum. Together phases 0/1 have zero 3D centroid.
+    RH_ACCUMULATE_RADIANCE_SAMPLE( 0.32f, 0.00f,  0.24f, 0.00f,-0.25f );
+    RH_ACCUMULATE_RADIANCE_SAMPLE(-0.32f, 0.00f, -0.24f, 0.00f,-0.25f );
+    RH_ACCUMULATE_RADIANCE_SAMPLE( 0.00f, 0.32f,  0.00f, 0.24f,-0.25f );
+    RH_ACCUMULATE_RADIANCE_SAMPLE( 0.00f,-0.32f,  0.00f,-0.24f,-0.25f );
+#endif
+#elif SAMPLE_PHASE == 2
+#if RH_RADIANCE_SAMPLE_COUNT >= 16
+    // Diagonal stratum above the cell centre. Phase 3 is its exact Z reflection.
+    RH_ACCUMULATE_RADIANCE_SAMPLE( 0.52f, 0.52f,  0.20f, 0.20f, 0.25f );
+    RH_ACCUMULATE_RADIANCE_SAMPLE(-0.52f, 0.52f, -0.20f, 0.20f, 0.25f );
+    RH_ACCUMULATE_RADIANCE_SAMPLE( 0.52f,-0.52f,  0.20f,-0.20f, 0.25f );
+    RH_ACCUMULATE_RADIANCE_SAMPLE(-0.52f,-0.52f, -0.20f,-0.20f, 0.25f );
+#endif
+#else
+#if RH_RADIANCE_SAMPLE_COUNT >= 16
+    // Exact Z-reflected diagonal stratum. The full 16-sample set is reflection paired in X/Y/Z.
+    RH_ACCUMULATE_RADIANCE_SAMPLE( 0.52f, 0.52f,  0.20f, 0.20f,-0.25f );
+    RH_ACCUMULATE_RADIANCE_SAMPLE(-0.52f, 0.52f, -0.20f, 0.20f,-0.25f );
+    RH_ACCUMULATE_RADIANCE_SAMPLE( 0.52f,-0.52f,  0.20f,-0.20f,-0.25f );
+    RH_ACCUMULATE_RADIANCE_SAMPLE(-0.52f,-0.52f, -0.20f,-0.20f,-0.25f );
+#endif
+#endif
 
     Out.vSH_R = RH_LimitRadianceSH( shR );
     Out.vSH_G = RH_LimitRadianceSH( shG );
@@ -265,32 +225,56 @@ PS_OUTPUT main( const PS_INPUT In )
     float normalizedEnergy = saturate(
         RH_RadianceEnergy( Out.vSH_R, Out.vSH_G, Out.vSH_B )
         / max( g_vecRHQuality.y, 0.25f ) );
+#if SAMPLE_PHASE == 0
     Out.vMeta = float4(
         saturate( confidenceSum / RH_RADIANCE_SAMPLE_COUNT ),
         valid * saturate( nearestDistanceCells / gatherCells ) + ( 1.0f - valid ),
         normalizedEnergy,
         valid );
 #else
+    // Added to phase 0. Distance is retained from the nearest inner-cardinal stratum;
+    // confidence, energy and validity accumulate all later stratified phases.
+    Out.vMeta = float4(
+        saturate( confidenceSum / RH_RADIANCE_SAMPLE_COUNT ),
+        0.0f,
+        normalizedEnergy,
+        valid );
+#endif
+#else
+    const float horizontal = 0.9682458366f;
     float skyEnabled = saturate( g_vecRHSkyUpper.w );
     float skyIntensity = max( g_vecRHSkyLower.w, 0.0f ) * skyEnabled;
     float3 upperSky = max( g_vecRHSkyUpper.rgb, 0.0f ) * skyIntensity;
     float3 lowerSky = max( g_vecRHSkyLower.rgb, 0.0f ) * skyIntensity;
-    float4 shR = 0.0f;
-    float4 shG = 0.0f;
-    float4 shB = 0.0f;
-    RH_AccumulateHemisphereSky( In.vVolumeUVW, 1.0f, upperSky, shR, shG, shB );
-    RH_AccumulateHemisphereSky( In.vVolumeUVW,-1.0f, lowerSky, shR, shG, shB );
 
-    Out.vSH_R = RH_LimitRadianceSH( shR );
-    Out.vSH_G = RH_LimitRadianceSH( shG );
-    Out.vSH_B = RH_LimitRadianceSH( shB );
+    float4 skyBasis = 0.0f;
+    float3 skyColour = 0.0f;
+#if SAMPLE_PHASE == 0
+    RH_ACCUMULATE_UPPER_SKY( 0.0f, 0.0f, 1.0f, 2.0943951024f );
+    RH_ACCUMULATE_UPPER_SKY( horizontal, 0.0f, 0.25f, 1.0471975512f );
+    RH_ACCUMULATE_UPPER_SKY(-horizontal, 0.0f, 0.25f, 1.0471975512f );
+    RH_ACCUMULATE_UPPER_SKY( 0.0f, horizontal, 0.25f, 1.0471975512f );
+    RH_ACCUMULATE_UPPER_SKY( 0.0f,-horizontal, 0.25f, 1.0471975512f );
+    skyColour = upperSky;
+#else
+    RH_ACCUMULATE_LOWER_SKY( 0.0f, 0.0f,-1.0f, 2.0943951024f );
+    RH_ACCUMULATE_LOWER_SKY( horizontal, 0.0f,-0.25f, 1.0471975512f );
+    RH_ACCUMULATE_LOWER_SKY(-horizontal, 0.0f,-0.25f, 1.0471975512f );
+    RH_ACCUMULATE_LOWER_SKY( 0.0f, horizontal,-0.25f, 1.0471975512f );
+    RH_ACCUMULATE_LOWER_SKY( 0.0f,-horizontal,-0.25f, 1.0471975512f );
+    skyColour = lowerSky;
+#endif
+
+    Out.vSH_R = RH_LimitRadianceSH( skyBasis * skyColour.r );
+    Out.vSH_G = RH_LimitRadianceSH( skyBasis * skyColour.g );
+    Out.vSH_B = RH_LimitRadianceSH( skyBasis * skyColour.b );
     float skyEnergy = RH_RadianceEnergy( Out.vSH_R, Out.vSH_G, Out.vSH_B );
     float valid = step( 1.0e-5f, skyEnergy );
     Out.vMeta = float4(
         saturate( skyEnergy / max( g_vecRHQuality.y, 0.25f ) ),
-        1.0f,
+        0.5f,
         saturate( skyEnergy / max( g_vecRHQuality.y, 0.25f ) ),
-        valid );
+        valid * 0.5f );
 #endif
     return Out;
 }

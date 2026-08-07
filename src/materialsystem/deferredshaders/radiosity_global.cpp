@@ -4,18 +4,21 @@
 #include "radiosity_gen_global_ps30.inc"
 #include "radiosity_gen_vs30.inc"
 
-BEGIN_VS_SHADER( RADIOSITY_GLOBAL, "RH 6.0 symmetric sun/hemisphere and surface injection" )
+BEGIN_VS_SHADER( RADIOSITY_GLOBAL, "RH 7.0 16-sample stratified sun/hemisphere and surface injection" )
     BEGIN_SHADER_PARAMS
         SHADER_PARAM( RSMALBEDO, SHADER_PARAM_TYPE_TEXTURE, "", "Raw RSM material albedo" )
         SHADER_PARAM( GEOMETRY, SHADER_PARAM_TYPE_TEXTURE, "", "RH geometry occupancy" )
         SHADER_PARAM( DISTANCE, SHADER_PARAM_TYPE_TEXTURE, "", "RH geometry distance field" )
         SHADER_PARAM( SURFACEMODE, SHADER_PARAM_TYPE_INTEGER, "0", "0=sun radiance, 1=surface attributes, 2=hemisphere sky" )
+        SHADER_PARAM( SAMPLEPHASE, SHADER_PARAM_TYPE_INTEGER, "0", "0..3=four-sample stratified sun phases; sky/surface use 0..1" )
     END_SHADER_PARAMS
 
     SHADER_INIT_PARAMS()
     {
         if ( !params[ SURFACEMODE ]->IsDefined() )
             params[ SURFACEMODE ]->SetIntValue( 0 );
+        if ( !params[ SAMPLEPHASE ]->IsDefined() )
+            params[ SAMPLEPHASE ]->SetIntValue( 0 );
     }
     SHADER_INIT
     {
@@ -28,7 +31,8 @@ BEGIN_VS_SHADER( RADIOSITY_GLOBAL, "RH 6.0 symmetric sun/hemisphere and surface 
     SHADER_DRAW
     {
         const int nSurfaceMode = clamp( params[ SURFACEMODE ]->GetIntValue(), 0, 2 );
-        const bool bAdditiveMode = nSurfaceMode != 0;
+        const int nSamplePhase = clamp( params[ SAMPLEPHASE ]->GetIntValue(), 0, 3 );
+        const bool bAdditiveMode = nSurfaceMode != 0 || nSamplePhase != 0;
         SHADOW_STATE
         {
             pShaderShadow->SetDefaultState();
@@ -54,6 +58,7 @@ BEGIN_VS_SHADER( RADIOSITY_GLOBAL, "RH 6.0 symmetric sun/hemisphere and surface 
 
             DECLARE_STATIC_PIXEL_SHADER( radiosity_gen_global_ps30 );
             SET_STATIC_PIXEL_SHADER_COMBO( SURFACE_MODE, nSurfaceMode );
+            SET_STATIC_PIXEL_SHADER_COMBO( SAMPLE_PHASE, nSamplePhase );
             SET_STATIC_PIXEL_SHADER( radiosity_gen_global_ps30 );
         }
         DYNAMIC_STATE

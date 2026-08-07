@@ -320,35 +320,103 @@ void CDeferredManagerClient::InitializeDeferredMaterials()
 	if ( m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL ] != NULL )
 	{
 		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL ]->SetInt( "$SURFACEMODE", 0 );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL ]->SetInt( "$SAMPLEPHASE", 0 );
 		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL ]->SetString( "$RSMALBEDO", GetDefRT_RHRSMAlbedo()->GetName() );
 		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL ]->SetString( "$GEOMETRY", GetDefRT_RHGeometry()->GetName() );
 		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL ]->SetString( "$DISTANCE", GetDefRT_RHGeometryDistance()->GetName() );
 		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL ]->SaveToFile( filesystem, "materials/deferred/radpass_global.vmt", "MOD" );
 	}
 
+	m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_1 ] = new KeyValues( "RADIOSITY_GLOBAL" );
+	if ( m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_1 ] != NULL )
+	{
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_1 ]->SetInt( "$SURFACEMODE", 0 );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_1 ]->SetInt( "$SAMPLEPHASE", 1 );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_1 ]->SetString( "$RSMALBEDO", GetDefRT_RHRSMAlbedo()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_1 ]->SetString( "$GEOMETRY", GetDefRT_RHGeometry()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_1 ]->SetString( "$DISTANCE", GetDefRT_RHGeometryDistance()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_1 ]->SaveToFile( filesystem, "materials/deferred/radpass_global_1.vmt", "MOD" );
+	}
+
+	m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_2 ] = new KeyValues( "RADIOSITY_GLOBAL" );
+	if ( m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_2 ] != NULL )
+	{
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_2 ]->SetInt( "$SURFACEMODE", 0 );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_2 ]->SetInt( "$SAMPLEPHASE", 2 );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_2 ]->SetString( "$RSMALBEDO", GetDefRT_RHRSMAlbedo()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_2 ]->SetString( "$GEOMETRY", GetDefRT_RHGeometry()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_2 ]->SetString( "$DISTANCE", GetDefRT_RHGeometryDistance()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_2 ]->SaveToFile( filesystem, "materials/deferred/radpass_global_2.vmt", "MOD" );
+	}
+
+	m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_3 ] = new KeyValues( "RADIOSITY_GLOBAL" );
+	if ( m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_3 ] != NULL )
+	{
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_3 ]->SetInt( "$SURFACEMODE", 0 );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_3 ]->SetInt( "$SAMPLEPHASE", 3 );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_3 ]->SetString( "$RSMALBEDO", GetDefRT_RHRSMAlbedo()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_3 ]->SetString( "$GEOMETRY", GetDefRT_RHGeometry()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_3 ]->SetString( "$DISTANCE", GetDefRT_RHGeometryDistance()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_3 ]->SaveToFile( filesystem, "materials/deferred/radpass_global_3.vmt", "MOD" );
+	}
+
 	m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SKY ] = new KeyValues( "RADIOSITY_GLOBAL" );
 	if ( m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SKY ] != NULL )
 	{
 		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SKY ]->SetInt( "$SURFACEMODE", 2 );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SKY ]->SetInt( "$SAMPLEPHASE", 0 );
 		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SKY ]->SetString( "$RSMALBEDO", GetDefRT_RHRSMAlbedo()->GetName() );
 		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SKY ]->SetString( "$GEOMETRY", GetDefRT_RHGeometry()->GetName() );
 		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SKY ]->SetString( "$DISTANCE", GetDefRT_RHGeometryDistance()->GetName() );
 		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SKY ]->SaveToFile( filesystem, "materials/deferred/radpass_sky.vmt", "MOD" );
 	}
 
+	m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SKY_1 ] = new KeyValues( "RADIOSITY_GLOBAL" );
+	if ( m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SKY_1 ] != NULL )
+	{
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SKY_1 ]->SetInt( "$SURFACEMODE", 2 );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SKY_1 ]->SetInt( "$SAMPLEPHASE", 1 );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SKY_1 ]->SetString( "$RSMALBEDO", GetDefRT_RHRSMAlbedo()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SKY_1 ]->SetString( "$GEOMETRY", GetDefRT_RHGeometry()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SKY_1 ]->SetString( "$DISTANCE", GetDefRT_RHGeometryDistance()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SKY_1 ]->SaveToFile( filesystem, "materials/deferred/radpass_sky_1.vmt", "MOD" );
+	}
+
 	m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SURFACE ] = new KeyValues( "RADIOSITY_GLOBAL" );
 	if ( m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SURFACE ] != NULL )
 	{
 		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SURFACE ]->SetInt( "$SURFACEMODE", 1 );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SURFACE ]->SetInt( "$SAMPLEPHASE", 0 );
 		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SURFACE ]->SetString( "$RSMALBEDO", GetDefRT_RHRSMAlbedo()->GetName() );
 		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SURFACE ]->SetString( "$GEOMETRY", GetDefRT_RHGeometry()->GetName() );
 		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SURFACE ]->SetString( "$DISTANCE", GetDefRT_RHGeometryDistance()->GetName() );
 		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SURFACE ]->SaveToFile( filesystem, "materials/deferred/radpass_surface.vmt", "MOD" );
 	}
 
+	m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SURFACE_1 ] = new KeyValues( "RADIOSITY_GLOBAL" );
+	if ( m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SURFACE_1 ] != NULL )
+	{
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SURFACE_1 ]->SetInt( "$SURFACEMODE", 1 );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SURFACE_1 ]->SetInt( "$SAMPLEPHASE", 1 );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SURFACE_1 ]->SetString( "$RSMALBEDO", GetDefRT_RHRSMAlbedo()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SURFACE_1 ]->SetString( "$GEOMETRY", GetDefRT_RHGeometry()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SURFACE_1 ]->SetString( "$DISTANCE", GetDefRT_RHGeometryDistance()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SURFACE_1 ]->SaveToFile( filesystem, "materials/deferred/radpass_surface_1.vmt", "MOD" );
+	}
+
 	m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_VISIBILITY ] = new KeyValues( "RADIOSITY_VISIBILITY" );
 	if ( m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_VISIBILITY ] != NULL )
+	{
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_VISIBILITY ]->SetInt( "$VISIBILITYPHASE", 0 );
 		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_VISIBILITY ]->SaveToFile( filesystem, "materials/deferred/radpass_visibility.vmt", "MOD" );
+	}
+
+	m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_VISIBILITY_1 ] = new KeyValues( "RADIOSITY_VISIBILITY" );
+	if ( m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_VISIBILITY_1 ] != NULL )
+	{
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_VISIBILITY_1 ]->SetInt( "$VISIBILITYPHASE", 1 );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_VISIBILITY_1 ]->SaveToFile( filesystem, "materials/deferred/radpass_visibility_1.vmt", "MOD" );
+	}
 
 	m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_FILTER ] = new KeyValues( "RADIOSITY_FILTER" );
 	if ( m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_FILTER ] != NULL )
@@ -374,6 +442,19 @@ void CDeferredManagerClient::InitializeDeferredMaterials()
 		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_FILTER_1 ]->SetString( "$GEOMETRY", GetDefRT_RHGeometry()->GetName() );
 		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_FILTER_1 ]->SetInt( "$FILTERPHASE", 1 );
 		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_FILTER_1 ]->SaveToFile( filesystem, "materials/deferred/radpass_filter_1.vmt", "MOD" );
+	}
+
+	m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_FILTER_2 ] = new KeyValues( "RADIOSITY_FILTER" );
+	if ( m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_FILTER_2 ] != NULL )
+	{
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_FILTER_2 ]->SetString( "$SHR", GetDefRT_RadianceHints( 2, RH_CHANNEL_SH_R )->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_FILTER_2 ]->SetString( "$SHG", GetDefRT_RadianceHints( 2, RH_CHANNEL_SH_G )->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_FILTER_2 ]->SetString( "$SHB", GetDefRT_RadianceHints( 2, RH_CHANNEL_SH_B )->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_FILTER_2 ]->SetString( "$META", GetDefRT_RadianceHints( 2, RH_CHANNEL_META )->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_FILTER_2 ]->SetString( "$VIS", GetDefRT_RHVisibility()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_FILTER_2 ]->SetString( "$GEOMETRY", GetDefRT_RHGeometry()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_FILTER_2 ]->SetInt( "$FILTERPHASE", 2 );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_FILTER_2 ]->SaveToFile( filesystem, "materials/deferred/radpass_filter_2.vmt", "MOD" );
 	}
 
 	m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_0 ] = new KeyValues( "RADIOSITY_PROPAGATE" );
@@ -408,6 +489,86 @@ void CDeferredManagerClient::InitializeDeferredMaterials()
 		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_1 ]->SaveToFile( filesystem, "materials/deferred/radpass_prop_1.vmt", "MOD" );
 	}
 
+	m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_2 ] = new KeyValues( "RADIOSITY_PROPAGATE" );
+	if ( m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_2 ] != NULL )
+	{
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_2 ]->SetString( "$SHR", GetDefRT_RadianceHints( 1, RH_CHANNEL_SH_R )->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_2 ]->SetString( "$SHG", GetDefRT_RadianceHints( 1, RH_CHANNEL_SH_G )->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_2 ]->SetString( "$SHB", GetDefRT_RadianceHints( 1, RH_CHANNEL_SH_B )->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_2 ]->SetString( "$VIS", GetDefRT_RHVisibility()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_2 ]->SetString( "$META", GetDefRT_RadianceHints( 0, RH_CHANNEL_META )->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_2 ]->SetString( "$GEOMETRY", GetDefRT_RHGeometry()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_2 ]->SetString( "$DISTANCE", GetDefRT_RHGeometryDistance()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_2 ]->SetString( "$SURFACEALBEDO", GetDefRT_RHSurfaceAlbedo()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_2 ]->SetString( "$SURFACENORMAL", GetDefRT_RHSurfaceNormal()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_2 ]->SetInt( "$BOUNCEMODE", 2 );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_2 ]->SaveToFile( filesystem, "materials/deferred/radpass_prop_2.vmt", "MOD" );
+	}
+
+	m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_3 ] = new KeyValues( "RADIOSITY_PROPAGATE" );
+	if ( m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_3 ] != NULL )
+	{
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_3 ]->SetString( "$SHR", GetDefRT_RadianceHints( 1, RH_CHANNEL_SH_R )->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_3 ]->SetString( "$SHG", GetDefRT_RadianceHints( 1, RH_CHANNEL_SH_G )->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_3 ]->SetString( "$SHB", GetDefRT_RadianceHints( 1, RH_CHANNEL_SH_B )->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_3 ]->SetString( "$VIS", GetDefRT_RHVisibility()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_3 ]->SetString( "$META", GetDefRT_RadianceHints( 0, RH_CHANNEL_META )->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_3 ]->SetString( "$GEOMETRY", GetDefRT_RHGeometry()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_3 ]->SetString( "$DISTANCE", GetDefRT_RHGeometryDistance()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_3 ]->SetString( "$SURFACEALBEDO", GetDefRT_RHSurfaceAlbedo()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_3 ]->SetString( "$SURFACENORMAL", GetDefRT_RHSurfaceNormal()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_3 ]->SetInt( "$BOUNCEMODE", 3 );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_3 ]->SaveToFile( filesystem, "materials/deferred/radpass_prop_3.vmt", "MOD" );
+	}
+
+	m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_4 ] = new KeyValues( "RADIOSITY_PROPAGATE" );
+	if ( m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_4 ] != NULL )
+	{
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_4 ]->SetString( "$SHR", GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_R )->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_4 ]->SetString( "$SHG", GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_G )->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_4 ]->SetString( "$SHB", GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_B )->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_4 ]->SetString( "$VIS", GetDefRT_RHVisibility()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_4 ]->SetString( "$META", GetDefRT_RadianceHints( 0, RH_CHANNEL_META )->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_4 ]->SetString( "$GEOMETRY", GetDefRT_RHGeometry()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_4 ]->SetString( "$DISTANCE", GetDefRT_RHGeometryDistance()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_4 ]->SetString( "$SURFACEALBEDO", GetDefRT_RHSurfaceAlbedo()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_4 ]->SetString( "$SURFACENORMAL", GetDefRT_RHSurfaceNormal()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_4 ]->SetInt( "$BOUNCEMODE", 4 );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_4 ]->SaveToFile( filesystem, "materials/deferred/radpass_prop_4.vmt", "MOD" );
+	}
+
+	m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_5 ] = new KeyValues( "RADIOSITY_PROPAGATE" );
+	if ( m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_5 ] != NULL )
+	{
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_5 ]->SetString( "$SHR", GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_R )->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_5 ]->SetString( "$SHG", GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_G )->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_5 ]->SetString( "$SHB", GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_B )->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_5 ]->SetString( "$VIS", GetDefRT_RHVisibility()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_5 ]->SetString( "$META", GetDefRT_RadianceHints( 0, RH_CHANNEL_META )->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_5 ]->SetString( "$GEOMETRY", GetDefRT_RHGeometry()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_5 ]->SetString( "$DISTANCE", GetDefRT_RHGeometryDistance()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_5 ]->SetString( "$SURFACEALBEDO", GetDefRT_RHSurfaceAlbedo()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_5 ]->SetString( "$SURFACENORMAL", GetDefRT_RHSurfaceNormal()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_5 ]->SetInt( "$BOUNCEMODE", 5 );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_5 ]->SaveToFile( filesystem, "materials/deferred/radpass_prop_5.vmt", "MOD" );
+	}
+
+	m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_6 ] = new KeyValues( "RADIOSITY_PROPAGATE" );
+	if ( m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_6 ] != NULL )
+	{
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_6 ]->SetString( "$SHR", GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_R )->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_6 ]->SetString( "$SHG", GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_G )->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_6 ]->SetString( "$SHB", GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_B )->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_6 ]->SetString( "$VIS", GetDefRT_RHVisibility()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_6 ]->SetString( "$META", GetDefRT_RadianceHints( 0, RH_CHANNEL_META )->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_6 ]->SetString( "$GEOMETRY", GetDefRT_RHGeometry()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_6 ]->SetString( "$DISTANCE", GetDefRT_RHGeometryDistance()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_6 ]->SetString( "$SURFACEALBEDO", GetDefRT_RHSurfaceAlbedo()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_6 ]->SetString( "$SURFACENORMAL", GetDefRT_RHSurfaceNormal()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_6 ]->SetInt( "$BOUNCEMODE", 6 );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_6 ]->SaveToFile( filesystem, "materials/deferred/radpass_prop_6.vmt", "MOD" );
+	}
+
 	m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_BLEND ] = new KeyValues( "RADIOSITY_BLEND" );
 	if ( m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_BLEND ] != NULL )
 	{
@@ -433,13 +594,25 @@ void CDeferredManagerClient::InitializeDeferredMaterials()
 	}
 
 	m_pMat_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL ] = materials->FindMaterial( "deferred/radpass_global", NULL );
+	m_pMat_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_1 ] = materials->FindMaterial( "deferred/radpass_global_1", NULL );
+	m_pMat_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_2 ] = materials->FindMaterial( "deferred/radpass_global_2", NULL );
+	m_pMat_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_3 ] = materials->FindMaterial( "deferred/radpass_global_3", NULL );
 	m_pMat_Def[ DEF_MAT_LIGHT_RADIOSITY_SKY ] = materials->FindMaterial( "deferred/radpass_sky", NULL );
+	m_pMat_Def[ DEF_MAT_LIGHT_RADIOSITY_SKY_1 ] = materials->FindMaterial( "deferred/radpass_sky_1", NULL );
 	m_pMat_Def[ DEF_MAT_LIGHT_RADIOSITY_SURFACE ] = materials->FindMaterial( "deferred/radpass_surface", NULL );
+	m_pMat_Def[ DEF_MAT_LIGHT_RADIOSITY_SURFACE_1 ] = materials->FindMaterial( "deferred/radpass_surface_1", NULL );
 	m_pMat_Def[ DEF_MAT_LIGHT_RADIOSITY_VISIBILITY ] = materials->FindMaterial( "deferred/radpass_visibility", NULL );
+	m_pMat_Def[ DEF_MAT_LIGHT_RADIOSITY_VISIBILITY_1 ] = materials->FindMaterial( "deferred/radpass_visibility_1", NULL );
 	m_pMat_Def[ DEF_MAT_LIGHT_RADIOSITY_FILTER ] = materials->FindMaterial( "deferred/radpass_filter", NULL );
 	m_pMat_Def[ DEF_MAT_LIGHT_RADIOSITY_FILTER_1 ] = materials->FindMaterial( "deferred/radpass_filter_1", NULL );
+	m_pMat_Def[ DEF_MAT_LIGHT_RADIOSITY_FILTER_2 ] = materials->FindMaterial( "deferred/radpass_filter_2", NULL );
 	m_pMat_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_0 ] = materials->FindMaterial( "deferred/radpass_prop_0", NULL );
 	m_pMat_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_1 ] = materials->FindMaterial( "deferred/radpass_prop_1", NULL );
+	m_pMat_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_2 ] = materials->FindMaterial( "deferred/radpass_prop_2", NULL );
+	m_pMat_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_3 ] = materials->FindMaterial( "deferred/radpass_prop_3", NULL );
+	m_pMat_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_4 ] = materials->FindMaterial( "deferred/radpass_prop_4", NULL );
+	m_pMat_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_5 ] = materials->FindMaterial( "deferred/radpass_prop_5", NULL );
+	m_pMat_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_6 ] = materials->FindMaterial( "deferred/radpass_prop_6", NULL );
 	m_pMat_Def[ DEF_MAT_LIGHT_RADIOSITY_BLEND ] = materials->FindMaterial( "deferred/radpass_blend", NULL );
 	m_pMat_Def[ DEF_MAT_LIGHT_RADIOSITY_UPSAMPLE ] = materials->FindMaterial( "deferred/radpass_upsample", NULL );
 
@@ -574,35 +747,103 @@ void CDeferredManagerClient::InitializeDeferredMaterials()
 	if ( m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL ] != NULL )
 	{
 		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL ]->SetInt( "$SURFACEMODE", 0 );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL ]->SetInt( "$SAMPLEPHASE", 0 );
 		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL ]->SetString( "$RSMALBEDO", GetDefRT_RHRSMAlbedo()->GetName() );
 		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL ]->SetString( "$GEOMETRY", GetDefRT_RHGeometry()->GetName() );
 		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL ]->SetString( "$DISTANCE", GetDefRT_RHGeometryDistance()->GetName() );
 		m_pMat_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL ] = materials->CreateMaterial( "__radpass_global", m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL ] );
 	}
 
+	m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_1 ] = new KeyValues( "RADIOSITY_GLOBAL" );
+	if ( m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_1 ] != NULL )
+	{
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_1 ]->SetInt( "$SURFACEMODE", 0 );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_1 ]->SetInt( "$SAMPLEPHASE", 1 );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_1 ]->SetString( "$RSMALBEDO", GetDefRT_RHRSMAlbedo()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_1 ]->SetString( "$GEOMETRY", GetDefRT_RHGeometry()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_1 ]->SetString( "$DISTANCE", GetDefRT_RHGeometryDistance()->GetName() );
+		m_pMat_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_1 ] = materials->CreateMaterial( "__radpass_global_1", m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_1 ] );
+	}
+
+	m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_2 ] = new KeyValues( "RADIOSITY_GLOBAL" );
+	if ( m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_2 ] != NULL )
+	{
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_2 ]->SetInt( "$SURFACEMODE", 0 );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_2 ]->SetInt( "$SAMPLEPHASE", 2 );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_2 ]->SetString( "$RSMALBEDO", GetDefRT_RHRSMAlbedo()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_2 ]->SetString( "$GEOMETRY", GetDefRT_RHGeometry()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_2 ]->SetString( "$DISTANCE", GetDefRT_RHGeometryDistance()->GetName() );
+		m_pMat_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_2 ] = materials->CreateMaterial( "__radpass_global_2", m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_2 ] );
+	}
+
+	m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_3 ] = new KeyValues( "RADIOSITY_GLOBAL" );
+	if ( m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_3 ] != NULL )
+	{
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_3 ]->SetInt( "$SURFACEMODE", 0 );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_3 ]->SetInt( "$SAMPLEPHASE", 3 );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_3 ]->SetString( "$RSMALBEDO", GetDefRT_RHRSMAlbedo()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_3 ]->SetString( "$GEOMETRY", GetDefRT_RHGeometry()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_3 ]->SetString( "$DISTANCE", GetDefRT_RHGeometryDistance()->GetName() );
+		m_pMat_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_3 ] = materials->CreateMaterial( "__radpass_global_3", m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_GLOBAL_3 ] );
+	}
+
 	m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SKY ] = new KeyValues( "RADIOSITY_GLOBAL" );
 	if ( m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SKY ] != NULL )
 	{
 		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SKY ]->SetInt( "$SURFACEMODE", 2 );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SKY ]->SetInt( "$SAMPLEPHASE", 0 );
 		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SKY ]->SetString( "$RSMALBEDO", GetDefRT_RHRSMAlbedo()->GetName() );
 		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SKY ]->SetString( "$GEOMETRY", GetDefRT_RHGeometry()->GetName() );
 		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SKY ]->SetString( "$DISTANCE", GetDefRT_RHGeometryDistance()->GetName() );
 		m_pMat_Def[ DEF_MAT_LIGHT_RADIOSITY_SKY ] = materials->CreateMaterial( "__radpass_sky", m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SKY ] );
 	}
 
+	m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SKY_1 ] = new KeyValues( "RADIOSITY_GLOBAL" );
+	if ( m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SKY_1 ] != NULL )
+	{
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SKY_1 ]->SetInt( "$SURFACEMODE", 2 );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SKY_1 ]->SetInt( "$SAMPLEPHASE", 1 );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SKY_1 ]->SetString( "$RSMALBEDO", GetDefRT_RHRSMAlbedo()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SKY_1 ]->SetString( "$GEOMETRY", GetDefRT_RHGeometry()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SKY_1 ]->SetString( "$DISTANCE", GetDefRT_RHGeometryDistance()->GetName() );
+		m_pMat_Def[ DEF_MAT_LIGHT_RADIOSITY_SKY_1 ] = materials->CreateMaterial( "__radpass_sky_1", m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SKY_1 ] );
+	}
+
 	m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SURFACE ] = new KeyValues( "RADIOSITY_GLOBAL" );
 	if ( m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SURFACE ] != NULL )
 	{
 		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SURFACE ]->SetInt( "$SURFACEMODE", 1 );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SURFACE ]->SetInt( "$SAMPLEPHASE", 0 );
 		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SURFACE ]->SetString( "$RSMALBEDO", GetDefRT_RHRSMAlbedo()->GetName() );
 		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SURFACE ]->SetString( "$GEOMETRY", GetDefRT_RHGeometry()->GetName() );
 		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SURFACE ]->SetString( "$DISTANCE", GetDefRT_RHGeometryDistance()->GetName() );
 		m_pMat_Def[ DEF_MAT_LIGHT_RADIOSITY_SURFACE ] = materials->CreateMaterial( "__radpass_surface", m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SURFACE ] );
 	}
 
+	m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SURFACE_1 ] = new KeyValues( "RADIOSITY_GLOBAL" );
+	if ( m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SURFACE_1 ] != NULL )
+	{
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SURFACE_1 ]->SetInt( "$SURFACEMODE", 1 );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SURFACE_1 ]->SetInt( "$SAMPLEPHASE", 1 );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SURFACE_1 ]->SetString( "$RSMALBEDO", GetDefRT_RHRSMAlbedo()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SURFACE_1 ]->SetString( "$GEOMETRY", GetDefRT_RHGeometry()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SURFACE_1 ]->SetString( "$DISTANCE", GetDefRT_RHGeometryDistance()->GetName() );
+		m_pMat_Def[ DEF_MAT_LIGHT_RADIOSITY_SURFACE_1 ] = materials->CreateMaterial( "__radpass_surface_1", m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_SURFACE_1 ] );
+	}
+
 	m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_VISIBILITY ] = new KeyValues( "RADIOSITY_VISIBILITY" );
 	if ( m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_VISIBILITY ] != NULL )
+	{
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_VISIBILITY ]->SetInt( "$VISIBILITYPHASE", 0 );
 		m_pMat_Def[ DEF_MAT_LIGHT_RADIOSITY_VISIBILITY ] = materials->CreateMaterial( "__radpass_visibility", m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_VISIBILITY ] );
+	}
+
+	m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_VISIBILITY_1 ] = new KeyValues( "RADIOSITY_VISIBILITY" );
+	if ( m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_VISIBILITY_1 ] != NULL )
+	{
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_VISIBILITY_1 ]->SetInt( "$VISIBILITYPHASE", 1 );
+		m_pMat_Def[ DEF_MAT_LIGHT_RADIOSITY_VISIBILITY_1 ] = materials->CreateMaterial( "__radpass_visibility_1", m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_VISIBILITY_1 ] );
+	}
 
 	m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_FILTER ] = new KeyValues( "RADIOSITY_FILTER" );
 	if ( m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_FILTER ] != NULL )
@@ -628,6 +869,19 @@ void CDeferredManagerClient::InitializeDeferredMaterials()
 		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_FILTER_1 ]->SetString( "$GEOMETRY", GetDefRT_RHGeometry()->GetName() );
 		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_FILTER_1 ]->SetInt( "$FILTERPHASE", 1 );
 		m_pMat_Def[ DEF_MAT_LIGHT_RADIOSITY_FILTER_1 ] = materials->CreateMaterial( "__radpass_filter_1", m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_FILTER_1 ] );
+	}
+
+	m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_FILTER_2 ] = new KeyValues( "RADIOSITY_FILTER" );
+	if ( m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_FILTER_2 ] != NULL )
+	{
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_FILTER_2 ]->SetString( "$SHR", GetDefRT_RadianceHints( 2, RH_CHANNEL_SH_R )->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_FILTER_2 ]->SetString( "$SHG", GetDefRT_RadianceHints( 2, RH_CHANNEL_SH_G )->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_FILTER_2 ]->SetString( "$SHB", GetDefRT_RadianceHints( 2, RH_CHANNEL_SH_B )->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_FILTER_2 ]->SetString( "$META", GetDefRT_RadianceHints( 2, RH_CHANNEL_META )->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_FILTER_2 ]->SetString( "$VIS", GetDefRT_RHVisibility()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_FILTER_2 ]->SetString( "$GEOMETRY", GetDefRT_RHGeometry()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_FILTER_2 ]->SetInt( "$FILTERPHASE", 2 );
+		m_pMat_Def[ DEF_MAT_LIGHT_RADIOSITY_FILTER_2 ] = materials->CreateMaterial( "__radpass_filter_2", m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_FILTER_2 ] );
 	}
 
 	m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_0 ] = new KeyValues( "RADIOSITY_PROPAGATE" );
@@ -660,6 +914,86 @@ void CDeferredManagerClient::InitializeDeferredMaterials()
 		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_1 ]->SetString( "$SURFACENORMAL", GetDefRT_RHSurfaceNormal()->GetName() );
 		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_1 ]->SetInt( "$BOUNCEMODE", 1 );
 		m_pMat_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_1 ] = materials->CreateMaterial( "__radpass_prop_1", m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_1 ] );
+	}
+
+	m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_2 ] = new KeyValues( "RADIOSITY_PROPAGATE" );
+	if ( m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_2 ] != NULL )
+	{
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_2 ]->SetString( "$SHR", GetDefRT_RadianceHints( 1, RH_CHANNEL_SH_R )->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_2 ]->SetString( "$SHG", GetDefRT_RadianceHints( 1, RH_CHANNEL_SH_G )->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_2 ]->SetString( "$SHB", GetDefRT_RadianceHints( 1, RH_CHANNEL_SH_B )->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_2 ]->SetString( "$VIS", GetDefRT_RHVisibility()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_2 ]->SetString( "$META", GetDefRT_RadianceHints( 0, RH_CHANNEL_META )->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_2 ]->SetString( "$GEOMETRY", GetDefRT_RHGeometry()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_2 ]->SetString( "$DISTANCE", GetDefRT_RHGeometryDistance()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_2 ]->SetString( "$SURFACEALBEDO", GetDefRT_RHSurfaceAlbedo()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_2 ]->SetString( "$SURFACENORMAL", GetDefRT_RHSurfaceNormal()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_2 ]->SetInt( "$BOUNCEMODE", 2 );
+		m_pMat_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_2 ] = materials->CreateMaterial( "__radpass_prop_2", m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_2 ] );
+	}
+
+	m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_3 ] = new KeyValues( "RADIOSITY_PROPAGATE" );
+	if ( m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_3 ] != NULL )
+	{
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_3 ]->SetString( "$SHR", GetDefRT_RadianceHints( 1, RH_CHANNEL_SH_R )->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_3 ]->SetString( "$SHG", GetDefRT_RadianceHints( 1, RH_CHANNEL_SH_G )->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_3 ]->SetString( "$SHB", GetDefRT_RadianceHints( 1, RH_CHANNEL_SH_B )->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_3 ]->SetString( "$VIS", GetDefRT_RHVisibility()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_3 ]->SetString( "$META", GetDefRT_RadianceHints( 0, RH_CHANNEL_META )->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_3 ]->SetString( "$GEOMETRY", GetDefRT_RHGeometry()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_3 ]->SetString( "$DISTANCE", GetDefRT_RHGeometryDistance()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_3 ]->SetString( "$SURFACEALBEDO", GetDefRT_RHSurfaceAlbedo()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_3 ]->SetString( "$SURFACENORMAL", GetDefRT_RHSurfaceNormal()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_3 ]->SetInt( "$BOUNCEMODE", 3 );
+		m_pMat_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_3 ] = materials->CreateMaterial( "__radpass_prop_3", m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_3 ] );
+	}
+
+	m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_4 ] = new KeyValues( "RADIOSITY_PROPAGATE" );
+	if ( m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_4 ] != NULL )
+	{
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_4 ]->SetString( "$SHR", GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_R )->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_4 ]->SetString( "$SHG", GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_G )->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_4 ]->SetString( "$SHB", GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_B )->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_4 ]->SetString( "$VIS", GetDefRT_RHVisibility()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_4 ]->SetString( "$META", GetDefRT_RadianceHints( 0, RH_CHANNEL_META )->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_4 ]->SetString( "$GEOMETRY", GetDefRT_RHGeometry()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_4 ]->SetString( "$DISTANCE", GetDefRT_RHGeometryDistance()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_4 ]->SetString( "$SURFACEALBEDO", GetDefRT_RHSurfaceAlbedo()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_4 ]->SetString( "$SURFACENORMAL", GetDefRT_RHSurfaceNormal()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_4 ]->SetInt( "$BOUNCEMODE", 4 );
+		m_pMat_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_4 ] = materials->CreateMaterial( "__radpass_prop_4", m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_4 ] );
+	}
+
+	m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_5 ] = new KeyValues( "RADIOSITY_PROPAGATE" );
+	if ( m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_5 ] != NULL )
+	{
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_5 ]->SetString( "$SHR", GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_R )->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_5 ]->SetString( "$SHG", GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_G )->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_5 ]->SetString( "$SHB", GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_B )->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_5 ]->SetString( "$VIS", GetDefRT_RHVisibility()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_5 ]->SetString( "$META", GetDefRT_RadianceHints( 0, RH_CHANNEL_META )->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_5 ]->SetString( "$GEOMETRY", GetDefRT_RHGeometry()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_5 ]->SetString( "$DISTANCE", GetDefRT_RHGeometryDistance()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_5 ]->SetString( "$SURFACEALBEDO", GetDefRT_RHSurfaceAlbedo()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_5 ]->SetString( "$SURFACENORMAL", GetDefRT_RHSurfaceNormal()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_5 ]->SetInt( "$BOUNCEMODE", 5 );
+		m_pMat_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_5 ] = materials->CreateMaterial( "__radpass_prop_5", m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_5 ] );
+	}
+
+	m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_6 ] = new KeyValues( "RADIOSITY_PROPAGATE" );
+	if ( m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_6 ] != NULL )
+	{
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_6 ]->SetString( "$SHR", GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_R )->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_6 ]->SetString( "$SHG", GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_G )->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_6 ]->SetString( "$SHB", GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_B )->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_6 ]->SetString( "$VIS", GetDefRT_RHVisibility()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_6 ]->SetString( "$META", GetDefRT_RadianceHints( 0, RH_CHANNEL_META )->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_6 ]->SetString( "$GEOMETRY", GetDefRT_RHGeometry()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_6 ]->SetString( "$DISTANCE", GetDefRT_RHGeometryDistance()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_6 ]->SetString( "$SURFACEALBEDO", GetDefRT_RHSurfaceAlbedo()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_6 ]->SetString( "$SURFACENORMAL", GetDefRT_RHSurfaceNormal()->GetName() );
+		m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_6 ]->SetInt( "$BOUNCEMODE", 6 );
+		m_pMat_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_6 ] = materials->CreateMaterial( "__radpass_prop_6", m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_6 ] );
 	}
 
 	m_pKV_Def[ DEF_MAT_LIGHT_RADIOSITY_BLEND ] = new KeyValues( "RADIOSITY_BLEND" );

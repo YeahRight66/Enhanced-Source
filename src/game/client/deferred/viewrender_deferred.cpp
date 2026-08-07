@@ -990,7 +990,7 @@ void CDeferredViewRender::PerformLighting( const CViewSetup &view )
 			}
 
 			// The stock global-light pass adds ambient-high/ambient-low directly and
-			// without RH geometry visibility. RH6 already consumed the original
+			// without RH geometry visibility. RH7 already consumed the original
 			// colours during PerformRadiositySky(), so commit a direct-light copy with
 			// zero ambient before the fullscreen global pass. This avoids double
 			// lighting and allows RH sky occlusion to remain visible.
@@ -1410,8 +1410,20 @@ void CDeferredViewRender::PerformRadiosityGlobal()
 	pRenderContext->SetRenderTargetEx( 1, GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_G ) );
 	pRenderContext->SetRenderTargetEx( 2, GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_B ) );
 	pRenderContext->SetRenderTargetEx( 3, GetDefRT_RadianceHints( 0, RH_CHANNEL_META ) );
+	// RH7 High uses sixteen stable stratified RSM samples per cell, split into
+	// four four-sample additive draws so legacy FXC never sees a wide sampler kernel.
 	pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_GLOBAL ) );
 	GetRadianceHintsVolumeMesh()->Draw();
+#if RH_RADIANCE_SAMPLE_COUNT >= 8
+	pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_GLOBAL_1 ) );
+	GetRadianceHintsVolumeMesh()->Draw();
+#endif
+#if RH_RADIANCE_SAMPLE_COUNT >= 16
+	pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_GLOBAL_2 ) );
+	GetRadianceHintsVolumeMesh()->Draw();
+	pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_GLOBAL_3 ) );
+	GetRadianceHintsVolumeMesh()->Draw();
+#endif
 	pRenderContext->PopRenderTargetAndViewport();
 }
 
@@ -1425,6 +1437,8 @@ void CDeferredViewRender::PerformRadiositySky()
 	pRenderContext->SetRenderTargetEx( 3, GetDefRT_RadianceHints( 0, RH_CHANNEL_META ) );
 	pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_SKY ) );
 	GetRadianceHintsVolumeMesh()->Draw();
+	pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_SKY_1 ) );
+	GetRadianceHintsVolumeMesh()->Draw();
 	pRenderContext->PopRenderTargetAndViewport();
 }
 
@@ -1436,6 +1450,8 @@ void CDeferredViewRender::PerformRadiositySurface()
 	pRenderContext->SetRenderTargetEx( 1, GetDefRT_RHSurfaceNormal() );
 	pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_SURFACE ) );
 	GetRadianceHintsVolumeMesh()->Draw();
+	pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_SURFACE_1 ) );
+	GetRadianceHintsVolumeMesh()->Draw();
 	pRenderContext->PopRenderTargetAndViewport();
 }
 
@@ -1446,6 +1462,8 @@ void CDeferredViewRender::PerformRadiosityVisibility()
 		0, 0, RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT );
 	pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_VISIBILITY ) );
 	GetRadianceHintsVolumeMesh()->Draw();
+	pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_VISIBILITY_1 ) );
+	GetRadianceHintsVolumeMesh()->Draw();
 	pRenderContext->PopRenderTargetAndViewport();
 }
 
@@ -1453,7 +1471,9 @@ void CDeferredViewRender::PerformRadiosityFilter()
 {
 	CMatRenderContextPtr pRenderContext( materials );
 
-	// Pass 0: axial reconstruction, raw set 0 -> set 1.
+	// Separable X/Y/Z reconstruction is exactly reflection invariant and keeps
+	// each ps_3_0 permutation small enough for the legacy Source FXC compiler.
+	// Pass X: raw set 0 -> set 1.
 	pRenderContext->PushRenderTargetAndViewport( GetDefRT_RadianceHints( 1, RH_CHANNEL_SH_R ), NULL,
 		0, 0, RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT );
 	pRenderContext->SetRenderTargetEx( 1, GetDefRT_RadianceHints( 1, RH_CHANNEL_SH_G ) );
@@ -1463,17 +1483,26 @@ void CDeferredViewRender::PerformRadiosityFilter()
 	GetRadianceHintsVolumeMesh()->Draw();
 	pRenderContext->PopRenderTargetAndViewport();
 
-	// Pass 1: reflection-invariant eight-corner reconstruction, set 1 -> set 0. This is the final first-bounce field.
+	// Pass Y: set 1 -> set 2.
+	pRenderContext->PushRenderTargetAndViewport( GetDefRT_RadianceHints( 2, RH_CHANNEL_SH_R ), NULL,
+		0, 0, RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT );
+	pRenderContext->SetRenderTargetEx( 1, GetDefRT_RadianceHints( 2, RH_CHANNEL_SH_G ) );
+	pRenderContext->SetRenderTargetEx( 2, GetDefRT_RadianceHints( 2, RH_CHANNEL_SH_B ) );
+	pRenderContext->SetRenderTargetEx( 3, GetDefRT_RadianceHints( 2, RH_CHANNEL_META ) );
+	pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_FILTER_1 ) );
+	GetRadianceHintsVolumeMesh()->Draw();
+	pRenderContext->PopRenderTargetAndViewport();
+
+	// Pass Z: set 2 -> set 0. Set 0 is the final first-bounce field.
 	pRenderContext->PushRenderTargetAndViewport( GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_R ), NULL,
 		0, 0, RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT );
 	pRenderContext->SetRenderTargetEx( 1, GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_G ) );
 	pRenderContext->SetRenderTargetEx( 2, GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_B ) );
 	pRenderContext->SetRenderTargetEx( 3, GetDefRT_RadianceHints( 0, RH_CHANNEL_META ) );
-	pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_FILTER_1 ) );
+	pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_FILTER_2 ) );
 	GetRadianceHintsVolumeMesh()->Draw();
 	pRenderContext->PopRenderTargetAndViewport();
 }
-
 void CDeferredViewRender::EndRadiosity( const CViewSetup &view )
 {
 	const int bounceCount = clamp( deferred_rh_bounce_count.GetInt(), 0, 1 );
@@ -1491,13 +1520,34 @@ void CDeferredViewRender::EndRadiosity( const CViewSetup &view )
 		GetRadianceHintsVolumeMesh()->Draw();
 		pRenderContext->PopRenderTargetAndViewport();
 
-		// Stage 2: move the generated surface radiance through the blocker field.
+		// Stage 2: X/Y/Z transport is split into three small additive passes.
+		// This avoids the legacy FXC crash from one six-direction sampler-heavy shader.
 		pRenderContext->PushRenderTargetAndViewport( GetDefRT_RadianceHints( 2, RH_CHANNEL_SH_R ), NULL,
 			0, 0, RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT );
 		pRenderContext->SetRenderTargetEx( 1, GetDefRT_RadianceHints( 2, RH_CHANNEL_SH_G ) );
 		pRenderContext->SetRenderTargetEx( 2, GetDefRT_RadianceHints( 2, RH_CHANNEL_SH_B ) );
+		pRenderContext->ClearColor4ub( 0, 0, 0, 0 );
+		pRenderContext->ClearBuffers( true, false );
 		pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_1 ) );
 		GetRadianceHintsVolumeMesh()->Draw();
+		pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_2 ) );
+		GetRadianceHintsVolumeMesh()->Draw();
+		pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_3 ) );
+		GetRadianceHintsVolumeMesh()->Draw();
+
+		// Hybrid secondary layer: keep the physically generated surface bounce as
+		// the dominant result, then add a small Jason-style RH diffusion term from
+		// the first-bounce field. It uses the same visibility/distance field, so it
+		// fills sparse regions without freely crossing walls.
+		if ( deferred_rh_diffusion_gain.GetFloat() > 0.0001f )
+		{
+			pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_4 ) );
+			GetRadianceHintsVolumeMesh()->Draw();
+			pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_5 ) );
+			GetRadianceHintsVolumeMesh()->Draw();
+			pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_6 ) );
+			GetRadianceHintsVolumeMesh()->Draw();
+		}
 		pRenderContext->PopRenderTargetAndViewport();
 	}
 
@@ -1526,10 +1576,10 @@ void CDeferredViewRender::DebugRadiosity( const CViewSetup &view )
 	const Vector maximum = origin + Vector( extent, extent, extent );
 	DebugDrawCross( origin, cellSize * 0.4f, -1.0f );
 	DebugDrawCross( maximum, cellSize * 0.4f, -1.0f );
-	engine->Con_NPrintf( 20, "RH6.0 HEMISPHERE preset %s | grid %i | RSM %i | origin %.1f %.1f %.1f | injected %i",
+	engine->Con_NPrintf( 20, "RH7 HYBRID preset %s | grid %i | RSM %i | samples %i | origin %.1f %.1f %.1f | injected %i",
 		RH_QUALITY_PRESET == RH_PRESET_HIGH ? "HIGH" : "BALANCED",
-		RH_VOLUME_SIZE, RH_RSM_RESOLUTION, origin.x, origin.y, origin.z,
-		m_bRadianceHintsInjected ? 1 : 0 );
+		RH_VOLUME_SIZE, RH_RSM_RESOLUTION, RH_RADIANCE_SAMPLE_COUNT,
+		origin.x, origin.y, origin.z, m_bRadianceHintsInjected ? 1 : 0 );
 }
 
 void CDeferredViewRender::RenderCascadedShadows( const CViewSetup &view )

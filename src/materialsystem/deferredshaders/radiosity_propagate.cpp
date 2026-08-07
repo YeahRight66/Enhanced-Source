@@ -4,7 +4,7 @@
 #include "radiosity_propagate_ps30.inc"
 #include "radiosity_propagate_vs30.inc"
 
-BEGIN_VS_SHADER( RADIOSITY_PROPAGATE, "RH 6.0 surface bounce generation and geometry transport" )
+BEGIN_VS_SHADER( RADIOSITY_PROPAGATE, "RH 7.0 physical surface bounce plus low-energy RH diffusion" )
     BEGIN_SHADER_PARAMS
         SHADER_PARAM( SHR, SHADER_PARAM_TYPE_TEXTURE, "", "Source red SH volume" )
         SHADER_PARAM( SHG, SHADER_PARAM_TYPE_TEXTURE, "", "Source green SH volume" )
@@ -15,7 +15,7 @@ BEGIN_VS_SHADER( RADIOSITY_PROPAGATE, "RH 6.0 surface bounce generation and geom
         SHADER_PARAM( DISTANCE, SHADER_PARAM_TYPE_TEXTURE, "", "Geometry distance field" )
         SHADER_PARAM( SURFACEALBEDO, SHADER_PARAM_TYPE_TEXTURE, "", "Accumulated RSM surface albedo" )
         SHADER_PARAM( SURFACENORMAL, SHADER_PARAM_TYPE_TEXTURE, "", "Accumulated RSM surface normal" )
-        SHADER_PARAM( BOUNCEMODE, SHADER_PARAM_TYPE_INTEGER, "0", "0=surface generation, 1=transport" )
+        SHADER_PARAM( BOUNCEMODE, SHADER_PARAM_TYPE_INTEGER, "0", "0=surface; 1..3=physical XYZ; 4..6=diffusion XYZ" )
     END_SHADER_PARAMS
 
     SHADER_INIT_PARAMS() {}
@@ -31,12 +31,16 @@ BEGIN_VS_SHADER( RADIOSITY_PROPAGATE, "RH 6.0 surface bounce generation and geom
 
     SHADER_DRAW
     {
+        const int nBounceMode = clamp( params[ BOUNCEMODE ]->GetIntValue(), 0, 6 );
+        const bool bAdditiveTransport = nBounceMode != 0;
         SHADOW_STATE
         {
             pShaderShadow->SetDefaultState();
             pShaderShadow->EnableDepthTest( false );
             pShaderShadow->EnableDepthWrites( false );
             pShaderShadow->EnableAlphaWrites( true );
+            if ( bAdditiveTransport )
+                EnableAlphaBlending( SHADER_BLEND_ONE, SHADER_BLEND_ONE );
             pShaderShadow->EnableTexture( SHADER_SAMPLER0, true );
             pShaderShadow->EnableTexture( SHADER_SAMPLER1, true );
             pShaderShadow->EnableTexture( SHADER_SAMPLER2, true );
@@ -54,6 +58,7 @@ BEGIN_VS_SHADER( RADIOSITY_PROPAGATE, "RH 6.0 surface bounce generation and geom
             DECLARE_STATIC_VERTEX_SHADER( radiosity_propagate_vs30 );
             SET_STATIC_VERTEX_SHADER( radiosity_propagate_vs30 );
             DECLARE_STATIC_PIXEL_SHADER( radiosity_propagate_ps30 );
+            SET_STATIC_PIXEL_SHADER_COMBO( BOUNCE_MODE, nBounceMode );
             SET_STATIC_PIXEL_SHADER( radiosity_propagate_ps30 );
         }
         DYNAMIC_STATE
@@ -85,8 +90,10 @@ BEGIN_VS_SHADER( RADIOSITY_PROPAGATE, "RH 6.0 surface bounce generation and geom
             ConVarRef cellSize( "deferred_rh_cell_size" );
             ConVarRef traceWidth( "deferred_rh_bounce_trace_width" );
             ConVarRef minConfidence( "deferred_rh_bounce_min_confidence" );
+            ConVarRef diffusionGain( "deferred_rh_diffusion_gain" );
+            ConVarRef diffusionRadius( "deferred_rh_diffusion_radius" );
+            ConVarRef diffusionMinConfidence( "deferred_rh_diffusion_min_confidence" );
 
-            const int mode = params[ BOUNCEMODE ]->GetIntValue() != 0 ? 1 : 0;
             const float radiusCells = 2.25f;
             float settings[4] = {
                 radiusCells / RH_VOLUME_SIZE_F,
@@ -114,7 +121,7 @@ BEGIN_VS_SHADER( RADIOSITY_PROPAGATE, "RH 6.0 surface bounce generation and geom
             float trace[4] = {
                 clamp( traceWidth.GetFloat(), 0.0f, 1.5f ),
                 clamp( minConfidence.GetFloat(), 0.0f, 1.0f ),
-                (float)mode,
+                (float)nBounceMode,
                 MAX( surfaceBounceGain.GetFloat(), 0.0f )
             };
             pShaderAPI->SetPixelShaderConstant( 3, trace );
@@ -124,6 +131,15 @@ BEGIN_VS_SHADER( RADIOSITY_PROPAGATE, "RH 6.0 surface bounce generation and geom
                 0.0f, 0.0f, 0.0f
             };
             pShaderAPI->SetPixelShaderConstant( 4, surface );
+
+            const float diffusionRadiusCells = clamp( diffusionRadius.GetFloat(), 0.75f, 4.0f );
+            float diffusion[4] = {
+                clamp( diffusionGain.GetFloat(), 0.0f, 0.35f ),
+                diffusionRadiusCells / RH_VOLUME_SIZE_F,
+                diffusionRadiusCells,
+                clamp( diffusionMinConfidence.GetFloat(), 0.0f, 1.0f )
+            };
+            pShaderAPI->SetPixelShaderConstant( 5, diffusion );
         }
 
         Draw();

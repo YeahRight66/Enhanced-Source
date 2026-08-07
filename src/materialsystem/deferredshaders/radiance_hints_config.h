@@ -1,7 +1,7 @@
 #ifndef RADIANCE_HINTS_CONFIG_H
 #define RADIANCE_HINTS_CONFIG_H
 
-// Radiance Hints 6.0 compile-time configuration.
+// Radiance Hints 7.0 hybrid compile-time configuration.
 // This header intentionally overrides legacy RH macros locally. Do not include
 // it from deferred_global_common.h or common_deferred_fxc.h.
 
@@ -61,18 +61,18 @@
 #   define RH_RSM_RESOLUTION              512
 #   define RH_RADIANCE_SAMPLE_COUNT       4
 #   define RH_VISIBILITY_SAMPLE_COUNT     4
-#   define RH_FILTER_NEIGHBOUR_COUNT      4
+#   define RH_FILTER_NEIGHBOUR_COUNT      2
 #   define RH_BOUNCE_SAMPLE_COUNT         4
 #   define RH_RECEIVER_SAMPLE_COUNT       1
 #   define RH_SOFT_SHADOW_TAP_COUNT       3
 #   define RH_UPSAMPLE_TAP_COUNT          4
 #elif RH_QUALITY_PRESET == RH_PRESET_HIGH
     // GTX 1050 target.
-#   define RH_VOLUME_SIZE                 48
+#   define RH_VOLUME_SIZE                 40
 #   define RH_RSM_RESOLUTION              768
-#   define RH_RADIANCE_SAMPLE_COUNT       8
+#   define RH_RADIANCE_SAMPLE_COUNT       16
 #   define RH_VISIBILITY_SAMPLE_COUNT     8
-#   define RH_FILTER_NEIGHBOUR_COUNT      8
+#   define RH_FILTER_NEIGHBOUR_COUNT      2
 #   define RH_BOUNCE_SAMPLE_COUNT         6
 #   define RH_RECEIVER_SAMPLE_COUNT       4
 #   define RH_SOFT_SHADOW_TAP_COUNT       4
@@ -104,14 +104,14 @@
 #if RH_VOLUME_SIZE < 16 || RH_VOLUME_SIZE > 48
 # error RH_VOLUME_SIZE must be in the range 16..48.
 #endif
-#if RH_RADIANCE_SAMPLE_COUNT < 1 || RH_RADIANCE_SAMPLE_COUNT > 8
-# error RH_RADIANCE_SAMPLE_COUNT must be in the range 1..8.
+#if RH_RADIANCE_SAMPLE_COUNT < 1 || RH_RADIANCE_SAMPLE_COUNT > 16
+# error RH_RADIANCE_SAMPLE_COUNT must be in the range 1..16.
 #endif
 #if RH_VISIBILITY_SAMPLE_COUNT < 1 || RH_VISIBILITY_SAMPLE_COUNT > 8
 # error RH_VISIBILITY_SAMPLE_COUNT must be in the range 1..8.
 #endif
-#if RH_FILTER_NEIGHBOUR_COUNT != 4 && RH_FILTER_NEIGHBOUR_COUNT != 6 && RH_FILTER_NEIGHBOUR_COUNT != 8
-# error RH_FILTER_NEIGHBOUR_COUNT must be 4, 6 or 8.
+#if RH_FILTER_NEIGHBOUR_COUNT != 2
+# error RH_FILTER_NEIGHBOUR_COUNT must be 2 for separable X/Y/Z reconstruction.
 #endif
 #if RH_BOUNCE_SAMPLE_COUNT < 1 || RH_BOUNCE_SAMPLE_COUNT > 6
 # error RH_BOUNCE_SAMPLE_COUNT must be in the range 1..6.

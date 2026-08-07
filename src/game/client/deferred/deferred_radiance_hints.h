@@ -48,6 +48,9 @@ extern ConVar deferred_rh_filter_direction_preserve;
 extern ConVar deferred_rh_filter_radius;
 extern ConVar deferred_rh_bounce_trace_width;
 extern ConVar deferred_rh_bounce_min_confidence;
+extern ConVar deferred_rh_diffusion_gain;
+extern ConVar deferred_rh_diffusion_radius;
+extern ConVar deferred_rh_diffusion_min_confidence;
 extern ConVar deferred_rh_receiver_radius;
 extern ConVar deferred_rh_reconstruction_confidence_floor;
 extern ConVar deferred_rh_shadow_isotropic_blend;
@@ -71,7 +74,7 @@ extern ConVar deferred_rh_shadow_far_strength;
 
 extern ConVar deferred_rh_debug_mode;
 
-// Compatibility aliases retained for old configs; RH6 no longer uses them
+// Compatibility aliases retained for old configs; RH7 no longer uses them
 // as scalar occupancy/validity controls.
 extern ConVar deferred_rh_min_visibility;
 extern ConVar deferred_rh_validity_boost;

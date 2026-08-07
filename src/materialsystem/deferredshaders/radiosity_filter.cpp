@@ -12,7 +12,7 @@ BEGIN_VS_SHADER( RADIOSITY_FILTER, "RH 6.0 symmetric confidence/visibility-aware
         SHADER_PARAM( META, SHADER_PARAM_TYPE_TEXTURE, "", "Raw injection metadata" )
         SHADER_PARAM( VIS, SHADER_PARAM_TYPE_TEXTURE, "", "Directional visibility volume" )
         SHADER_PARAM( GEOMETRY, SHADER_PARAM_TYPE_TEXTURE, "", "Conservative geometry occupancy volume" )
-        SHADER_PARAM( FILTERPHASE, SHADER_PARAM_TYPE_INTEGER, "0", "0=axial, 1=eight-corner" )
+        SHADER_PARAM( FILTERPHASE, SHADER_PARAM_TYPE_INTEGER, "0", "0=X axis, 1=Y axis, 2=Z axis" )
     END_SHADER_PARAMS
 
     SHADER_INIT_PARAMS()
@@ -55,7 +55,7 @@ BEGIN_VS_SHADER( RADIOSITY_FILTER, "RH 6.0 symmetric confidence/visibility-aware
             DECLARE_STATIC_VERTEX_SHADER( radiosity_propagate_vs30 );
             SET_STATIC_VERTEX_SHADER( radiosity_propagate_vs30 );
             DECLARE_STATIC_PIXEL_SHADER( radiosity_filter_ps30 );
-            SET_STATIC_PIXEL_SHADER_COMBO( FILTER_PHASE, params[FILTERPHASE]->GetIntValue() != 0 ? 1 : 0 );
+            SET_STATIC_PIXEL_SHADER_COMBO( FILTER_PHASE, clamp( params[FILTERPHASE]->GetIntValue(), 0, 2 ) );
             SET_STATIC_PIXEL_SHADER( radiosity_filter_ps30 );
         }
         DYNAMIC_STATE

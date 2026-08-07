@@ -1,8 +1,8 @@
 // Included exactly once by deferred_client_common.cpp.
 
 ConVar deferred_rh_cell_size(
-    "deferred_rh_cell_size", "18", FCVAR_ARCHIVE,
-    "World-space RH cell size. High preset uses a detailed 48^3 volume." );
+    "deferred_rh_cell_size", "20", FCVAR_ARCHIVE,
+    "World-space RH cell size. RH7 High uses a dense 40^3 volume (800 units at the default)." );
 
 ConVar deferred_rh_gather_radius_cells(
     "deferred_rh_gather_radius_cells", "5.5", FCVAR_ARCHIVE,
@@ -158,6 +158,19 @@ ConVar deferred_rh_bounce_min_confidence(
     "deferred_rh_bounce_min_confidence", "0.03", FCVAR_ARCHIVE,
     "Minimum filtered-cell confidence accepted by secondary transport." );
 
+// Jason-style low-energy RH diffusion layered on top of the physically generated
+// surface bounce. This is intentionally weak: it fills sparse low-frequency
+// regions without becoming the primary transport model.
+ConVar deferred_rh_diffusion_gain(
+    "deferred_rh_diffusion_gain", "0.065", FCVAR_ARCHIVE,
+    "Low-energy RH diffusion gain added to the physical secondary bounce." );
+ConVar deferred_rh_diffusion_radius(
+    "deferred_rh_diffusion_radius", "1.85", FCVAR_ARCHIVE,
+    "Neighbour sampling radius in RH cells for the Jason-style diffusion layer." );
+ConVar deferred_rh_diffusion_min_confidence(
+    "deferred_rh_diffusion_min_confidence", "0.015", FCVAR_ARCHIVE,
+    "Minimum first-bounce confidence accepted by the diffusion layer." );
+
 ConVar deferred_rh_receiver_radius(
     "deferred_rh_receiver_radius", "0.55", FCVAR_ARCHIVE,
     "High-preset receiver reconstruction radius in RH cell units." );
@@ -233,7 +246,7 @@ ConVar deferred_rh_min_visibility(
     "Legacy compatibility setting; retained for existing configs." );
 ConVar deferred_rh_validity_boost(
     "deferred_rh_validity_boost", "1.0", FCVAR_ARCHIVE,
-    "Legacy compatibility setting; RH6 derives confidence from SH energy." );
+    "Legacy compatibility setting; RH7 derives confidence from SH energy." );
 ConVar deferred_rh_geometry_enable(
     "deferred_rh_geometry_enable", "1", FCVAR_ARCHIVE,
     "Enables directional RH visibility and soft indirect shadows." );

@@ -44,24 +44,15 @@ float3 RH_BuildTangent( float3 normal )
     return RH_SafeNormalize( cross( axis, normal ), float3( 1.0f, 0.0f, 0.0f ) );
 }
 
-float3 RH_SampleFirstDiffuse( float3 uvw, float4 diffuseBasis, out float confidence )
+float4 RH_SampleFirstDiffuse( float3 uvw, float4 diffuseBasis )
 {
     float4 meta = RH_SampleAtlas( sMeta, uvw );
-    confidence = max( RH_MetaConfidence( meta ), saturate( g_RHReconstruct.y ) );
+    float confidence = max( RH_MetaConfidence( meta ), saturate( g_RHReconstruct.y ) );
     float3 result;
-    {
-        float4 sh = RH_SampleAtlas( sFirstR, uvw );
-        result.r = max( dot( sh, diffuseBasis ), 0.0f );
-    }
-    {
-        float4 sh = RH_SampleAtlas( sFirstG, uvw );
-        result.g = max( dot( sh, diffuseBasis ), 0.0f );
-    }
-    {
-        float4 sh = RH_SampleAtlas( sFirstB, uvw );
-        result.b = max( dot( sh, diffuseBasis ), 0.0f );
-    }
-    return result;
+    result.r = max( dot( RH_SampleAtlas( sFirstR, uvw ), diffuseBasis ), 0.0f );
+    result.g = max( dot( RH_SampleAtlas( sFirstG, uvw ), diffuseBasis ), 0.0f );
+    result.b = max( dot( RH_SampleAtlas( sFirstB, uvw ), diffuseBasis ), 0.0f );
+    return float4( result, confidence );
 }
 
 float RH_ConeVisibility( float3 uvw, float3 towardSource, float3 surfaceNormal, float4 receiverMeta )
@@ -78,53 +69,44 @@ float RH_ConeVisibility( float3 uvw, float3 towardSource, float3 surfaceNormal, 
     float clearanceCells = clamp( g_RHShadowShape.y, 0.25f, 2.0f );
     float3 traceOrigin = uvw + surfaceNormal * ( clearanceCells * cellUV );
 
-    float travelCells = startCells;
-    float previousCells = 0.0f;
+    // One distance-field lookup adjusts the whole low-frequency cone without a
+    // sampler-heavy dynamic loop. Fixed symmetric taps are stable on legacy FXC.
+    float originDistanceCells = RH_SampleAtlas( sDistance, traceOrigin ).r * 255.0f;
+    float distanceScale = lerp( 0.85f, 1.15f, saturate( originDistanceCells / 4.0f ) );
+    float distance0 = min( max( startCells, traceDistance * 0.18f * distanceScale ), traceDistance );
+    float distance1 = min( max( distance0 + 0.45f, traceDistance * 0.40f * distanceScale ), traceDistance );
+    float distance2 = min( max( distance1 + 0.45f, traceDistance * 0.67f * distanceScale ), traceDistance );
+    float distance3 = min( max( distance2 + 0.45f, traceDistance * 0.92f ), traceDistance );
     float opticalDepth = 0.0f;
+    float previousDistance = 0.0f;
 
-    // Sphere-tracing-inspired integration through the CPU distance field.  The
-    // trace takes large steps in empty space and short steps near walls.  The
-    // owning surface is skipped by the normal clearance, fixing dark floors.
-    [unroll]
-    for ( int tapIndex = 0; tapIndex < RH_SOFT_SHADOW_TAP_COUNT; ++tapIndex )
-    {
-        float normalizedDistance = saturate( travelCells / traceDistance );
-        float coneRadiusCells = coneSlope * travelCells;
-        float phase = (float)tapIndex;
-        float3 lateralDirection = ( tapIndex == 0 ) ? float3( 0.0f, 0.0f, 0.0f )
-            : ( tapIndex == 1 ) ? tangent
-            : ( tapIndex == 2 ) ? -tangent
-            : bitangent;
-        float lateralScale = ( tapIndex == 0 ) ? 0.0f : ( 0.35f + 0.20f * phase );
-        float3 sampleUVW = traceOrigin
-            + towardSource * ( travelCells * cellUV )
-            + lateralDirection * ( coneRadiusCells * lateralScale * cellUV );
+#define RH_CONE_TAP( DISTANCE_VALUE, LATERAL_VECTOR, LATERAL_SCALE ) \
+{ \
+    float rhDistance = DISTANCE_VALUE; \
+    float rhNormalized = saturate( rhDistance / traceDistance ); \
+    float rhConeRadius = coneSlope * rhDistance; \
+    float3 rhSampleUVW = traceOrigin + towardSource * ( rhDistance * cellUV ) \
+        + LATERAL_VECTOR * ( rhConeRadius * LATERAL_SCALE * cellUV ); \
+    float rhInside = RH_InsideVolume( rhSampleUVW ); \
+    float rhDirectional = RH_EvaluateVisibilityTwoSided( RH_SampleAtlas( sVisibility, rhSampleUVW ), towardSource ); \
+    float rhGeometry = RH_SampleAtlas( sGeometry, rhSampleUVW ).r; \
+    float rhBlocker = max( rhDirectional, rhGeometry ); \
+    float rhSegment = max( rhDistance - previousDistance, 0.25f ); \
+    float rhStrength = lerp( max( g_RHShadowShape.z, 0.0f ), max( g_RHShadowShape.w, 0.0f ), rhNormalized ); \
+    opticalDepth += max( rhBlocker * g_RHQuality.z - adaptiveBias, 0.0f ) * rhSegment * rhStrength * rhInside; \
+    previousDistance = rhDistance; \
+}
 
-        float inside = RH_InsideVolume( sampleUVW );
-        float directionalBlocker = RH_EvaluateVisibilityTwoSided(
-            RH_SampleAtlas( sVisibility, sampleUVW ), towardSource );
-        float geometryBlocker = RH_SampleAtlas( sGeometry, sampleUVW ).r;
-        float blocker = max( directionalBlocker, geometryBlocker );
-        float segmentCells = max( travelCells - previousCells, 0.25f );
-        float distanceCells = RH_SampleAtlas( sDistance, sampleUVW ).r * 255.0f;
-        float distanceStep = clamp( distanceCells * 0.65f, 0.65f, 3.5f );
-        float strength = lerp(
-            max( g_RHShadowShape.z, 0.0f ),
-            max( g_RHShadowShape.w, 0.0f ),
-            normalizedDistance );
-
-        opticalDepth += max( blocker * g_RHQuality.z - adaptiveBias, 0.0f )
-            * segmentCells * strength * inside;
-
-        previousCells = travelCells;
-        travelCells = min( travelCells + distanceStep, traceDistance );
-    }
+    RH_CONE_TAP( distance0, float3( 0.0f, 0.0f, 0.0f ), 0.0f );
+    RH_CONE_TAP( distance1, tangent, 0.55f );
+    RH_CONE_TAP( distance2, -tangent, 0.75f );
+#if RH_SOFT_SHADOW_TAP_COUNT == 4
+    RH_CONE_TAP( distance3, bitangent, 0.95f );
+#endif
 
     float directionalVisibility = exp2(
         -max( g_RHShadow.x, 0.0f ) * max( g_RHQuality.w, 0.0f ) * opticalDepth );
 
-    // Contact blocking is evaluated beyond the owning surface and in the light
-    // direction.  It remains a conservative ambiguity fallback, not an AO term.
     float3 localUVW = traceOrigin + towardSource * ( 0.35f * cellUV );
     float localDirectional = RH_EvaluateVisibilityTwoSided(
         RH_SampleAtlas( sVisibility, localUVW ), towardSource );
@@ -188,22 +170,19 @@ float4 main( const PS_INPUT In ) : COLOR0
     float3 tangent = RH_BuildTangent( normal );
     float3 bitangent = RH_SafeNormalize( cross( normal, tangent ), float3( 0.0f, 1.0f, 0.0f ) );
     float receiverUV = g_RHReconstruct.x / RH_VOLUME_SIZE_F;
-    float sideConfidence;
-    float3 side;
-
-    side = RH_SampleFirstDiffuse( uvw + tangent * receiverUV, diffuseBasis, sideConfidence );
-    firstIndirect += side * ( sideConfidence * 0.20f );
-    reconstructionWeight += sideConfidence * 0.20f;
+    float4 sideSample = RH_SampleFirstDiffuse( uvw + tangent * receiverUV, diffuseBasis );
+    firstIndirect += sideSample.rgb * ( sideSample.a * 0.20f );
+    reconstructionWeight += sideSample.a * 0.20f;
 
     float3 offsetDirection = tangent * -0.5f + bitangent * 0.8660254f;
-    side = RH_SampleFirstDiffuse( uvw + offsetDirection * receiverUV, diffuseBasis, sideConfidence );
-    firstIndirect += side * ( sideConfidence * 0.20f );
-    reconstructionWeight += sideConfidence * 0.20f;
+    sideSample = RH_SampleFirstDiffuse( uvw + offsetDirection * receiverUV, diffuseBasis );
+    firstIndirect += sideSample.rgb * ( sideSample.a * 0.20f );
+    reconstructionWeight += sideSample.a * 0.20f;
 
     offsetDirection = tangent * -0.5f - bitangent * 0.8660254f;
-    side = RH_SampleFirstDiffuse( uvw + offsetDirection * receiverUV, diffuseBasis, sideConfidence );
-    firstIndirect += side * ( sideConfidence * 0.20f );
-    reconstructionWeight += sideConfidence * 0.20f;
+    sideSample = RH_SampleFirstDiffuse( uvw + offsetDirection * receiverUV, diffuseBasis );
+    firstIndirect += sideSample.rgb * ( sideSample.a * 0.20f );
+    reconstructionWeight += sideSample.a * 0.20f;
 #else
     // Balanced preset: preserve the center result exactly.
     firstIndirect *= 2.5f;
