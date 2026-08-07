@@ -645,6 +645,9 @@ CDeferredViewRender::CDeferredViewRender()
 	m_vecRHGeometryOrigin.Init();
 	m_flRHGeometryCellSize = 0.0f;
 	m_bRHGeometryValid = false;
+	m_vecRHShadowGeometryOrigin.Init();
+	m_flRHShadowGeometryCellSize = 0.0f;
+	m_bRHShadowGeometryValid = false;
 }
 
 void CDeferredViewRender::Init()
@@ -663,7 +666,13 @@ void CDeferredViewRender::Shutdown()
 
 	m_RHStaticGeometry.Purge();
 	m_RHCombinedGeometry.Purge();
+	m_RHGeometryDistance.Purge();
+	m_RHShadowStaticGeometry.Purge();
+	m_RHShadowCombinedGeometry.Purge();
+	m_RHShadowGeometryDistance.Purge();
+	m_RHSurfaceGuide.Purge();
 	m_bRHGeometryValid = false;
+	m_bRHShadowGeometryValid = false;
 
 	BaseClass::Shutdown();
 }
@@ -674,8 +683,15 @@ void CDeferredViewRender::LevelInit()
 	m_flRadianceHintsCellSize = 0.0f;
 	m_bRHGeometryValid = false;
 	m_flRHGeometryCellSize = 0.0f;
+	m_bRHShadowGeometryValid = false;
+	m_flRHShadowGeometryCellSize = 0.0f;
 	m_RHStaticGeometry.Purge();
 	m_RHCombinedGeometry.Purge();
+	m_RHGeometryDistance.Purge();
+	m_RHShadowStaticGeometry.Purge();
+	m_RHShadowCombinedGeometry.Purge();
+	m_RHShadowGeometryDistance.Purge();
+	m_RHSurfaceGuide.Purge();
 	BaseClass::LevelInit();
 }
 
@@ -685,8 +701,15 @@ void CDeferredViewRender::LevelShutdown()
 	m_flRadianceHintsCellSize = 0.0f;
 	m_bRHGeometryValid = false;
 	m_flRHGeometryCellSize = 0.0f;
+	m_bRHShadowGeometryValid = false;
+	m_flRHShadowGeometryCellSize = 0.0f;
 	m_RHStaticGeometry.Purge();
 	m_RHCombinedGeometry.Purge();
+	m_RHGeometryDistance.Purge();
+	m_RHShadowStaticGeometry.Purge();
+	m_RHShadowCombinedGeometry.Purge();
+	m_RHShadowGeometryDistance.Purge();
+	m_RHSurfaceGuide.Purge();
 	BaseClass::LevelShutdown();
 }
 
@@ -1069,6 +1092,7 @@ void CDeferredViewRender::BeginRadiosity( const CViewSetup &view )
 	m_vecRadiosityOrigin[1] = origin;
 	m_bRadianceHintsInjected = false;
 	UpdateRadiosityGeometry();
+	UpdateRadiosityShadowGeometry();
 
 	CMatRenderContextPtr pRenderContext( materials );
 	for ( int set = 0; set < RH_SET_COUNT; ++set )
@@ -1115,6 +1139,59 @@ namespace
     inline int RHClampCellIndex( int value )
     {
         return clamp( value, 0, RH_VOLUME_SIZE - 1 );
+    }
+
+    inline int RHShadowAtlasIndex( int x, int y, int z )
+    {
+        return y * RH_SHADOW_ATLAS_WIDTH + z * RH_SHADOW_VOLUME_SIZE + x;
+    }
+
+    inline int RHClampShadowCellIndex( int value )
+    {
+        return clamp( value, 0, RH_SHADOW_VOLUME_SIZE - 1 );
+    }
+
+    // Felzenszwalb/Huttenlocher 1D squared-Euclidean distance transform.
+    // 64 samples per line keeps the stack footprint tiny and gives the SDF
+    // rotationally consistent distances unlike RH7's Manhattan field.
+    void RHDistanceTransform1D( const float *f, float *d )
+    {
+        int v[ RH_SHADOW_VOLUME_SIZE ];
+        float z[ RH_SHADOW_VOLUME_SIZE + 1 ];
+        int k = 0;
+        v[0] = 0;
+        z[0] = -1.0e20f;
+        z[1] =  1.0e20f;
+
+        for ( int q = 1; q < RH_SHADOW_VOLUME_SIZE; ++q )
+        {
+            float separation = 0.0f;
+            for ( ;; )
+            {
+                const int vk = v[k];
+                separation = ( ( f[q] + (float)( q * q ) ) -
+                    ( f[vk] + (float)( vk * vk ) ) ) /
+                    ( 2.0f * (float)( q - vk ) );
+                if ( separation > z[k] || k == 0 )
+                    break;
+                --k;
+            }
+            if ( separation <= z[k] )
+                separation = z[k] + 1.0e-4f;
+            ++k;
+            v[k] = q;
+            z[k] = separation;
+            z[k + 1] = 1.0e20f;
+        }
+
+        k = 0;
+        for ( int q = 0; q < RH_SHADOW_VOLUME_SIZE; ++q )
+        {
+            while ( z[k + 1] < (float)q )
+                ++k;
+            const float delta = (float)( q - v[k] );
+            d[q] = delta * delta + f[ v[k] ];
+        }
     }
 }
 
@@ -1325,6 +1402,239 @@ void CDeferredViewRender::UpdateRadiosityGeometry()
     BuildRadiosityDistanceField();
     UpdateDefRT_RHGeometry( m_RHCombinedGeometry.Base(), cellCount );
     UpdateDefRT_RHGeometryDistance( m_RHGeometryDistance.Base(), cellCount );
+}
+
+unsigned char CDeferredViewRender::BuildRadiosityShadowStaticCell( const Vector &cellCenter, float cellSize ) const
+{
+    const float hullScale = clamp( deferred_rh_geometry_hull_scale.GetFloat(), 0.10f, 0.49f );
+    const float halfExtent = cellSize * hullScale;
+    const Vector hullMins( -halfExtent, -halfExtent, -halfExtent );
+    const Vector hullMaxs(  halfExtent,  halfExtent,  halfExtent );
+    const Vector epsilon( 0.0f, 0.0f, MAX( cellSize * 0.0025f, 0.01f ) );
+    Ray_t ray;
+    ray.Init( cellCenter - epsilon, cellCenter + epsilon, hullMins, hullMaxs );
+    CTraceFilterWorldAndPropsOnly filter;
+    trace_t trace;
+    enginetrace->TraceRay( ray, MASK_SOLID, &filter, &trace );
+    return ( trace.startsolid || trace.allsolid || trace.fraction < 1.0f ) ? 255 : 0;
+}
+
+void CDeferredViewRender::StampRadiosityShadowDynamicModels( const Vector &origin, float cellSize )
+{
+    CClientEntityList *pEntityList = cl_entitylist;
+    if ( !deferred_rh_dynamic_model_blockers.GetBool() || pEntityList == NULL )
+        return;
+
+    const float conservativeRadius = cellSize * 0.75f;
+    const int highestEntity = pEntityList->GetHighestEntityIndex();
+    for ( int entityIndex = 1; entityIndex <= highestEntity; ++entityIndex )
+    {
+        IClientEntity *pEntity = pEntityList->GetClientEntity( entityIndex );
+        IClientRenderable *pRenderable = pEntity != NULL ? pEntity->GetClientRenderable() : NULL;
+        if ( pRenderable == NULL || !pRenderable->ShouldDraw() )
+            continue;
+        const model_t *pModel = pRenderable->GetModel();
+        if ( pModel == NULL || modelinfo->GetModelType( pModel ) != mod_studio )
+            continue;
+
+        Vector worldMins, worldMaxs;
+        pRenderable->GetRenderBoundsWorldspace( worldMins, worldMaxs );
+        int minCell[3], maxCell[3];
+        bool overlaps = true;
+        for ( int axis = 0; axis < 3; ++axis )
+        {
+            minCell[axis] = (int)floor( ( worldMins[axis] - origin[axis] ) / cellSize ) - 1;
+            maxCell[axis] = (int)floor( ( worldMaxs[axis] - origin[axis] ) / cellSize ) + 1;
+            if ( maxCell[axis] < 0 || minCell[axis] >= RH_SHADOW_VOLUME_SIZE ) overlaps = false;
+            minCell[axis] = RHClampShadowCellIndex( minCell[axis] );
+            maxCell[axis] = RHClampShadowCellIndex( maxCell[axis] );
+        }
+        if ( !overlaps ) continue;
+
+        Vector localMins, localMaxs;
+        pRenderable->GetRenderBounds( localMins, localMaxs );
+        localMins -= Vector( conservativeRadius, conservativeRadius, conservativeRadius );
+        localMaxs += Vector( conservativeRadius, conservativeRadius, conservativeRadius );
+        const matrix3x4_t &renderToWorld = pRenderable->RenderableToWorldTransform();
+
+        for ( int z = minCell[2]; z <= maxCell[2]; ++z )
+        for ( int y = minCell[1]; y <= maxCell[1]; ++y )
+        for ( int x = minCell[0]; x <= maxCell[0]; ++x )
+        {
+            const Vector center = origin + Vector(
+                ( x + 0.5f ) * cellSize, ( y + 0.5f ) * cellSize, ( z + 0.5f ) * cellSize );
+            Vector localCenter;
+            VectorITransform( center, renderToWorld, localCenter );
+            if ( localCenter.x >= localMins.x && localCenter.x <= localMaxs.x &&
+                 localCenter.y >= localMins.y && localCenter.y <= localMaxs.y &&
+                 localCenter.z >= localMins.z && localCenter.z <= localMaxs.z )
+                m_RHShadowCombinedGeometry[ RHShadowAtlasIndex( x, y, z ) ] = 255;
+        }
+    }
+}
+
+void CDeferredViewRender::BuildRadiosityShadowDistanceField()
+{
+    const int N = RH_SHADOW_VOLUME_SIZE;
+    const int count = RH_SHADOW_ATLAS_WIDTH * RH_SHADOW_ATLAS_HEIGHT;
+    CUtlVector<float> fieldA, fieldB;
+    fieldA.SetCount( count ); fieldB.SetCount( count );
+    const float farValue = 1.0e7f;
+    for ( int i = 0; i < count; ++i )
+        fieldA[i] = m_RHShadowStaticGeometry[i] > 0 ? 0.0f : farValue;
+
+    float lineIn[ RH_SHADOW_VOLUME_SIZE ];
+    float lineOut[ RH_SHADOW_VOLUME_SIZE ];
+
+    // X transform.
+    for ( int z = 0; z < N; ++z )
+    for ( int y = 0; y < N; ++y )
+    {
+        for ( int x = 0; x < N; ++x ) lineIn[x] = fieldA[ RHShadowAtlasIndex( x, y, z ) ];
+        RHDistanceTransform1D( lineIn, lineOut );
+        for ( int x = 0; x < N; ++x ) fieldB[ RHShadowAtlasIndex( x, y, z ) ] = lineOut[x];
+    }
+    // Y transform.
+    for ( int z = 0; z < N; ++z )
+    for ( int x = 0; x < N; ++x )
+    {
+        for ( int y = 0; y < N; ++y ) lineIn[y] = fieldB[ RHShadowAtlasIndex( x, y, z ) ];
+        RHDistanceTransform1D( lineIn, lineOut );
+        for ( int y = 0; y < N; ++y ) fieldA[ RHShadowAtlasIndex( x, y, z ) ] = lineOut[y];
+    }
+    // Z transform.
+    for ( int y = 0; y < N; ++y )
+    for ( int x = 0; x < N; ++x )
+    {
+        for ( int z = 0; z < N; ++z ) lineIn[z] = fieldA[ RHShadowAtlasIndex( x, y, z ) ];
+        RHDistanceTransform1D( lineIn, lineOut );
+        for ( int z = 0; z < N; ++z ) fieldB[ RHShadowAtlasIndex( x, y, z ) ] = lineOut[z];
+    }
+
+    if ( m_RHShadowGeometryDistance.Count() != count ) m_RHShadowGeometryDistance.SetCount( count );
+    for ( int i = 0; i < count; ++i )
+    {
+        const float distanceCells = MIN( sqrtf( MAX( fieldB[i], 0.0f ) ), RH_SHADOW_DISTANCE_MAX_CELLS );
+        const int encoded = (int)floor( distanceCells * ( 255.0f / RH_SHADOW_DISTANCE_MAX_CELLS ) + 0.5f );
+        m_RHShadowGeometryDistance[i] = (unsigned char)clamp( encoded, 0, 255 );
+    }
+}
+
+void CDeferredViewRender::BuildRadiositySurfaceGuide()
+{
+    const int count = RH_ATLAS_WIDTH * RH_ATLAS_HEIGHT;
+    if ( m_RHSurfaceGuide.Count() != count * 4 ) m_RHSurfaceGuide.SetCount( count * 4 );
+    const float shadowScale = (float)RH_SHADOW_VOLUME_SIZE / (float)RH_VOLUME_SIZE;
+
+    for ( int z = 0; z < RH_VOLUME_SIZE; ++z )
+    for ( int y = 0; y < RH_VOLUME_SIZE; ++y )
+    for ( int x = 0; x < RH_VOLUME_SIZE; ++x )
+    {
+        const int sx = RHClampShadowCellIndex( (int)floor( ( x + 0.5f ) * shadowScale ) );
+        const int sy = RHClampShadowCellIndex( (int)floor( ( y + 0.5f ) * shadowScale ) );
+        const int sz = RHClampShadowCellIndex( (int)floor( ( z + 0.5f ) * shadowScale ) );
+        const int sx0 = RHClampShadowCellIndex( sx - 1 ), sx1 = RHClampShadowCellIndex( sx + 1 );
+        const int sy0 = RHClampShadowCellIndex( sy - 1 ), sy1 = RHClampShadowCellIndex( sy + 1 );
+        const int sz0 = RHClampShadowCellIndex( sz - 1 ), sz1 = RHClampShadowCellIndex( sz + 1 );
+        const float dx = (float)m_RHShadowGeometryDistance[ RHShadowAtlasIndex( sx1, sy, sz ) ] -
+                         (float)m_RHShadowGeometryDistance[ RHShadowAtlasIndex( sx0, sy, sz ) ];
+        const float dy = (float)m_RHShadowGeometryDistance[ RHShadowAtlasIndex( sx, sy1, sz ) ] -
+                         (float)m_RHShadowGeometryDistance[ RHShadowAtlasIndex( sx, sy0, sz ) ];
+        const float dz = (float)m_RHShadowGeometryDistance[ RHShadowAtlasIndex( sx, sy, sz1 ) ] -
+                         (float)m_RHShadowGeometryDistance[ RHShadowAtlasIndex( sx, sy, sz0 ) ];
+        Vector normal( dx, dy, dz );
+        const float gradientLength = VectorNormalize( normal );
+        if ( gradientLength < 0.001f ) normal.Init( 0.0f, 0.0f, 1.0f );
+
+        const int shadowIndex = RHShadowAtlasIndex( sx, sy, sz );
+        const float distanceCells = m_RHShadowGeometryDistance[ shadowIndex ] *
+            ( RH_SHADOW_DISTANCE_MAX_CELLS / 255.0f );
+        const bool occupied = m_RHShadowStaticGeometry[ shadowIndex ] > 0;
+        // Free cells within the SDF shell are valid surface receivers. Occupied
+        // cells are accepted only when the SDF gradient proves that they lie on
+        // a boundary; deep solid voxels have a zero gradient and must never
+        // manufacture a neutral-albedo secondary bounce.
+        const float boundaryValid = occupied ? ( gradientLength > 0.001f ? 1.0f : 0.0f ) : 1.0f;
+        const float coverage = clamp( 1.0f - distanceCells / 2.5f, 0.0f, 1.0f ) * boundaryValid;
+        const int index = RHGeometryAtlasIndex( x, y, z ) * 4;
+        m_RHSurfaceGuide[index + 0] = (unsigned char)clamp( (int)floor( ( normal.x * 0.5f + 0.5f ) * 255.0f + 0.5f ), 0, 255 );
+        m_RHSurfaceGuide[index + 1] = (unsigned char)clamp( (int)floor( ( normal.y * 0.5f + 0.5f ) * 255.0f + 0.5f ), 0, 255 );
+        m_RHSurfaceGuide[index + 2] = (unsigned char)clamp( (int)floor( ( normal.z * 0.5f + 0.5f ) * 255.0f + 0.5f ), 0, 255 );
+        m_RHSurfaceGuide[index + 3] = (unsigned char)clamp( (int)floor( coverage * 255.0f + 0.5f ), 0, 255 );
+    }
+}
+
+void CDeferredViewRender::UpdateRadiosityShadowGeometry()
+{
+    const int count = RH_SHADOW_ATLAS_WIDTH * RH_SHADOW_ATLAS_HEIGHT;
+    const float radianceCell = MAX( m_flRadianceHintsCellSize, 1.0f );
+    const float extent = radianceCell * RH_VOLUME_SIZE;
+    const float shadowCell = extent / RH_SHADOW_VOLUME_SIZE_F;
+    const Vector origin = m_vecRadiosityOrigin[0];
+
+    if ( m_RHShadowStaticGeometry.Count() != count ) m_RHShadowStaticGeometry.SetCount( count );
+    if ( m_RHShadowCombinedGeometry.Count() != count ) m_RHShadowCombinedGeometry.SetCount( count );
+    if ( m_RHShadowGeometryDistance.Count() != count ) m_RHShadowGeometryDistance.SetCount( count );
+
+    if ( !deferred_rh_cpu_geometry_enable.GetBool() )
+    {
+        memset( m_RHShadowStaticGeometry.Base(), 0, count );
+        memset( m_RHShadowCombinedGeometry.Base(), 0, count );
+        memset( m_RHShadowGeometryDistance.Base(), 255, count );
+        const int guideBytes = RH_ATLAS_WIDTH * RH_ATLAS_HEIGHT * 4;
+        if ( m_RHSurfaceGuide.Count() != guideBytes ) m_RHSurfaceGuide.SetCount( guideBytes );
+        memset( m_RHSurfaceGuide.Base(), 0, guideBytes );
+        m_bRHShadowGeometryValid = false;
+        UpdateDefRT_RHShadowGeometry( m_RHShadowCombinedGeometry.Base(), count );
+        UpdateDefRT_RHShadowDistance( m_RHShadowGeometryDistance.Base(), count );
+        UpdateDefRT_RHSurfaceGuide( m_RHSurfaceGuide.Base(), guideBytes );
+        return;
+    }
+
+    const bool rebuildStatic = !m_bRHShadowGeometryValid ||
+        fabs( m_flRHShadowGeometryCellSize - shadowCell ) > 0.01f ||
+        origin.DistToSqr( m_vecRHShadowGeometryOrigin ) > 0.01f;
+
+    if ( rebuildStatic )
+    {
+        memset( m_RHShadowStaticGeometry.Base(), 0, count );
+        const float coarseToShadow = (float)RH_VOLUME_SIZE / (float)RH_SHADOW_VOLUME_SIZE;
+        for ( int z = 0; z < RH_SHADOW_VOLUME_SIZE; ++z )
+        for ( int y = 0; y < RH_SHADOW_VOLUME_SIZE; ++y )
+        for ( int x = 0; x < RH_SHADOW_VOLUME_SIZE; ++x )
+        {
+            // RH7's conservative 40^3 field is used only as a broad-phase. The
+            // actual 64^3 occupancy is always re-traced at the finer cell size.
+            const int cx = RHClampCellIndex( (int)floor( ( x + 0.5f ) * coarseToShadow ) );
+            const int cy = RHClampCellIndex( (int)floor( ( y + 0.5f ) * coarseToShadow ) );
+            const int cz = RHClampCellIndex( (int)floor( ( z + 0.5f ) * coarseToShadow ) );
+            // RH7 already computed a conservative coarse distance field before
+            // this pass. Use it as an O(1) broad phase instead of scanning a
+            // 3x3x3 neighbourhood for every 64^3 cell. Values <= 1 include the
+            // occupied coarse cell and its immediate shell, so thin geometry is
+            // still sent through the exact fine-cell trace below.
+            const int coarseIndex = RHGeometryAtlasIndex( cx, cy, cz );
+            if ( m_RHGeometryDistance[ coarseIndex ] > 1 )
+                continue;
+
+            const Vector center = origin + Vector(
+                ( x + 0.5f ) * shadowCell, ( y + 0.5f ) * shadowCell, ( z + 0.5f ) * shadowCell );
+            m_RHShadowStaticGeometry[ RHShadowAtlasIndex( x, y, z ) ] =
+                BuildRadiosityShadowStaticCell( center, shadowCell );
+        }
+        BuildRadiosityShadowDistanceField();
+        BuildRadiositySurfaceGuide();
+        m_vecRHShadowGeometryOrigin = origin;
+        m_flRHShadowGeometryCellSize = shadowCell;
+        m_bRHShadowGeometryValid = true;
+        UpdateDefRT_RHShadowDistance( m_RHShadowGeometryDistance.Base(), count );
+        if ( m_RHSurfaceGuide.Count() > 0 )
+            UpdateDefRT_RHSurfaceGuide( m_RHSurfaceGuide.Base(), m_RHSurfaceGuide.Count() );
+    }
+
+    memcpy( m_RHShadowCombinedGeometry.Base(), m_RHShadowStaticGeometry.Base(), count );
+    StampRadiosityShadowDynamicModels( origin, shadowCell );
+    UpdateDefRT_RHShadowGeometry( m_RHShadowCombinedGeometry.Base(), count );
 }
 
 void CDeferredViewRender::UpdateRadiosityPosition()
@@ -1551,10 +1861,25 @@ void CDeferredViewRender::EndRadiosity( const CViewSetup &view )
 		pRenderContext->PopRenderTargetAndViewport();
 	}
 
+	CMatRenderContextPtr pRenderContext( materials );
+
+	// RH9 High: evaluate the 64^3 dual-bounce SDF visibility directly at the
+	// same half resolution as the GI receiver. This removes the old quarter->half
+	// shadow reconstruction pass: first bounce uses up to 6 SDF steps, while the
+	// broader second bounce uses up to 3 steps. The complete GI is upsampled once.
+	ITexture *pShadowHalf = GetDefRT_RHShadowHalf();
+	const int shadowHalfWidth = MAX( pShadowHalf->GetActualWidth(), 1 );
+	const int shadowHalfHeight = MAX( pShadowHalf->GetActualHeight(), 1 );
+	pRenderContext->PushRenderTargetAndViewport( pShadowHalf, NULL, 0, 0, shadowHalfWidth, shadowHalfHeight );
+	pRenderContext->ClearColor4ub( 255, 255, 255, 255 );
+	pRenderContext->ClearBuffers( true, false );
+	DrawLightPassFullscreen( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_SHADOW ),
+		shadowHalfWidth, shadowHalfHeight );
+	pRenderContext->PopRenderTargetAndViewport();
+
 	ITexture *pHalf = GetDefRT_RHIndirectHalf();
 	const int halfWidth = MAX( pHalf->GetActualWidth(), 1 );
 	const int halfHeight = MAX( pHalf->GetActualHeight(), 1 );
-	CMatRenderContextPtr pRenderContext( materials );
 	pRenderContext->PushRenderTargetAndViewport( pHalf, NULL, 0, 0, halfWidth, halfHeight );
 	pRenderContext->ClearColor4ub( 0, 0, 0, 0 );
 	pRenderContext->ClearBuffers( true, false );
@@ -1576,10 +1901,10 @@ void CDeferredViewRender::DebugRadiosity( const CViewSetup &view )
 	const Vector maximum = origin + Vector( extent, extent, extent );
 	DebugDrawCross( origin, cellSize * 0.4f, -1.0f );
 	DebugDrawCross( maximum, cellSize * 0.4f, -1.0f );
-	engine->Con_NPrintf( 20, "RH7 HYBRID preset %s | grid %i | RSM %i | samples %i | origin %.1f %.1f %.1f | injected %i",
+	engine->Con_NPrintf( 20, "RH9 HIGH-HALF %s | radiance %i^3 | shadow %i^3 | RSM %i | samples %i | injected %i",
 		RH_QUALITY_PRESET == RH_PRESET_HIGH ? "HIGH" : "BALANCED",
-		RH_VOLUME_SIZE, RH_RSM_RESOLUTION, RH_RADIANCE_SAMPLE_COUNT,
-		origin.x, origin.y, origin.z, m_bRadianceHintsInjected ? 1 : 0 );
+		RH_VOLUME_SIZE, RH_SHADOW_VOLUME_SIZE, RH_RSM_RESOLUTION, RH_RADIANCE_SAMPLE_COUNT,
+		m_bRadianceHintsInjected ? 1 : 0 );
 }
 
 void CDeferredViewRender::RenderCascadedShadows( const CViewSetup &view )

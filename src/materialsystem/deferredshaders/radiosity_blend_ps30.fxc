@@ -1,34 +1,41 @@
+// STATIC: "PASS_MODE" "0..1"
 // DYNAMIC: "SECOND_BOUNCE" "0..1"
+// PASS_MODE 0 = half-resolution RH receiver evaluation.
+// PASS_MODE 1 = half-resolution RH9 High dual-lobe SDF visibility.
 
 #include "common_ps_fxc.h"
 #include "common_deferred_fxc.h"
 #include "radiance_hints_common_fxc.h"
 
-sampler sDepth      : register( s0 );
-sampler sNormals    : register( s1 );
-sampler sFirstR     : register( s2 );
-sampler sFirstG     : register( s3 );
-sampler sFirstB     : register( s4 );
-sampler sVisibility : register( s5 );
-sampler sSecondR    : register( s6 );
-sampler sSecondG    : register( s7 );
-sampler sSecondB    : register( s8 );
-sampler sMeta       : register( s9 );
-sampler sGeometry   : register( s10 );
-sampler sDistance   : register( s11 );
+sampler sDepth        : register( s0 );
+sampler sNormals      : register( s1 );
+sampler sFirstR       : register( s2 );
+sampler sFirstG       : register( s3 );
+sampler sFirstB       : register( s4 );
+sampler sSecondR      : register( s5 );
+sampler sSecondG      : register( s6 );
+sampler sSecondB      : register( s7 );
+sampler sMeta         : register( s8 );
+sampler sAux          : register( s9 );   // shadow-half in mode 0, 64^3 geometry in mode 1.
+sampler sShadowDist   : register( s10 );  // mode 1 only.
 
 const float3 g_vecViewOrigin : register( c0 );
 const float3 g_vecRHOrigin   : register( c1 );
-// x extent, y receiver offset, z intensity, w second-bounce scale.
+// x volume extent, y receiver offset world, z final intensity, w second-bounce scale.
 const float4 g_RHSettings    : register( c2 );
-// x saturation, y radiance clamp, z visibility amplitude, w visibility density.
+// x saturation, y max radiance, z receiver radius cells, w confidence floor.
 const float4 g_RHQuality     : register( c3 );
-// x soft-shadow strength, y trace distance cells, z min visibility, w self bias.
+// x first shadow strength, y second shadow strength, z trace length in shadow cells, w min visibility.
 const float4 g_RHShadow      : register( c4 );
-// x receiver radius cells, y confidence floor, z cone width, w isotropic blend.
-const float4 g_RHReconstruct : register( c5 );
-// x trace start cells, y receiver clearance cells, z contact strength, w far strength.
-const float4 g_RHShadowShape : register( c6 );
+// x step scale, y min step, z max step, w active explicit steps.
+const float4 g_RHSDFStep     : register( c5 );
+// x SDF softness, y receiver clearance shadow cells, z contact weight, w far weight.
+const float4 g_RHSDFShape    : register( c6 );
+// x SDF enable, y self/blocker bias, z second-bounce active steps (1..3), w reserved.
+const float4 g_RHSDFControl  : register( c7 );
+// x legacy/global softness multiplier, y trace start in shadow cells,
+// z optical extinction, w isotropic contact blend.
+const float4 g_RHShadowShape : register( c8 );
 
 struct PS_INPUT
 {
@@ -38,185 +45,193 @@ struct PS_INPUT
 
 float3 RH_BuildTangent( float3 normal )
 {
-    float3 axis = abs( normal.z ) < 0.85f
-        ? float3( 0.0f, 0.0f, 1.0f )
-        : float3( 0.0f, 1.0f, 0.0f );
+    float3 axis = abs( normal.z ) < 0.85f ? float3( 0.0f, 0.0f, 1.0f ) : float3( 0.0f, 1.0f, 0.0f );
     return RH_SafeNormalize( cross( axis, normal ), float3( 1.0f, 0.0f, 0.0f ) );
 }
 
+#if PASS_MODE == 0
 float4 RH_SampleFirstDiffuse( float3 uvw, float4 diffuseBasis )
 {
     float4 meta = RH_SampleAtlas( sMeta, uvw );
-    float confidence = max( RH_MetaConfidence( meta ), saturate( g_RHReconstruct.y ) );
+    float confidence = max( RH_MetaConfidence( meta ), saturate( g_RHQuality.w ) );
     float3 result;
     result.r = max( dot( RH_SampleAtlas( sFirstR, uvw ), diffuseBasis ), 0.0f );
     result.g = max( dot( RH_SampleAtlas( sFirstG, uvw ), diffuseBasis ), 0.0f );
     result.b = max( dot( RH_SampleAtlas( sFirstB, uvw ), diffuseBasis ), 0.0f );
     return float4( result, confidence );
 }
-
-float RH_ConeVisibility( float3 uvw, float3 towardSource, float3 surfaceNormal, float4 receiverMeta )
+#else
+float3 RH_GeometricNormal( float3 worldPos, float3 shadingNormal )
 {
-    const float cellUV = 1.0f / RH_VOLUME_SIZE_F;
-    towardSource = RH_SafeNormalize( towardSource, surfaceNormal );
+    float3 dx = ddx( worldPos );
+    float3 dy = ddy( worldPos );
+    float3 geometric = RH_SafeNormalize( cross( dx, dy ), shadingNormal );
+    float sameSide = step( 0.0f, dot( geometric, shadingNormal ) );
+    return lerp( -geometric, geometric, sameSide );
+}
 
-    float3 tangent = RH_BuildTangent( towardSource );
-    float3 bitangent = RH_SafeNormalize( cross( towardSource, tangent ), surfaceNormal );
-    float traceDistance = max( g_RHShadow.y, 0.5f );
-    float coneSlope = max( g_RHReconstruct.z, 0.0f );
-    float adaptiveBias = g_RHShadow.w + ( 1.0f - saturate( receiverMeta.y ) ) * 0.08f;
-    float startCells = clamp( g_RHShadowShape.x, 0.25f, traceDistance );
-    float clearanceCells = clamp( g_RHShadowShape.y, 0.25f, 2.0f );
-    float3 traceOrigin = uvw + surfaceNormal * ( clearanceCells * cellUV );
+float RH_TraceSDFVisibility6( float3 uvw, float3 direction, float3 geometricNormal, float anisotropy, float activeSteps )
+{
+    direction = RH_SafeNormalize( direction, geometricNormal );
+    float enable = saturate( g_RHSDFControl.x );
+    float traceCells = max( g_RHShadow.z, 0.5f );
+    float minVisibility = saturate( g_RHShadow.w );
+    float3 origin = uvw + geometricNormal * ( max( g_RHSDFShape.y, 0.1f ) / RH_SHADOW_VOLUME_SIZE_F );
+    float t = max( max( g_RHSDFStep.y, 0.15f ), max( g_RHShadowShape.y, 0.0f ) );
+    float visibility = 1.0f;
+    float coneK = max( g_RHSDFShape.x, 0.05f ) * max( g_RHShadowShape.x, 0.05f ) * lerp( 0.62f, 1.55f, anisotropy );
 
-    // One distance-field lookup adjusts the whole low-frequency cone without a
-    // sampler-heavy dynamic loop. Fixed symmetric taps are stable on legacy FXC.
-    float originDistanceCells = RH_SampleAtlas( sDistance, traceOrigin ).r * 255.0f;
-    float distanceScale = lerp( 0.85f, 1.15f, saturate( originDistanceCells / 4.0f ) );
-    float distance0 = min( max( startCells, traceDistance * 0.18f * distanceScale ), traceDistance );
-    float distance1 = min( max( distance0 + 0.45f, traceDistance * 0.40f * distanceScale ), traceDistance );
-    float distance2 = min( max( distance1 + 0.45f, traceDistance * 0.67f * distanceScale ), traceDistance );
-    float distance3 = min( max( distance2 + 0.45f, traceDistance * 0.92f ), traceDistance );
-    float opticalDepth = 0.0f;
-    float previousDistance = 0.0f;
-
-#define RH_CONE_TAP( DISTANCE_VALUE, LATERAL_VECTOR, LATERAL_SCALE ) \
+#define RH_SDF_STEP6( INDEX_VALUE ) \
 { \
-    float rhDistance = DISTANCE_VALUE; \
-    float rhNormalized = saturate( rhDistance / traceDistance ); \
-    float rhConeRadius = coneSlope * rhDistance; \
-    float3 rhSampleUVW = traceOrigin + towardSource * ( rhDistance * cellUV ) \
-        + LATERAL_VECTOR * ( rhConeRadius * LATERAL_SCALE * cellUV ); \
-    float rhInside = RH_InsideVolume( rhSampleUVW ); \
-    float rhDirectional = RH_EvaluateVisibilityTwoSided( RH_SampleAtlas( sVisibility, rhSampleUVW ), towardSource ); \
-    float rhGeometry = RH_SampleAtlas( sGeometry, rhSampleUVW ).r; \
-    float rhBlocker = max( rhDirectional, rhGeometry ); \
-    float rhSegment = max( rhDistance - previousDistance, 0.25f ); \
-    float rhStrength = lerp( max( g_RHShadowShape.z, 0.0f ), max( g_RHShadowShape.w, 0.0f ), rhNormalized ); \
-    opticalDepth += max( rhBlocker * g_RHQuality.z - adaptiveBias, 0.0f ) * rhSegment * rhStrength * rhInside; \
-    previousDistance = rhDistance; \
+    float rhActive = step( ( INDEX_VALUE ) + 0.5f, activeSteps ) * step( t, traceCells ); \
+    float3 rhUVW = origin + direction * ( t / RH_SHADOW_VOLUME_SIZE_F ); \
+    float rhInside = RH_InsideVolume( rhUVW ); \
+    float rhOccupancy = RH_SampleShadowAtlas( sAux, rhUVW ).r; \
+    float rhDistance = RH_ShadowDistanceCells( sShadowDist, rhUVW ); \
+    float rhNormalizedT = saturate( t / traceCells ); \
+    float rhShapeWeight = lerp( max( g_RHSDFShape.z, 0.0f ), max( g_RHSDFShape.w, 0.0f ), rhNormalizedT ); \
+    float rhPenumbra = saturate( coneK * rhDistance / max( t, 0.35f ) ); \
+    rhPenumbra = lerp( 1.0f, rhPenumbra, saturate( rhShapeWeight ) ); \
+    float rhBlocked = step( 0.30f + saturate( g_RHSDFControl.y ) * 0.45f, rhOccupancy ); \
+    float rhCandidate = lerp( rhPenumbra, minVisibility, rhBlocked ); \
+    float rhIsotropic = lerp( 1.0f, minVisibility, rhBlocked ); \
+    rhCandidate = lerp( rhCandidate, rhIsotropic, saturate( g_RHShadowShape.w ) * 0.35f ); \
+    rhCandidate = saturate( 1.0f - ( 1.0f - rhCandidate ) * max( g_RHShadowShape.z, 0.0f ) ); \
+    rhCandidate = lerp( 1.0f, rhCandidate, rhInside * rhActive ); \
+    visibility = min( visibility, rhCandidate ); \
+    float rhStepLength = clamp( rhDistance * max( g_RHSDFStep.x, 0.05f ), max( g_RHSDFStep.y, 0.15f ), max( g_RHSDFStep.z, g_RHSDFStep.y ) ); \
+    t += rhStepLength * rhActive; \
 }
 
-    RH_CONE_TAP( distance0, float3( 0.0f, 0.0f, 0.0f ), 0.0f );
-    RH_CONE_TAP( distance1, tangent, 0.55f );
-    RH_CONE_TAP( distance2, -tangent, 0.75f );
-#if RH_SOFT_SHADOW_TAP_COUNT == 4
-    RH_CONE_TAP( distance3, bitangent, 0.95f );
+    RH_SDF_STEP6( 0.0f );
+    RH_SDF_STEP6( 1.0f );
+    RH_SDF_STEP6( 2.0f );
+    RH_SDF_STEP6( 3.0f );
+    RH_SDF_STEP6( 4.0f );
+    RH_SDF_STEP6( 5.0f );
+#undef RH_SDF_STEP6
+    return lerp( 1.0f, max( visibility, minVisibility ), enable );
+}
+
+float RH_TraceSDFVisibility3( float3 uvw, float3 direction, float3 geometricNormal, float anisotropy, float activeSteps )
+{
+    direction = RH_SafeNormalize( direction, geometricNormal );
+    float enable = saturate( g_RHSDFControl.x );
+    float traceCells = max( g_RHShadow.z, 0.5f );
+    float minVisibility = saturate( g_RHShadow.w );
+    float3 origin = uvw + geometricNormal * ( max( g_RHSDFShape.y, 0.1f ) / RH_SHADOW_VOLUME_SIZE_F );
+    float t = max( max( g_RHSDFStep.y, 0.15f ), max( g_RHShadowShape.y, 0.0f ) );
+    float visibility = 1.0f;
+    float coneK = max( g_RHSDFShape.x, 0.05f ) * max( g_RHShadowShape.x, 0.05f ) * lerp( 0.62f, 1.55f, anisotropy );
+
+#define RH_SDF_STEP3( INDEX_VALUE ) \
+{ \
+    float rhActive = step( ( INDEX_VALUE ) + 0.5f, activeSteps ) * step( t, traceCells ); \
+    float3 rhUVW = origin + direction * ( t / RH_SHADOW_VOLUME_SIZE_F ); \
+    float rhInside = RH_InsideVolume( rhUVW ); \
+    float rhOccupancy = RH_SampleShadowAtlas( sAux, rhUVW ).r; \
+    float rhDistance = RH_ShadowDistanceCells( sShadowDist, rhUVW ); \
+    float rhNormalizedT = saturate( t / traceCells ); \
+    float rhShapeWeight = lerp( max( g_RHSDFShape.z, 0.0f ), max( g_RHSDFShape.w, 0.0f ), rhNormalizedT ); \
+    float rhPenumbra = saturate( coneK * rhDistance / max( t, 0.35f ) ); \
+    rhPenumbra = lerp( 1.0f, rhPenumbra, saturate( rhShapeWeight ) ); \
+    float rhBlocked = step( 0.30f + saturate( g_RHSDFControl.y ) * 0.45f, rhOccupancy ); \
+    float rhCandidate = lerp( rhPenumbra, minVisibility, rhBlocked ); \
+    float rhIsotropic = lerp( 1.0f, minVisibility, rhBlocked ); \
+    rhCandidate = lerp( rhCandidate, rhIsotropic, saturate( g_RHShadowShape.w ) * 0.35f ); \
+    rhCandidate = saturate( 1.0f - ( 1.0f - rhCandidate ) * max( g_RHShadowShape.z, 0.0f ) ); \
+    rhCandidate = lerp( 1.0f, rhCandidate, rhInside * rhActive ); \
+    visibility = min( visibility, rhCandidate ); \
+    float rhStepLength = clamp( rhDistance * max( g_RHSDFStep.x, 0.05f ), max( g_RHSDFStep.y, 0.15f ), max( g_RHSDFStep.z, g_RHSDFStep.y ) ); \
+    t += rhStepLength * rhActive; \
+}
+
+    RH_SDF_STEP3( 0.0f );
+    RH_SDF_STEP3( 1.0f );
+    RH_SDF_STEP3( 2.0f );
+#undef RH_SDF_STEP3
+    return lerp( 1.0f, max( visibility, minVisibility ), enable );
+}
+
 #endif
-
-    float directionalVisibility = exp2(
-        -max( g_RHShadow.x, 0.0f ) * max( g_RHQuality.w, 0.0f ) * opticalDepth );
-
-    float3 localUVW = traceOrigin + towardSource * ( 0.35f * cellUV );
-    float localDirectional = RH_EvaluateVisibilityTwoSided(
-        RH_SampleAtlas( sVisibility, localUVW ), towardSource );
-    float localBlocker = max( localDirectional, RH_SampleAtlas( sGeometry, localUVW ).r );
-    float localOpticalDepth = max( localBlocker * g_RHQuality.z - adaptiveBias, 0.0f )
-        * max( g_RHShadowShape.z, 0.0f );
-    float isotropicVisibility = exp2(
-        -max( g_RHShadow.x, 0.0f ) * max( g_RHQuality.w, 0.0f ) * localOpticalDepth );
-
-    float visibility = lerp(
-        directionalVisibility,
-        min( directionalVisibility, isotropicVisibility ),
-        saturate( g_RHReconstruct.w ) );
-    return max( visibility, saturate( g_RHShadow.z ) );
-}
 
 float4 main( const PS_INPUT In ) : COLOR0
 {
     float depth = tex2D( sDepth, In.vTexCoord ).x;
     clip( min( depth - 0.1f, DEPTH_RECONSTRUCTION_LIMIT - depth ) );
-
     float3 worldPos = g_vecViewOrigin + In.vecWorldRay * depth;
     float3 normal = RH_SafeNormalize(
         DecodeDirectionVectorXYZFromSphericalST( tex2D( sNormals, In.vTexCoord ).xy ),
         float3( 0.0f, 0.0f, 1.0f ) );
     float3 uvw = ( worldPos + normal * g_RHSettings.y - g_vecRHOrigin ) / max( g_RHSettings.x, 1.0f );
+
+#if PASS_MODE == 1
+    float3 geometricNormal = RH_GeometricNormal( worldPos, normal );
+    float4 firstR = RH_SampleAtlas( sFirstR, uvw );
+    float4 firstG = RH_SampleAtlas( sFirstG, uvw );
+    float4 firstB = RH_SampleAtlas( sFirstB, uvw );
+    float3 firstDirectional = firstR.xyz * 0.2126f + firstG.xyz * 0.7152f + firstB.xyz * 0.0722f;
+    float firstDC = max( firstR.w * 0.2126f + firstG.w * 0.7152f + firstB.w * 0.0722f, 0.0f );
+    float firstAnisotropy = saturate( length( firstDirectional ) / max( firstDC * 1.7320508f, 1.0e-5f ) );
+    float3 firstIncoming = -RH_SafeNormalize( firstDirectional, float3( 0.0f, 0.0f, -1.0f ) );
+    float firstFacing = saturate( dot( firstIncoming, geometricNormal ) );
+    float firstVisibility = RH_TraceSDFVisibility6( uvw, firstIncoming, geometricNormal, firstAnisotropy, g_RHSDFStep.w );
+    firstVisibility = lerp( 1.0f, firstVisibility,
+        saturate( g_RHShadow.x ) * firstFacing * saturate( firstAnisotropy * 1.35f + 0.15f ) );
+
+    float secondVisibility = 1.0f;
+#if SECOND_BOUNCE
+    float4 secondR = RH_SampleAtlas( sSecondR, uvw );
+    float4 secondG = RH_SampleAtlas( sSecondG, uvw );
+    float4 secondB = RH_SampleAtlas( sSecondB, uvw );
+    float3 secondDirectional = secondR.xyz * 0.2126f + secondG.xyz * 0.7152f + secondB.xyz * 0.0722f;
+    float secondDC = max( secondR.w * 0.2126f + secondG.w * 0.7152f + secondB.w * 0.0722f, 0.0f );
+    float secondAnisotropy = saturate( length( secondDirectional ) / max( secondDC * 1.7320508f, 1.0e-5f ) );
+    float3 secondIncoming = -RH_SafeNormalize( secondDirectional, float3( 0.0f, 0.0f, -1.0f ) );
+    float secondFacing = saturate( dot( secondIncoming, geometricNormal ) );
+    secondVisibility = RH_TraceSDFVisibility3( uvw, secondIncoming, geometricNormal, secondAnisotropy, g_RHSDFControl.z );
+    secondVisibility = lerp( 1.0f, secondVisibility,
+        saturate( g_RHShadow.y ) * secondFacing * saturate( secondAnisotropy + 0.20f ) );
+#endif
+    return float4( firstVisibility, secondVisibility, firstAnisotropy, 1.0f );
+#else
     float volumeMask = RH_InsideVolume( uvw ) * RH_BoundaryFade( uvw );
     float4 centerMeta = RH_SampleAtlas( sMeta, uvw );
-    float centerConfidence = max( RH_MetaConfidence( centerMeta ), saturate( g_RHReconstruct.y ) );
+    float centerConfidence = max( RH_MetaConfidence( centerMeta ), saturate( g_RHQuality.w ) );
     float4 diffuseBasis = RH_DiffuseBasis( -normal );
 
     float3 firstIndirect;
-    float3 directional = 0.0f;
-    float dcEnergy = 0.0f;
-    {
-        float4 sh = RH_SampleAtlas( sFirstR, uvw );
-        firstIndirect.r = max( dot( sh, diffuseBasis ), 0.0f );
-        directional += sh.xyz * 0.2126f;
-        dcEnergy += max( sh.w, 0.0f ) * 0.2126f;
-    }
-    {
-        float4 sh = RH_SampleAtlas( sFirstG, uvw );
-        firstIndirect.g = max( dot( sh, diffuseBasis ), 0.0f );
-        directional += sh.xyz * 0.7152f;
-        dcEnergy += max( sh.w, 0.0f ) * 0.7152f;
-    }
-    {
-        float4 sh = RH_SampleAtlas( sFirstB, uvw );
-        firstIndirect.b = max( dot( sh, diffuseBasis ), 0.0f );
-        directional += sh.xyz * 0.0722f;
-        dcEnergy += max( sh.w, 0.0f ) * 0.0722f;
-    }
-
+    firstIndirect.r = max( dot( RH_SampleAtlas( sFirstR, uvw ), diffuseBasis ), 0.0f );
+    firstIndirect.g = max( dot( RH_SampleAtlas( sFirstG, uvw ), diffuseBasis ), 0.0f );
+    firstIndirect.b = max( dot( RH_SampleAtlas( sFirstB, uvw ), diffuseBasis ), 0.0f );
     firstIndirect *= centerConfidence * 0.40f;
     float reconstructionWeight = centerConfidence * 0.40f + 1.0e-5f;
 
 #if RH_RECEIVER_SAMPLE_COUNT == 4
-    // Center + three samples 120 degrees apart. Unlike the previous +/- tangent
-    // pair, this is rotationally balanced and actually implements the declared
-    // four receiver samples.
     float3 tangent = RH_BuildTangent( normal );
     float3 bitangent = RH_SafeNormalize( cross( normal, tangent ), float3( 0.0f, 1.0f, 0.0f ) );
-    float receiverUV = g_RHReconstruct.x / RH_VOLUME_SIZE_F;
-    float4 sideSample = RH_SampleFirstDiffuse( uvw + tangent * receiverUV, diffuseBasis );
-    firstIndirect += sideSample.rgb * ( sideSample.a * 0.20f );
-    reconstructionWeight += sideSample.a * 0.20f;
-
-    float3 offsetDirection = tangent * -0.5f + bitangent * 0.8660254f;
-    sideSample = RH_SampleFirstDiffuse( uvw + offsetDirection * receiverUV, diffuseBasis );
-    firstIndirect += sideSample.rgb * ( sideSample.a * 0.20f );
-    reconstructionWeight += sideSample.a * 0.20f;
-
-    offsetDirection = tangent * -0.5f - bitangent * 0.8660254f;
-    sideSample = RH_SampleFirstDiffuse( uvw + offsetDirection * receiverUV, diffuseBasis );
-    firstIndirect += sideSample.rgb * ( sideSample.a * 0.20f );
-    reconstructionWeight += sideSample.a * 0.20f;
+    float receiverUV = g_RHQuality.z / RH_VOLUME_SIZE_F;
+    float4 side = RH_SampleFirstDiffuse( uvw + tangent * receiverUV, diffuseBasis );
+    firstIndirect += side.rgb * ( side.a * 0.20f ); reconstructionWeight += side.a * 0.20f;
+    float3 sideDir = tangent * -0.5f + bitangent * 0.8660254f;
+    side = RH_SampleFirstDiffuse( uvw + sideDir * receiverUV, diffuseBasis );
+    firstIndirect += side.rgb * ( side.a * 0.20f ); reconstructionWeight += side.a * 0.20f;
+    sideDir = tangent * -0.5f - bitangent * 0.8660254f;
+    side = RH_SampleFirstDiffuse( uvw + sideDir * receiverUV, diffuseBasis );
+    firstIndirect += side.rgb * ( side.a * 0.20f ); reconstructionWeight += side.a * 0.20f;
 #else
-    // Balanced preset: preserve the center result exactly.
     firstIndirect *= 2.5f;
     reconstructionWeight = centerConfidence + 1.0e-5f;
 #endif
-
     firstIndirect /= max( reconstructionWeight, 1.0e-5f );
 
-    float confidence = saturate( max( centerConfidence, dcEnergy * 2.0f ) );
-    float directionalLength = length( directional );
-    float directionalConfidence = saturate( directionalLength / max( dcEnergy * 1.7320508f, 1.0e-5f ) );
-    float3 incoming = -RH_SafeNormalize( directional, -normal );
-    float frontFacing = saturate( dot( incoming, normal ) );
-    float shadowMask = confidence * frontFacing * step( 1.0e-4f, g_RHShadow.x );
-    float coneVisibility = RH_ConeVisibility( uvw, incoming, normal, centerMeta );
-    float directionalBlend = lerp( saturate( g_RHReconstruct.w ), 1.0f, directionalConfidence );
-    firstIndirect *= lerp( 1.0f, coneVisibility, shadowMask * directionalBlend );
-
+    float2 shadowVisibility = tex2Dlod( sAux, float4( In.vTexCoord, 0.0f, 0.0f ) ).rg;
+    firstIndirect *= shadowVisibility.r;
     float3 indirect = firstIndirect;
 #if SECOND_BOUNCE
-    // The secondary field is already visibility-tested during transport; add it
-    // after the receiver cone so it does not receive the first-bounce shadow twice.
-    {
-        float4 sh = RH_SampleAtlas( sSecondR, uvw );
-        indirect.r += max( dot( sh, diffuseBasis ), 0.0f ) * g_RHSettings.w;
-    }
-    {
-        float4 sh = RH_SampleAtlas( sSecondG, uvw );
-        indirect.g += max( dot( sh, diffuseBasis ), 0.0f ) * g_RHSettings.w;
-    }
-    {
-        float4 sh = RH_SampleAtlas( sSecondB, uvw );
-        indirect.b += max( dot( sh, diffuseBasis ), 0.0f ) * g_RHSettings.w;
-    }
+    indirect.r += max( dot( RH_SampleAtlas( sSecondR, uvw ), diffuseBasis ), 0.0f ) * g_RHSettings.w * shadowVisibility.g;
+    indirect.g += max( dot( RH_SampleAtlas( sSecondG, uvw ), diffuseBasis ), 0.0f ) * g_RHSettings.w * shadowVisibility.g;
+    indirect.b += max( dot( RH_SampleAtlas( sSecondB, uvw ), diffuseBasis ), 0.0f ) * g_RHSettings.w * shadowVisibility.g;
 #endif
 
     float luminance = dot( indirect, float3( 0.2126f, 0.7152f, 0.0722f ) );
@@ -224,4 +239,5 @@ float4 main( const PS_INPUT In ) : COLOR0
     indirect = RH_ClampRadiance( indirect, g_RHQuality.y );
     indirect *= g_RHSettings.z * volumeMask * saturate( centerMeta.w + centerConfidence );
     return float4( indirect, depth );
+#endif
 }

@@ -2,7 +2,7 @@
 
 ConVar deferred_rh_cell_size(
     "deferred_rh_cell_size", "20", FCVAR_ARCHIVE,
-    "World-space RH cell size. RH7 High uses a dense 40^3 volume (800 units at the default)." );
+    "World-space RH cell size. RH9 High uses a dense 40^3 radiance volume (800 units at the default)." );
 
 ConVar deferred_rh_gather_radius_cells(
     "deferred_rh_gather_radius_cells", "5.5", FCVAR_ARCHIVE,
@@ -235,6 +235,64 @@ ConVar deferred_rh_shadow_contact_strength(
 ConVar deferred_rh_shadow_far_strength(
     "deferred_rh_shadow_far_strength", "0.65", FCVAR_ARCHIVE,
     "Far-field blocker weight in RH indirect shadows." );
+
+// RH8: decoupled 64^3 SDF shadow field.
+ConVar deferred_rh_shadow_sdf_enable(
+    "deferred_rh_shadow_sdf_enable", "1", FCVAR_ARCHIVE,
+    "Uses the dedicated 64^3 Euclidean-distance visibility field for RH shadows." );
+ConVar deferred_rh_shadow_sdf_steps(
+    "deferred_rh_shadow_sdf_steps", "6", FCVAR_ARCHIVE,
+    "First-bounce explicit SDF cone steps. Legacy-FXC-safe range is 3..6." );
+ConVar deferred_rh_shadow_sdf_second_steps(
+    "deferred_rh_shadow_sdf_second_steps", "3", FCVAR_ARCHIVE,
+    "Second-bounce explicit SDF cone steps. Legacy-FXC-safe range is 1..3." );
+ConVar deferred_rh_shadow_sdf_step_scale(
+    "deferred_rh_shadow_sdf_step_scale", "0.82", FCVAR_ARCHIVE,
+    "Fraction of sampled SDF distance used as the next shadow step." );
+ConVar deferred_rh_shadow_sdf_min_step(
+    "deferred_rh_shadow_sdf_min_step", "0.35", FCVAR_ARCHIVE,
+    "Minimum SDF step in 64^3 shadow cells." );
+ConVar deferred_rh_shadow_sdf_max_step(
+    "deferred_rh_shadow_sdf_max_step", "2.0", FCVAR_ARCHIVE,
+    "Maximum SDF step in 64^3 shadow cells; limits skipping over dynamic OBB blockers." );
+ConVar deferred_rh_shadow_sdf_softness(
+    "deferred_rh_shadow_sdf_softness", "1.15", FCVAR_ARCHIVE,
+    "SDF penumbra scale. RH anisotropy automatically narrows directional shadows." );
+ConVar deferred_rh_shadow_second_strength(
+    "deferred_rh_shadow_second_strength", "0.72", FCVAR_ARCHIVE,
+    "Receiver shadow strength applied independently to the transported second-bounce field." );
+
+// RH9: independent geometry surface guide and adaptive transport.
+ConVar deferred_rh_surface_cache_enable(
+    "deferred_rh_surface_cache_enable", "1", FCVAR_ARCHIVE,
+    "Enables the CPU/SDF-derived surface normal/coverage guide independent of RSM visibility." );
+ConVar deferred_rh_surface_cache_blend(
+    "deferred_rh_surface_cache_blend", "0.70", FCVAR_ARCHIVE,
+    "How strongly the independent surface guide repairs missing/incoherent RSM surface normals." );
+ConVar deferred_rh_surface_fallback_albedo(
+    "deferred_rh_surface_fallback_albedo", "0.52", FCVAR_ARCHIVE,
+    "Neutral diffuse albedo used only for near-surface cells that have geometry coverage but no RSM albedo." );
+ConVar deferred_rh_cell_relocation(
+    "deferred_rh_cell_relocation", "0.32", FCVAR_ARCHIVE,
+    "Maximum stable RH sample relocation along the SDF surface normal, in radiance-cell units." );
+ConVar deferred_rh_adaptive_gather(
+    "deferred_rh_adaptive_gather", "1", FCVAR_ARCHIVE,
+    "Adapts first-bounce RSM gather radius from distance to geometry." );
+ConVar deferred_rh_adaptive_gather_near(
+    "deferred_rh_adaptive_gather_near", "3.5", FCVAR_ARCHIVE,
+    "RSM gather radius in radiance cells near geometry." );
+ConVar deferred_rh_adaptive_gather_far(
+    "deferred_rh_adaptive_gather_far", "5.5", FCVAR_ARCHIVE,
+    "RSM gather radius in radiance cells in open space." );
+ConVar deferred_rh_adaptive_diffusion(
+    "deferred_rh_adaptive_diffusion", "1", FCVAR_ARCHIVE,
+    "Adapts Jason-style secondary diffusion radius from geometry clearance." );
+ConVar deferred_rh_adaptive_diffusion_near(
+    "deferred_rh_adaptive_diffusion_near", "0.90", FCVAR_ARCHIVE,
+    "Diffusion radius in radiance cells near geometry." );
+ConVar deferred_rh_adaptive_diffusion_far(
+    "deferred_rh_adaptive_diffusion_far", "2.50", FCVAR_ARCHIVE,
+    "Diffusion radius in radiance cells in open space." );
 
 ConVar deferred_rh_debug_mode(
     "deferred_rh_debug_mode", "0", FCVAR_NONE,

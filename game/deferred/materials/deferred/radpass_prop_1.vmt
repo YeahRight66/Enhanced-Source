@@ -4,6 +4,10 @@
 	"$SHG"		"_rt_rh_sh_g_01"
 	"$SHB"		"_rt_rh_sh_b_01"
 	"$VIS"		"_rt_rh_visibility"
-	"$META"		"_rt_rh_meta_01"
+	"$META"		"_rt_rh_meta_00"
 	"$GEOMETRY"		"_rt_rh_geometry"
+	"$DISTANCE"		"_rt_rh_geometrydistance"
+	"$SURFACEALBEDO"		"_rt_rh_surfacealbedo"
+	"$SURFACENORMAL"		"_rt_rh_surfacenormal"
+	"$BOUNCEMODE"		"1"
 }

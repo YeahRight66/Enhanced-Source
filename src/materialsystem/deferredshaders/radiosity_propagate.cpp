@@ -4,7 +4,7 @@
 #include "radiosity_propagate_ps30.inc"
 #include "radiosity_propagate_vs30.inc"
 
-BEGIN_VS_SHADER( RADIOSITY_PROPAGATE, "RH 7.0 physical surface bounce plus low-energy RH diffusion" )
+BEGIN_VS_SHADER( RADIOSITY_PROPAGATE, "RH 9.0 SDF-guided physical surface bounce plus adaptive RH diffusion" )
     BEGIN_SHADER_PARAMS
         SHADER_PARAM( SHR, SHADER_PARAM_TYPE_TEXTURE, "", "Source red SH volume" )
         SHADER_PARAM( SHG, SHADER_PARAM_TYPE_TEXTURE, "", "Source green SH volume" )
@@ -15,6 +15,9 @@ BEGIN_VS_SHADER( RADIOSITY_PROPAGATE, "RH 7.0 physical surface bounce plus low-e
         SHADER_PARAM( DISTANCE, SHADER_PARAM_TYPE_TEXTURE, "", "Geometry distance field" )
         SHADER_PARAM( SURFACEALBEDO, SHADER_PARAM_TYPE_TEXTURE, "", "Accumulated RSM surface albedo" )
         SHADER_PARAM( SURFACENORMAL, SHADER_PARAM_TYPE_TEXTURE, "", "Accumulated RSM surface normal" )
+        SHADER_PARAM( SHADOWDISTANCE, SHADER_PARAM_TYPE_TEXTURE, "", "RH8 64^3 Euclidean distance field" )
+        SHADER_PARAM( SURFACEGUIDE, SHADER_PARAM_TYPE_TEXTURE, "", "RH9 independent surface normal/coverage guide" )
+        SHADER_PARAM( SHADOWGEOMETRY, SHADER_PARAM_TYPE_TEXTURE, "", "RH8 64^3 static+dynamic blocker occupancy" )
         SHADER_PARAM( BOUNCEMODE, SHADER_PARAM_TYPE_INTEGER, "0", "0=surface; 1..3=physical XYZ; 4..6=diffusion XYZ" )
     END_SHADER_PARAMS
 
@@ -25,6 +28,7 @@ BEGIN_VS_SHADER( RADIOSITY_PROPAGATE, "RH 7.0 physical surface bounce plus low-e
         LoadTexture( SHR ); LoadTexture( SHG ); LoadTexture( SHB );
         LoadTexture( VIS ); LoadTexture( META ); LoadTexture( GEOMETRY );
         LoadTexture( DISTANCE ); LoadTexture( SURFACEALBEDO ); LoadTexture( SURFACENORMAL );
+        LoadTexture( SHADOWDISTANCE ); LoadTexture( SURFACEGUIDE ); LoadTexture( SHADOWGEOMETRY );
     }
 
     SHADER_FALLBACK { return 0; }
@@ -50,6 +54,9 @@ BEGIN_VS_SHADER( RADIOSITY_PROPAGATE, "RH 7.0 physical surface bounce plus low-e
             pShaderShadow->EnableTexture( SHADER_SAMPLER6, true );
             pShaderShadow->EnableTexture( SHADER_SAMPLER7, true );
             pShaderShadow->EnableTexture( SHADER_SAMPLER8, true );
+            pShaderShadow->EnableTexture( SHADER_SAMPLER9, true );
+            pShaderShadow->EnableTexture( SHADER_SAMPLER10, true );
+            pShaderShadow->EnableTexture( SHADER_SAMPLER11, true );
 
             int texCoordDimensions[] = { 2 };
             pShaderShadow->VertexShaderVertexFormat(
@@ -78,6 +85,9 @@ BEGIN_VS_SHADER( RADIOSITY_PROPAGATE, "RH 7.0 physical surface bounce plus low-e
             BindTexture( SHADER_SAMPLER6, DISTANCE );
             BindTexture( SHADER_SAMPLER7, SURFACEALBEDO );
             BindTexture( SHADER_SAMPLER8, SURFACENORMAL );
+            BindTexture( SHADER_SAMPLER9, SHADOWDISTANCE );
+            BindTexture( SHADER_SAMPLER10, SURFACEGUIDE );
+            BindTexture( SHADER_SAMPLER11, SHADOWGEOMETRY );
 
             ConVarRef bounceGain( "deferred_rh_bounce_gain" );
             ConVarRef surfaceBounceGain( "deferred_rh_surface_bounce_gain" );
@@ -93,6 +103,12 @@ BEGIN_VS_SHADER( RADIOSITY_PROPAGATE, "RH 7.0 physical surface bounce plus low-e
             ConVarRef diffusionGain( "deferred_rh_diffusion_gain" );
             ConVarRef diffusionRadius( "deferred_rh_diffusion_radius" );
             ConVarRef diffusionMinConfidence( "deferred_rh_diffusion_min_confidence" );
+            ConVarRef surfaceCacheEnable( "deferred_rh_surface_cache_enable" );
+            ConVarRef surfaceCacheBlend( "deferred_rh_surface_cache_blend" );
+            ConVarRef surfaceFallbackAlbedo( "deferred_rh_surface_fallback_albedo" );
+            ConVarRef adaptiveDiffusion( "deferred_rh_adaptive_diffusion" );
+            ConVarRef adaptiveDiffusionNear( "deferred_rh_adaptive_diffusion_near" );
+            ConVarRef adaptiveDiffusionFar( "deferred_rh_adaptive_diffusion_far" );
 
             const float radiusCells = 2.25f;
             float settings[4] = {
@@ -140,6 +156,15 @@ BEGIN_VS_SHADER( RADIOSITY_PROPAGATE, "RH 7.0 physical surface bounce plus low-e
                 clamp( diffusionMinConfidence.GetFloat(), 0.0f, 1.0f )
             };
             pShaderAPI->SetPixelShaderConstant( 5, diffusion );
+
+            float surfaceGuide[4] = { surfaceCacheEnable.GetBool() ? 1.0f : 0.0f,
+                clamp( surfaceCacheBlend.GetFloat(), 0.0f, 1.0f ),
+                clamp( surfaceFallbackAlbedo.GetFloat(), 0.0f, 1.0f ), 0.0f };
+            pShaderAPI->SetPixelShaderConstant( 6, surfaceGuide );
+            float adaptiveDiff[4] = { adaptiveDiffusion.GetBool() ? 1.0f : 0.0f,
+                clamp( adaptiveDiffusionNear.GetFloat(), 0.5f, 4.0f ),
+                clamp( adaptiveDiffusionFar.GetFloat(), 0.5f, 5.0f ), 0.0f };
+            pShaderAPI->SetPixelShaderConstant( 7, adaptiveDiff );
         }
 
         Draw();

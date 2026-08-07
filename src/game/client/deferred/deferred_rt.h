@@ -28,8 +28,15 @@ ITexture *GetDefRT_RHVisibility();
 ITexture *GetDefRT_RHIndirectHalf();
 ITexture *GetDefRT_RHGeometry();
 ITexture *GetDefRT_RHGeometryDistance();
+ITexture *GetDefRT_RHShadowGeometry();
+ITexture *GetDefRT_RHShadowDistance();
+ITexture *GetDefRT_RHSurfaceGuide();
+ITexture *GetDefRT_RHShadowHalf();
 void UpdateDefRT_RHGeometry( const unsigned char *pData, int nDataSize );
 void UpdateDefRT_RHGeometryDistance( const unsigned char *pData, int nDataSize );
+void UpdateDefRT_RHShadowGeometry( const unsigned char *pData, int nDataSize );
+void UpdateDefRT_RHShadowDistance( const unsigned char *pData, int nDataSize );
+void UpdateDefRT_RHSurfaceGuide( const unsigned char *pData, int nDataSize );
 
 ITexture *GetDefRT_RadianceHints( int setIndex, int channelIndex );
 // Compatibility aliases used by the existing deferred extension/debug code.

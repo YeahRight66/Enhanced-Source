@@ -64,6 +64,11 @@ private:
 	void BuildRadiosityDistanceField();
 	unsigned char BuildRadiosityStaticCell( const Vector &cellCenter, float cellSize ) const;
 	void StampRadiosityDynamicModels( const Vector &origin, float cellSize );
+	void UpdateRadiosityShadowGeometry();
+	void BuildRadiosityShadowDistanceField();
+	void BuildRadiositySurfaceGuide();
+	unsigned char BuildRadiosityShadowStaticCell( const Vector &cellCenter, float cellSize ) const;
+	void StampRadiosityShadowDynamicModels( const Vector &origin, float cellSize );
 	void EndRadiosity( const CViewSetup &view );
 	void DebugRadiosity( const CViewSetup &view );
 
@@ -84,6 +89,14 @@ private:
 	CUtlVector< unsigned char > m_RHStaticGeometry;
 	CUtlVector< unsigned char > m_RHCombinedGeometry;
 	CUtlVector< unsigned char > m_RHGeometryDistance;
+
+	Vector m_vecRHShadowGeometryOrigin;
+	float m_flRHShadowGeometryCellSize;
+	bool m_bRHShadowGeometryValid;
+	CUtlVector< unsigned char > m_RHShadowStaticGeometry;
+	CUtlVector< unsigned char > m_RHShadowCombinedGeometry;
+	CUtlVector< unsigned char > m_RHShadowGeometryDistance;
+	CUtlVector< unsigned char > m_RHSurfaceGuide;
 };
 
 

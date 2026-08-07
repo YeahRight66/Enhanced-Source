@@ -186,4 +186,40 @@ float4 RH_SampleAtlas( sampler volumeSampler, float3 uvw )
     return lerp( sample0, sample1, zBlend );
 }
 
+
+// Dedicated RH8 64^3 visibility field. It shares RH world-normalized UVW with
+// the 40^3 radiance grid but uses a different flattened atlas layout.
+float4 RH_SampleShadowAtlas( sampler volumeSampler, float3 uvw )
+{
+    uvw = saturate( uvw );
+
+    const float sliceWidth = 1.0f / RH_SHADOW_VOLUME_SIZE_F;
+    const float atlasTexel = 1.0f / RH_SHADOW_ATLAS_WIDTH_F;
+    const float volumeTexel = 1.0f / RH_SHADOW_VOLUME_SIZE_F;
+    const float innerSliceWidth = atlasTexel * ( RH_SHADOW_VOLUME_SIZE_F - 1.0f );
+    const float innerVolumeHeight = volumeTexel * ( RH_SHADOW_VOLUME_SIZE_F - 1.0f );
+
+    float zPosition = uvw.z * ( RH_SHADOW_VOLUME_SIZE_F - 1.0f );
+    float zSlice0 = floor( zPosition );
+    float zSlice1 = min( zSlice0 + 1.0f, RH_SHADOW_VOLUME_SIZE_F - 1.0f );
+    float zBlend = frac( zPosition );
+    float xInSlice = atlasTexel * 0.5f + uvw.x * innerSliceWidth;
+    float sampleY = volumeTexel * 0.5f + uvw.y * innerVolumeHeight;
+    float2 uv0 = float2( zSlice0 * sliceWidth + xInSlice, sampleY );
+    float2 uv1 = float2( zSlice1 * sliceWidth + xInSlice, sampleY );
+    float4 sample0 = tex2Dlod( volumeSampler, float4( uv0, 0.0f, 0.0f ) );
+    float4 sample1 = tex2Dlod( volumeSampler, float4( uv1, 0.0f, 0.0f ) );
+    return lerp( sample0, sample1, zBlend );
+}
+
+float RH_ShadowDistanceCells( sampler distanceSampler, float3 uvw )
+{
+    return RH_SampleShadowAtlas( distanceSampler, uvw ).r * RH_SHADOW_DISTANCE_MAX_CELLS;
+}
+
+float3 RH_DecodeSurfaceGuideNormal( float4 guide )
+{
+    return RH_SafeNormalize( guide.rgb * 2.0f - 1.0f, float3( 0.0f, 0.0f, 1.0f ) );
+}
+
 #endif // RADIANCE_HINTS_COMMON_FXC_H

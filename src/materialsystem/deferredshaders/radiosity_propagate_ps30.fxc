@@ -16,6 +16,9 @@ sampler sGeometry      : register( s5 );
 sampler sGeometryDist  : register( s6 );
 sampler sSurfaceAlbedo : register( s7 );
 sampler sSurfaceNormal : register( s8 );
+sampler sShadowDist    : register( s9 );
+sampler sSurfaceGuide  : register( s10 );
+sampler sShadowGeometry: register( s11 );
 
 // x = physical sample radius UV, y = physical transport gain,
 // z = max radiance, w = physical radius cells.
@@ -32,6 +35,10 @@ const float4 g_vecRHSurfaceSettings : register( c4 );
 // x = diffusion gain, y = diffusion radius UV,
 // z = diffusion radius cells, w = diffusion minimum confidence.
 const float4 g_vecRHDiffusionSettings : register( c5 );
+// x surface-cache enable, y guide-normal blend, z fallback albedo, w reserved.
+const float4 g_vecRHSurfaceGuideSettings : register( c6 );
+// x adaptive diffusion enable, y near radius cells, z far radius cells, w reserved.
+const float4 g_vecRHAdaptiveDiffusion : register( c7 );
 
 struct PS_INPUT
 {
@@ -56,8 +63,10 @@ float RH_TransferVisibilityCompact(
     float3 midpoint = lerp( sourceUVW, destinationUVW, 0.5f );
     float directionalBlocker = RH_EvaluateVisibilityTwoSided(
         RH_SampleAtlas( sVisibility, midpoint ), travelDirection );
-    float staticBlocker = RH_SampleAtlas( sGeometry, midpoint ).r;
-    float distanceCells = RH_SampleAtlas( sGeometryDist, midpoint ).r * 255.0f;
+    float staticBlocker = max( RH_SampleAtlas( sGeometry, midpoint ).r,
+        RH_SampleShadowAtlas( sShadowGeometry, midpoint ).r );
+    float shadowDistanceCells = RH_ShadowDistanceCells( sShadowDist, midpoint );
+    float distanceCells = shadowDistanceCells * ( RH_VOLUME_SIZE_F / RH_SHADOW_VOLUME_SIZE_F );
     float clearance = saturate( distanceCells / max( radiusCells, 1.0f ) );
     float opticalDepth = max( directionalBlocker, staticBlocker )
         * lerp( 0.68f, 0.36f, clearance );
@@ -104,7 +113,7 @@ float RH_TransferVisibilityCompact(
 #define RH_ACCUMULATE_DIFFUSION( DX, DY, DZ ) \
 { \
     float3 rhSourceDirection = float3( DX, DY, DZ ); \
-    float3 rhSourceUVW = In.vVolumeUVW + rhSourceDirection * g_vecRHDiffusionSettings.y; \
+    float3 rhSourceUVW = In.vVolumeUVW + rhSourceDirection * diffusionRadiusUVLocal; \
     float rhInside = RH_InsideVolume( rhSourceUVW ); \
     float4 rhMeta = RH_SampleAtlas( sMeta, rhSourceUVW ); \
     float rhConfidence = RH_MetaConfidence( rhMeta ); \
@@ -115,11 +124,11 @@ float RH_TransferVisibilityCompact(
     float rhConfidenceValid = step( saturate( g_vecRHDiffusionSettings.w ), max( rhConfidence, saturate( rhEnergy ) ) ); \
     float rhValid = rhInside * rhConfidenceValid * step( 1.0e-5f, rhEnergy ); \
     float3 rhTravelDirection = -rhSourceDirection; \
-    float rhVisibility = RH_TransferVisibilityCompact( rhSourceUVW, In.vVolumeUVW, rhTravelDirection, g_vecRHDiffusionSettings.z ); \
-    float rhSourceDistanceCells = RH_SampleAtlas( sGeometryDist, rhSourceUVW ).r * 255.0f; \
-    float rhClearance = saturate( rhSourceDistanceCells / max( g_vecRHDiffusionSettings.z, 1.0f ) ); \
+    float rhVisibility = RH_TransferVisibilityCompact( rhSourceUVW, In.vVolumeUVW, rhTravelDirection, diffusionRadiusCellsLocal ); \
+    float rhSourceDistanceCells = RH_ShadowDistanceCells( sShadowDist, rhSourceUVW ) * ( RH_VOLUME_SIZE_F / RH_SHADOW_VOLUME_SIZE_F ); \
+    float rhClearance = saturate( rhSourceDistanceCells / max( diffusionRadiusCellsLocal, 1.0f ) ); \
     float rhWeight = rhValid * rhVisibility * lerp( 0.42f, 1.0f, rhClearance ) \
-        / ( 1.0f + 0.28f * g_vecRHDiffusionSettings.z * g_vecRHDiffusionSettings.z ); \
+        / ( 1.0f + 0.28f * diffusionRadiusCellsLocal * diffusionRadiusCellsLocal ); \
     float4 rhBasis = RH_ProjectDirection( rhTravelDirection ); \
     float rhMaximum = max( g_vecRHBounceSettings.z, 0.25f ); \
     diffusedSH_R += rhBasis * ( min( max( dot( rhR, rhBasis ), 0.0f ), rhMaximum ) * rhWeight ); \
@@ -137,14 +146,23 @@ PS_OUTPUT main( const PS_INPUT In )
     // RSM material albedo and re-emitted into the outward Lambertian hemisphere.
     float4 surfaceAlbedoAccum = RH_SampleAtlas( sSurfaceAlbedo, In.vVolumeUVW );
     float4 surfaceNormalAccum = RH_SampleAtlas( sSurfaceNormal, In.vVolumeUVW );
+    float4 guide = RH_SampleAtlas( sSurfaceGuide, In.vVolumeUVW );
+    float guideCoverage = saturate( guide.a ) * saturate( g_vecRHSurfaceGuideSettings.x );
+    float3 guideNormal = RH_DecodeSurfaceGuideNormal( guide );
     float weight = min( surfaceAlbedoAccum.a, surfaceNormalAccum.a );
-    float valid = step( max( g_vecRHSurfaceSettings.x, 0.0f ), weight );
+    float rsmValid = step( max( g_vecRHSurfaceSettings.x, 0.0f ), weight );
     float inverseWeight = 1.0f / max( weight, 1.0e-4f );
-    float3 albedo = saturate( surfaceAlbedoAccum.rgb * inverseWeight );
+    float3 rsmAlbedo = saturate( surfaceAlbedoAccum.rgb * inverseWeight );
     float3 averagedNormal = surfaceNormalAccum.rgb * inverseWeight;
     float normalCoherence = saturate( length( averagedNormal ) );
-    valid *= smoothstep( 0.20f, 0.55f, normalCoherence );
-    float3 normal = RH_SafeNormalize( averagedNormal, float3( 0.0f, 0.0f, 1.0f ) );
+    rsmValid *= smoothstep( 0.20f, 0.55f, normalCoherence );
+    float guideValid = step( 0.08f, guideCoverage );
+    float valid = saturate( max( rsmValid, guideValid ) );
+    float fallbackAlbedo = saturate( g_vecRHSurfaceGuideSettings.z );
+    float3 albedo = lerp( fallbackAlbedo.xxx, rsmAlbedo, rsmValid );
+    float3 rsmNormal = RH_SafeNormalize( averagedNormal, guideNormal );
+    float repair = guideValid * saturate( g_vecRHSurfaceGuideSettings.y ) * ( 1.0f - normalCoherence * 0.55f );
+    float3 normal = RH_SafeNormalize( lerp( rsmNormal, guideNormal, repair ), guideNormal );
 
     float4 diffuseBasis = RH_DiffuseBasis( -normal );
     float3 irradiance;
@@ -181,6 +199,11 @@ PS_OUTPUT main( const PS_INPUT In )
     Out.vSH_G = RH_LimitRadianceSH( bouncedSH_G * normalization );
     Out.vSH_B = RH_LimitRadianceSH( bouncedSH_B * normalization );
 #else
+    float destinationShadowDistance = RH_ShadowDistanceCells( sShadowDist, In.vVolumeUVW ) * ( RH_VOLUME_SIZE_F / RH_SHADOW_VOLUME_SIZE_F );
+    float adaptiveT = saturate( destinationShadowDistance / 4.0f );
+    float adaptiveRadius = lerp( max( g_vecRHAdaptiveDiffusion.y, 0.5f ), max( g_vecRHAdaptiveDiffusion.z, 0.5f ), adaptiveT );
+    float diffusionRadiusCellsLocal = lerp( g_vecRHDiffusionSettings.z, adaptiveRadius, saturate( g_vecRHAdaptiveDiffusion.x ) );
+    float diffusionRadiusUVLocal = diffusionRadiusCellsLocal / RH_VOLUME_SIZE_F;
     float4 diffusedSH_R = 0.0f;
     float4 diffusedSH_G = 0.0f;
     float4 diffusedSH_B = 0.0f;

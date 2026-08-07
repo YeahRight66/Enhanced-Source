@@ -1,7 +1,7 @@
 "RADIOSITY_GLOBAL"
 {
-	"$SURFACEMODE"		"0"
-	"$SAMPLEPHASE"		"0"
+	"$SURFACEMODE"		"2"
+	"$SAMPLEPHASE"		"1"
 	"$RSMALBEDO"		"_rt_rh_rsm_albedo"
 	"$GEOMETRY"		"_rt_rh_geometry"
 	"$DISTANCE"		"_rt_rh_geometrydistance"

@@ -1,7 +1,7 @@
 #ifndef RADIANCE_HINTS_CONFIG_H
 #define RADIANCE_HINTS_CONFIG_H
 
-// Radiance Hints 7.0 hybrid compile-time configuration.
+// Radiance Hints 9.1 High half-resolution SDF + surface-guide configuration.
 // This header intentionally overrides legacy RH macros locally. Do not include
 // it from deferred_global_common.h or common_deferred_fxc.h.
 
@@ -88,6 +88,17 @@
 #define RH_ATLAS_HEIGHT_F                  ( RH_ATLAS_HEIGHT * 1.0f )
 #define RH_RSM_RESOLUTION_F                ( RH_RSM_RESOLUTION * 1.0f )
 
+// RH8/9 decouples diffuse-radiance resolution from visibility resolution.
+// The 64^3 shadow field covers the exact same world extent as the 40^3 RH grid.
+#define RH_SHADOW_VOLUME_SIZE              64
+#define RH_SHADOW_VOLUME_SIZE_F            64.0f
+#define RH_SHADOW_ATLAS_WIDTH              ( RH_SHADOW_VOLUME_SIZE * RH_SHADOW_VOLUME_SIZE )
+#define RH_SHADOW_ATLAS_HEIGHT             RH_SHADOW_VOLUME_SIZE
+#define RH_SHADOW_ATLAS_WIDTH_F            ( RH_SHADOW_ATLAS_WIDTH * 1.0f )
+#define RH_SHADOW_ATLAS_HEIGHT_F           ( RH_SHADOW_ATLAS_HEIGHT * 1.0f )
+#define RH_SHADOW_DISTANCE_MAX_CELLS       16.0f
+#define RH_SHADOW_TRACE_STEPS              6
+
 // Three four-MRT sets are used: set 0 is the final first-bounce field,
 // set 1 stores freshly generated surface bounce, and set 2 stores its
 // geometry-aware transport result. Metadata from set 0 remains authoritative.
@@ -172,6 +183,18 @@
 #ifdef DEFRTNAME_RH_INDIRECT_HALF
 # undef DEFRTNAME_RH_INDIRECT_HALF
 #endif
+#ifdef DEFRTNAME_RH_SHADOW_GEOMETRY
+# undef DEFRTNAME_RH_SHADOW_GEOMETRY
+#endif
+#ifdef DEFRTNAME_RH_SHADOW_DISTANCE
+# undef DEFRTNAME_RH_SHADOW_DISTANCE
+#endif
+#ifdef DEFRTNAME_RH_SURFACE_GUIDE
+# undef DEFRTNAME_RH_SURFACE_GUIDE
+#endif
+#ifdef DEFRTNAME_RH_SHADOW_HALF
+# undef DEFRTNAME_RH_SHADOW_HALF
+#endif
 #ifdef DEFRTNAME_RH_GEOMETRY
 # undef DEFRTNAME_RH_GEOMETRY
 #endif
@@ -192,7 +215,10 @@
 #define DEFRTNAME_RH_SURFACE_NORMAL        "_rt_RH_SurfaceNormal"
 #define DEFRTNAME_RH_GEOMETRY_DISTANCE     "_rt_RH_GeometryDistance"
 #define DEFRTNAME_RH_INDIRECT_HALF         "_rt_RH_IndirectHalf"
+#define DEFRTNAME_RH_SHADOW_GEOMETRY       "_rt_RH_ShadowGeometry"
+#define DEFRTNAME_RH_SHADOW_DISTANCE       "_rt_RH_ShadowDistance"
+#define DEFRTNAME_RH_SURFACE_GUIDE         "_rt_RH_SurfaceGuide"
+#define DEFRTNAME_RH_SHADOW_HALF           "_rt_RH_ShadowHalf"
 #define DEFRTNAME_RH_GEOMETRY              "_rt_RH_Geometry"
 
 #endif // RADIANCE_HINTS_CONFIG_H
-

@@ -9,5 +9,5 @@
 	"$DISTANCE"		"_rt_rh_geometrydistance"
 	"$SURFACEALBEDO"		"_rt_rh_surfacealbedo"
 	"$SURFACENORMAL"		"_rt_rh_surfacenormal"
-	"$BOUNCEMODE"		"0"
+	"$BOUNCEMODE"		"5"
 }

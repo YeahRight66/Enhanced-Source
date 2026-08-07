@@ -1,13 +1,13 @@
 "RADIOSITY_PROPAGATE"
 {
-	"$SHR"		"_rt_rh_sh_r_00"
-	"$SHG"		"_rt_rh_sh_g_00"
-	"$SHB"		"_rt_rh_sh_b_00"
+	"$SHR"		"_rt_rh_sh_r_01"
+	"$SHG"		"_rt_rh_sh_g_01"
+	"$SHB"		"_rt_rh_sh_b_01"
 	"$VIS"		"_rt_rh_visibility"
 	"$META"		"_rt_rh_meta_00"
 	"$GEOMETRY"		"_rt_rh_geometry"
 	"$DISTANCE"		"_rt_rh_geometrydistance"
 	"$SURFACEALBEDO"		"_rt_rh_surfacealbedo"
 	"$SURFACENORMAL"		"_rt_rh_surfacenormal"
-	"$BOUNCEMODE"		"0"
+	"$BOUNCEMODE"		"2"
 }

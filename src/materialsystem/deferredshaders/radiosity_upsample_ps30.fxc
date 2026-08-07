@@ -1,41 +1,32 @@
+// RH9 High: half-resolution complete GI -> full-resolution additive lighting.
+// SDF shadows are already evaluated at the same half resolution as the GI.
+
 #include "common_ps_fxc.h"
 #include "common_deferred_fxc.h"
 #include "radiance_hints_config.h"
 
-sampler sHalfGI  : register( s0 );
+sampler sBase    : register( s0 );
 sampler sDepth   : register( s1 );
 sampler sNormals : register( s2 );
-
-// xy half dimensions, zw inverse dimensions.
-const float4 g_HalfSize : register( c0 );
-// x depth rejection scale, y normal exponent, z fallback depth scale.
+const float4 g_BaseSize : register( c0 );
 const float4 g_Filter   : register( c1 );
-
 struct PS_INPUT { float2 vTexCoord : TEXCOORD0; };
 
 float3 DecodeRHNormal( float2 uv )
 {
-    float3 normal = DecodeDirectionVectorXYZFromSphericalST(
-        tex2Dlod( sNormals, float4( uv, 0.0f, 0.0f ) ).xy );
-    return normal * rsqrt( max( dot( normal, normal ), 1.0e-8f ) );
+    float3 n = DecodeDirectionVectorXYZFromSphericalST( tex2Dlod( sNormals, float4( uv, 0.0f, 0.0f ) ).xy );
+    return n * rsqrt( max( dot( n, n ), 1.0e-8f ) );
 }
 
-#define RH_ACCUMULATE_UPSAMPLE( SAMPLE_UV, SPATIAL_WEIGHT ) \
+#define RH_ACCUM_GI( UV, SW ) \
 { \
-    float2 rhUV = saturate( SAMPLE_UV ); \
-    float4 rhGI = tex2Dlod( sHalfGI, float4( rhUV, 0.0f, 0.0f ) ); \
-    float rhValid = step( 0.1f, rhGI.a ) * step( rhGI.a, DEPTH_RECONSTRUCTION_LIMIT ); \
-    float rhDepthDifference = abs( rhGI.a - centerDepth ); \
-    float rhDepthWeight = exp2( -rhDepthDifference * g_Filter.x ); \
-    float rhNormalWeight = pow( saturate( dot( centerNormal, DecodeRHNormal( rhUV ) ) ), g_Filter.y ); \
-    float rhWeight = SPATIAL_WEIGHT * rhDepthWeight * rhNormalWeight * rhValid; \
-    sum += rhGI.rgb * rhWeight; \
-    weight += rhWeight; \
-    float rhError = rhDepthDifference + ( 1.0f - rhNormalWeight ) * max( g_Filter.z, 0.0f ) \
-        + ( 1.0f - rhValid ) * 65504.0f; \
-    float rhReplace = step( rhError, fallbackError ); \
-    fallbackColour = lerp( fallbackColour, rhGI.rgb, rhReplace ); \
-    fallbackError = lerp( fallbackError, rhError, rhReplace ); \
+    float2 q = saturate( UV ); float4 gi = tex2Dlod( sBase, float4( q, 0, 0 ) ); \
+    float valid = step( 0.1f, gi.a ) * step( gi.a, DEPTH_RECONSTRUCTION_LIMIT ); \
+    float dd = abs( gi.a - centerDepth ); float dw = exp2( -dd * g_Filter.x ); \
+    float nw = pow( saturate( dot( centerNormal, DecodeRHNormal( q ) ) ), g_Filter.y ); \
+    float w = SW * dw * nw * valid; sum += gi.rgb * w; weight += w; \
+    float err = dd + ( 1.0f - nw ) * max( g_Filter.z, 0.0f ) + ( 1.0f - valid ) * 65504.0f; \
+    float replace = step( err, fallbackError ); fallbackColour = lerp( fallbackColour, gi.rgb, replace ); fallbackError = lerp( fallbackError, err, replace ); \
 }
 
 float4 main( const PS_INPUT In ) : COLOR0
@@ -43,33 +34,17 @@ float4 main( const PS_INPUT In ) : COLOR0
     float centerDepth = tex2D( sDepth, In.vTexCoord ).x;
     clip( min( centerDepth - 0.1f, DEPTH_RECONSTRUCTION_LIMIT - centerDepth ) );
     float3 centerNormal = DecodeRHNormal( In.vTexCoord );
-
-    float2 halfPosition = In.vTexCoord * g_HalfSize.xy - 0.5f;
-    float2 basePixel = floor( halfPosition );
-    float2 fractionValue = frac( halfPosition );
-    float2 uv00 = ( basePixel + 0.5f ) * g_HalfSize.zw;
-    float2 uv10 = uv00 + float2( g_HalfSize.z, 0.0f );
-    float2 uv01 = uv00 + float2( 0.0f, g_HalfSize.w );
-    float2 uv11 = uv00 + g_HalfSize.zw;
-
-    float4 spatial = float4(
-        ( 1.0f - fractionValue.x ) * ( 1.0f - fractionValue.y ),
-        fractionValue.x * ( 1.0f - fractionValue.y ),
-        ( 1.0f - fractionValue.x ) * fractionValue.y,
-        fractionValue.x * fractionValue.y );
-
-    float3 sum = 0.0f;
-    float weight = 0.0f;
-    float3 fallbackColour = 0.0f;
-    float fallbackError = 65504.0f;
-
-    RH_ACCUMULATE_UPSAMPLE( uv00, spatial.x );
-    RH_ACCUMULATE_UPSAMPLE( uv10, spatial.y );
-    RH_ACCUMULATE_UPSAMPLE( uv01, spatial.z );
-    RH_ACCUMULATE_UPSAMPLE( uv11, spatial.w );
-
-    float validWeight = step( 1.0e-5f, weight );
-    float3 filtered = sum / max( weight, 1.0e-5f );
+    float2 position = In.vTexCoord * g_BaseSize.xy - 0.5f;
+    float2 basePixel = floor( position ); float2 f = frac( position );
+    float2 uv00 = ( basePixel + 0.5f ) * g_BaseSize.zw;
+    float2 uv10 = uv00 + float2( g_BaseSize.z, 0 );
+    float2 uv01 = uv00 + float2( 0, g_BaseSize.w );
+    float2 uv11 = uv00 + g_BaseSize.zw;
+    float4 spatial = float4( (1-f.x)*(1-f.y), f.x*(1-f.y), (1-f.x)*f.y, f.x*f.y );
+    float weight = 0.0f; float fallbackError = 65504.0f;
+    float3 sum = 0.0f; float3 fallbackColour = 0.0f;
+    RH_ACCUM_GI( uv00, spatial.x ); RH_ACCUM_GI( uv10, spatial.y ); RH_ACCUM_GI( uv01, spatial.z ); RH_ACCUM_GI( uv11, spatial.w );
+    float validWeight = step( 1.0e-5f, weight ); float3 filtered = sum / max( weight, 1.0e-5f );
     filtered = lerp( fallbackColour, filtered, validWeight );
     return WriteLighting( float4( filtered, 0.0f ) );
 }
