@@ -82,19 +82,34 @@ PS_OUTPUT main( const PS_INPUT In )
 #else
     const float sourceSize = RH_HIERARCHY_10_SIZE_F;
 #endif
-    // Exact 2x2x2 box reduction. The eight child centers sit +/- half a source
-    // cell from the coarse-cell center. Fixed expansion is deliberate for FXC.
+    // Exact 2x2x2 box reduction. Accumulate each child sequentially instead
+    // of one giant expression: legacy FXC otherwise tends to keep many texture
+    // results live at once (especially SOURCE_LEVEL=0 + COMBINED), which can
+    // trigger ps_3_0 temporary-register overflow even though the pass is tiny.
     float o = 0.5f / sourceSize;
     float3 p = In.vVolumeUVW;
-#define RH_SUM8( FN ) ( \
-    FN( p + float3(-o,-o,-o) ) + FN( p + float3( o,-o,-o) ) + \
-    FN( p + float3(-o, o,-o) ) + FN( p + float3( o, o,-o) ) + \
-    FN( p + float3(-o,-o, o) ) + FN( p + float3( o,-o, o) ) + \
-    FN( p + float3(-o, o, o) ) + FN( p + float3( o, o, o) ) ) * 0.125f
-    float4 shR = RH_SUM8( RH_HierarchySampleR );
-    float4 shG = RH_SUM8( RH_HierarchySampleG );
-    float4 shB = RH_SUM8( RH_HierarchySampleB );
-#undef RH_SUM8
+    float4 shR = 0.0f;
+    float4 shG = 0.0f;
+    float4 shB = 0.0f;
+#define RH_ACCUM_CHILD( DX, DY, DZ ) \
+{ \
+    float3 q = p + float3( (DX) * o, (DY) * o, (DZ) * o ); \
+    shR += RH_HierarchySampleR( q ); \
+    shG += RH_HierarchySampleG( q ); \
+    shB += RH_HierarchySampleB( q ); \
+}
+    RH_ACCUM_CHILD(-1.0f,-1.0f,-1.0f );
+    RH_ACCUM_CHILD( 1.0f,-1.0f,-1.0f );
+    RH_ACCUM_CHILD(-1.0f, 1.0f,-1.0f );
+    RH_ACCUM_CHILD( 1.0f, 1.0f,-1.0f );
+    RH_ACCUM_CHILD(-1.0f,-1.0f, 1.0f );
+    RH_ACCUM_CHILD( 1.0f,-1.0f, 1.0f );
+    RH_ACCUM_CHILD(-1.0f, 1.0f, 1.0f );
+    RH_ACCUM_CHILD( 1.0f, 1.0f, 1.0f );
+#undef RH_ACCUM_CHILD
+    shR *= 0.125f;
+    shG *= 0.125f;
+    shB *= 0.125f;
 
     shR = RH_LimitRadianceSH( shR );
     shG = RH_LimitRadianceSH( shG );

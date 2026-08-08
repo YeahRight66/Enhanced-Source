@@ -143,9 +143,6 @@ float RH_TransferVisibilityCompact(
     float rhVisibility = RH_TransferVisibilityCompact( rhSourceUVW, In.vVolumeUVW, rhTravelDirection, diffusionRadiusCellsLocal ); \
     float rhSourceDistanceCells = RH_ShadowDistanceCells( sShadowDist, rhSourceUVW + g_vecRHShadowUVWOffset ) * ( RH_VOLUME_SIZE_F / RH_SHADOW_VOLUME_SIZE_F ); \
     float rhClearance = saturate( rhSourceDistanceCells / max( diffusionRadiusCellsLocal, 1.0f ) ); \
-    // Visibility already handles occlusion.  A quadratic radius penalty made
-    // the adaptive far-radius mode almost cancel itself; retain only a mild
-    // distance falloff so wider diffusion actually fills open regions. \
     float rhSpatialFalloff = 1.0f / ( 1.0f + 0.18f * diffusionRadiusCellsLocal ); \
     float rhWeight = rhValid * rhVisibility * lerp( 0.42f, 1.0f, rhClearance ) * rhSpatialFalloff; \
     float4 rhBasis = RH_ProjectDirection( rhTravelDirection ); \
