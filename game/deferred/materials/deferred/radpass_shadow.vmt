@@ -7,7 +7,7 @@
 	"$SHG1"		"_rt_rh_sh_g_02"
 	"$SHB1"		"_rt_rh_sh_b_02"
 	"$META0"		"_rt_rh_meta_00"
-	"$AUXTEXTURE"		"_rt_rh_shadowhalf"
+	"$AUXTEXTURE"		"_rt_rh_shadowgeometry"
 	"$SHADOWDISTANCE"		"_rt_rh_shadowdistance"
-	"$PASSMODE"		"0"
+	"$PASSMODE"		"1"
 }

@@ -53,12 +53,26 @@ static CTextureReference g_tex_RHShadowGeometry;
 static CTextureReference g_tex_RHShadowDistance;
 static CTextureReference g_tex_RHSurfaceGuide;
 static CTextureReference g_tex_RHShadowHalf;
+static CTextureReference g_tex_RHSurfaceCache;
+static CTextureReference g_tex_RHOpenSky;
+static CTextureReference g_tex_RHShadowGeometry32;
+static CTextureReference g_tex_RHShadowDistance32;
+static CTextureReference g_tex_RHShadowGeometry16;
+static CTextureReference g_tex_RHShadowDistance16;
+static CTextureReference g_tex_RHHierarchy[ 3 ][ 3 ];
+static CTextureReference g_tex_RHHierarchyEnergy[ 2 ]; // 10^3 and 5^3 broad isotropic energy.
 
 static unsigned char g_RHGeometryData[ RH_ATLAS_WIDTH * RH_ATLAS_HEIGHT ];
 static unsigned char g_RHGeometryDistanceData[ RH_ATLAS_WIDTH * RH_ATLAS_HEIGHT ];
 static unsigned char g_RHShadowGeometryData[ RH_SHADOW_ATLAS_WIDTH * RH_SHADOW_ATLAS_HEIGHT ];
 static unsigned char g_RHShadowDistanceData[ RH_SHADOW_ATLAS_WIDTH * RH_SHADOW_ATLAS_HEIGHT ];
 static unsigned char g_RHSurfaceGuideData[ RH_ATLAS_WIDTH * RH_ATLAS_HEIGHT * 4 ];
+static unsigned char g_RHSurfaceCacheData[ RH_ATLAS_WIDTH * RH_ATLAS_HEIGHT * 4 ];
+static unsigned char g_RHOpenSkyData[ RH_SKY_CACHE_ATLAS_WIDTH * RH_SKY_CACHE_ATLAS_HEIGHT ];
+static unsigned char g_RHShadowGeometry32Data[ RH_SHADOW_MIP1_ATLAS_WIDTH * RH_SHADOW_MIP1_ATLAS_HEIGHT ];
+static unsigned char g_RHShadowDistance32Data[ RH_SHADOW_MIP1_ATLAS_WIDTH * RH_SHADOW_MIP1_ATLAS_HEIGHT ];
+static unsigned char g_RHShadowGeometry16Data[ RH_SHADOW_MIP2_ATLAS_WIDTH * RH_SHADOW_MIP2_ATLAS_HEIGHT ];
+static unsigned char g_RHShadowDistance16Data[ RH_SHADOW_MIP2_ATLAS_WIDTH * RH_SHADOW_MIP2_ATLAS_HEIGHT ];
 
 class CRHByteTextureRegenerator : public ITextureRegenerator
 {
@@ -140,6 +154,18 @@ static CRHByteTextureRegenerator g_RHShadowDistanceTextureRegenerator(
     g_RHShadowDistanceData, RH_SHADOW_ATLAS_WIDTH, RH_SHADOW_ATLAS_HEIGHT );
 static CRHRGBAByteTextureRegenerator g_RHSurfaceGuideTextureRegenerator(
     g_RHSurfaceGuideData, RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT );
+static CRHRGBAByteTextureRegenerator g_RHSurfaceCacheTextureRegenerator(
+    g_RHSurfaceCacheData, RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT );
+static CRHByteTextureRegenerator g_RHOpenSkyTextureRegenerator(
+    g_RHOpenSkyData, RH_SKY_CACHE_ATLAS_WIDTH, RH_SKY_CACHE_ATLAS_HEIGHT );
+static CRHByteTextureRegenerator g_RHShadowGeometry32TextureRegenerator(
+    g_RHShadowGeometry32Data, RH_SHADOW_MIP1_ATLAS_WIDTH, RH_SHADOW_MIP1_ATLAS_HEIGHT );
+static CRHByteTextureRegenerator g_RHShadowDistance32TextureRegenerator(
+    g_RHShadowDistance32Data, RH_SHADOW_MIP1_ATLAS_WIDTH, RH_SHADOW_MIP1_ATLAS_HEIGHT );
+static CRHByteTextureRegenerator g_RHShadowGeometry16TextureRegenerator(
+    g_RHShadowGeometry16Data, RH_SHADOW_MIP2_ATLAS_WIDTH, RH_SHADOW_MIP2_ATLAS_HEIGHT );
+static CRHByteTextureRegenerator g_RHShadowDistance16TextureRegenerator(
+    g_RHShadowDistance16Data, RH_SHADOW_MIP2_ATLAS_WIDTH, RH_SHADOW_MIP2_ATLAS_HEIGHT );
 
 static CTextureReference g_tex_ProjectableVGUI[ NUM_PROJECTABLE_VGUI ];
 
@@ -227,9 +253,11 @@ const ImageFormat fmt_gbuffer0 =
 	unsigned int projVGUIFlags =		TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT | TEXTUREFLAGS_RENDERTARGET;
 	unsigned int radAlbedoNormalFlags =	TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT | TEXTUREFLAGS_RENDERTARGET;
 	unsigned int radBufferFlags =       TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT | TEXTUREFLAGS_RENDERTARGET;
-    // Filter HDR flux spatially to reduce deterministic RSM undersampling.
-    // Keep normals point-sampled so filtering never blends unrelated surfaces.
-    unsigned int rhRSMFluxFlags =      TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT | TEXTUREFLAGS_RENDERTARGET;
+    // RSM attributes must describe the same texel/surfel. Bilinear flux with
+    // point-sampled depth/normal blends unrelated emitters at geometry edges and
+    // then reconstructs that mixed energy at one surface. RH7+ already has dense
+    // 16-sample injection and volume reconstruction, so keep flux texel-coherent.
+    unsigned int rhRSMFluxFlags =      TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT | TEXTUREFLAGS_RENDERTARGET | TEXTUREFLAGS_POINTSAMPLE;
     unsigned int rhRSMNormalFlags =    TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT | TEXTUREFLAGS_RENDERTARGET | TEXTUREFLAGS_POINTSAMPLE;
     unsigned int rhRSMAlbedoFlags =    TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT | TEXTUREFLAGS_RENDERTARGET | TEXTUREFLAGS_POINTSAMPLE;
     unsigned int rhHalfFlags =         TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT | TEXTUREFLAGS_RENDERTARGET | TEXTUREFLAGS_POINTSAMPLE;
@@ -460,6 +488,31 @@ const ImageFormat fmt_gbuffer0 =
             fmt_radBuffer,
             MATERIAL_RT_DEPTH_NONE,
             radBufferFlags, 0 ) );
+
+        static const char *s_RHHierarchyNames[3][3] =
+        {
+            { DEFRTNAME_RH_HIERARCHY20_R, DEFRTNAME_RH_HIERARCHY20_G, DEFRTNAME_RH_HIERARCHY20_B },
+            { DEFRTNAME_RH_HIERARCHY10_R, DEFRTNAME_RH_HIERARCHY10_G, DEFRTNAME_RH_HIERARCHY10_B },
+            { DEFRTNAME_RH_HIERARCHY5_R,  DEFRTNAME_RH_HIERARCHY5_G,  DEFRTNAME_RH_HIERARCHY5_B  }
+        };
+        const int rhHierarchyWidths[3] = { RH_HIERARCHY_20_ATLAS_WIDTH, RH_HIERARCHY_10_ATLAS_WIDTH, RH_HIERARCHY_5_ATLAS_WIDTH };
+        const int rhHierarchyHeights[3] = { RH_HIERARCHY_20_ATLAS_HEIGHT, RH_HIERARCHY_10_ATLAS_HEIGHT, RH_HIERARCHY_5_ATLAS_HEIGHT };
+        for ( int level = 0; level < 3; ++level )
+        {
+            for ( int channel = 0; channel < 3; ++channel )
+            {
+                g_tex_RHHierarchy[level][channel].Init( materials->CreateNamedRenderTargetTextureEx2(
+                    s_RHHierarchyNames[level][channel],
+                    rhHierarchyWidths[level], rhHierarchyHeights[level],
+                    RT_SIZE_NO_CHANGE, fmt_radBuffer, MATERIAL_RT_DEPTH_NONE, radBufferFlags, 0 ) );
+            }
+        }
+        g_tex_RHHierarchyEnergy[0].Init( materials->CreateNamedRenderTargetTextureEx2(
+            DEFRTNAME_RH_HIERARCHY10_ENERGY, RH_HIERARCHY_10_ATLAS_WIDTH, RH_HIERARCHY_10_ATLAS_HEIGHT,
+            RT_SIZE_NO_CHANGE, fmt_radBuffer, MATERIAL_RT_DEPTH_NONE, radBufferFlags, 0 ) );
+        g_tex_RHHierarchyEnergy[1].Init( materials->CreateNamedRenderTargetTextureEx2(
+            DEFRTNAME_RH_HIERARCHY5_ENERGY, RH_HIERARCHY_5_ATLAS_WIDTH, RH_HIERARCHY_5_ATLAS_HEIGHT,
+            RT_SIZE_NO_CHANGE, fmt_radBuffer, MATERIAL_RT_DEPTH_NONE, radBufferFlags, 0 ) );
 #endif
 	}
 
@@ -703,6 +756,50 @@ const ImageFormat fmt_gbuffer0 =
             g_tex_RHSurfaceGuide->Download();
         }
     }
+
+    if ( bInitial && !g_tex_RHSurfaceCache.IsValid() )
+    {
+        memset( g_RHSurfaceCacheData, 0, sizeof( g_RHSurfaceCacheData ) );
+        g_tex_RHSurfaceCache.Init( materials->CreateProceduralTexture(
+            DEFRTNAME_RH_SURFACE_CACHE, TEXTURE_GROUP_OTHER,
+            RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT, IMAGE_FORMAT_RGBA8888,
+            TEXTUREFLAGS_PROCEDURAL | TEXTUREFLAGS_NOMIP | TEXTUREFLAGS_POINTSAMPLE |
+            TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT ) );
+        if ( g_tex_RHSurfaceCache.IsValid() )
+        {
+            g_tex_RHSurfaceCache->SetTextureRegenerator( &g_RHSurfaceCacheTextureRegenerator );
+            g_tex_RHSurfaceCache->Download();
+        }
+    }
+
+    if ( bInitial && !g_tex_RHOpenSky.IsValid() )
+    {
+        memset( g_RHOpenSkyData, 255, sizeof( g_RHOpenSkyData ) );
+        g_tex_RHOpenSky.Init( materials->CreateProceduralTexture(
+            DEFRTNAME_RH_OPEN_SKY, TEXTURE_GROUP_OTHER,
+            RH_SKY_CACHE_ATLAS_WIDTH, RH_SKY_CACHE_ATLAS_HEIGHT, IMAGE_FORMAT_RGBA8888,
+            TEXTUREFLAGS_PROCEDURAL | TEXTUREFLAGS_NOMIP |
+            TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT ) );
+        if ( g_tex_RHOpenSky.IsValid() )
+        {
+            g_tex_RHOpenSky->SetTextureRegenerator( &g_RHOpenSkyTextureRegenerator );
+            g_tex_RHOpenSky->Download();
+        }
+    }
+
+#define RH_CREATE_BYTE_TEX( REF, NAME, DATA, REGEN, W, H, INITIAL ) \
+    if ( bInitial && !(REF).IsValid() ) \
+    { \
+        memset( DATA, INITIAL, sizeof( DATA ) ); \
+        (REF).Init( materials->CreateProceduralTexture( NAME, TEXTURE_GROUP_OTHER, W, H, IMAGE_FORMAT_RGBA8888, \
+            TEXTUREFLAGS_PROCEDURAL | TEXTUREFLAGS_NOMIP | TEXTUREFLAGS_POINTSAMPLE | TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT ) ); \
+        if ( (REF).IsValid() ) { (REF)->SetTextureRegenerator( &(REGEN) ); (REF)->Download(); } \
+    }
+    RH_CREATE_BYTE_TEX( g_tex_RHShadowGeometry32, DEFRTNAME_RH_SHADOW_GEOMETRY_32, g_RHShadowGeometry32Data, g_RHShadowGeometry32TextureRegenerator, RH_SHADOW_MIP1_ATLAS_WIDTH, RH_SHADOW_MIP1_ATLAS_HEIGHT, 0 );
+    RH_CREATE_BYTE_TEX( g_tex_RHShadowDistance32, DEFRTNAME_RH_SHADOW_DISTANCE_32, g_RHShadowDistance32Data, g_RHShadowDistance32TextureRegenerator, RH_SHADOW_MIP1_ATLAS_WIDTH, RH_SHADOW_MIP1_ATLAS_HEIGHT, 255 );
+    RH_CREATE_BYTE_TEX( g_tex_RHShadowGeometry16, DEFRTNAME_RH_SHADOW_GEOMETRY_16, g_RHShadowGeometry16Data, g_RHShadowGeometry16TextureRegenerator, RH_SHADOW_MIP2_ATLAS_WIDTH, RH_SHADOW_MIP2_ATLAS_HEIGHT, 0 );
+    RH_CREATE_BYTE_TEX( g_tex_RHShadowDistance16, DEFRTNAME_RH_SHADOW_DISTANCE_16, g_RHShadowDistance16Data, g_RHShadowDistance16TextureRegenerator, RH_SHADOW_MIP2_ATLAS_WIDTH, RH_SHADOW_MIP2_ATLAS_HEIGHT, 255 );
+#undef RH_CREATE_BYTE_TEX
 #endif
 	
 	if (!bInitial)
@@ -909,6 +1006,8 @@ void UpdateDefRT_RHGeometry( const unsigned char *pData, int nDataSize )
     if ( pData == NULL || nDataSize != expectedSize || !g_tex_RHGeometry.IsValid() )
         return;
 
+    if ( memcmp( g_RHGeometryData, pData, expectedSize ) == 0 )
+        return;
     memcpy( g_RHGeometryData, pData, expectedSize );
     g_tex_RHGeometry->Download();
 }
@@ -921,6 +1020,8 @@ void UpdateDefRT_RHGeometryDistance( const unsigned char *pData, int nDataSize )
     if ( pData == NULL || nDataSize != expectedSize || !g_tex_RHGeometryDistance.IsValid() )
         return;
 
+    if ( memcmp( g_RHGeometryDistanceData, pData, expectedSize ) == 0 )
+        return;
     memcpy( g_RHGeometryDistanceData, pData, expectedSize );
     g_tex_RHGeometryDistance->Download();
 }
@@ -955,6 +1056,8 @@ void UpdateDefRT_RHShadowGeometry( const unsigned char *pData, int nDataSize )
     const int expectedSize = RH_SHADOW_ATLAS_WIDTH * RH_SHADOW_ATLAS_HEIGHT;
     Assert( pData != NULL ); Assert( nDataSize == expectedSize );
     if ( pData == NULL || nDataSize != expectedSize || !g_tex_RHShadowGeometry.IsValid() ) return;
+    if ( memcmp( g_RHShadowGeometryData, pData, expectedSize ) == 0 )
+        return;
     memcpy( g_RHShadowGeometryData, pData, expectedSize );
     g_tex_RHShadowGeometry->Download();
 }
@@ -964,6 +1067,8 @@ void UpdateDefRT_RHShadowDistance( const unsigned char *pData, int nDataSize )
     const int expectedSize = RH_SHADOW_ATLAS_WIDTH * RH_SHADOW_ATLAS_HEIGHT;
     Assert( pData != NULL ); Assert( nDataSize == expectedSize );
     if ( pData == NULL || nDataSize != expectedSize || !g_tex_RHShadowDistance.IsValid() ) return;
+    if ( memcmp( g_RHShadowDistanceData, pData, expectedSize ) == 0 )
+        return;
     memcpy( g_RHShadowDistanceData, pData, expectedSize );
     g_tex_RHShadowDistance->Download();
 }
@@ -973,9 +1078,46 @@ void UpdateDefRT_RHSurfaceGuide( const unsigned char *pData, int nDataSize )
     const int expectedSize = RH_ATLAS_WIDTH * RH_ATLAS_HEIGHT * 4;
     Assert( pData != NULL ); Assert( nDataSize == expectedSize );
     if ( pData == NULL || nDataSize != expectedSize || !g_tex_RHSurfaceGuide.IsValid() ) return;
+    if ( memcmp( g_RHSurfaceGuideData, pData, expectedSize ) == 0 )
+        return;
     memcpy( g_RHSurfaceGuideData, pData, expectedSize );
     g_tex_RHSurfaceGuide->Download();
 }
+
+ITexture *GetDefRT_RHSurfaceCache() { Assert( g_tex_RHSurfaceCache.IsValid() ); return g_tex_RHSurfaceCache; }
+ITexture *GetDefRT_RHOpenSky() { Assert( g_tex_RHOpenSky.IsValid() ); return g_tex_RHOpenSky; }
+ITexture *GetDefRT_RHShadowGeometry32() { Assert( g_tex_RHShadowGeometry32.IsValid() ); return g_tex_RHShadowGeometry32; }
+ITexture *GetDefRT_RHShadowDistance32() { Assert( g_tex_RHShadowDistance32.IsValid() ); return g_tex_RHShadowDistance32; }
+ITexture *GetDefRT_RHShadowGeometry16() { Assert( g_tex_RHShadowGeometry16.IsValid() ); return g_tex_RHShadowGeometry16; }
+ITexture *GetDefRT_RHShadowDistance16() { Assert( g_tex_RHShadowDistance16.IsValid() ); return g_tex_RHShadowDistance16; }
+ITexture *GetDefRT_RHHierarchy( int level, int channel )
+{
+    Assert( level >= 0 && level < 3 ); Assert( channel >= 0 && channel < 3 );
+    Assert( g_tex_RHHierarchy[level][channel].IsValid() ); return g_tex_RHHierarchy[level][channel];
+}
+ITexture *GetDefRT_RHHierarchyEnergy( int level )
+{
+    Assert( level >= 0 && level < 2 );
+    Assert( g_tex_RHHierarchyEnergy[level].IsValid() );
+    return g_tex_RHHierarchyEnergy[level];
+}
+
+#define RH_UPDATE_BYTES( FUNC, TEX, DATA, SIZEEXPR ) \
+void FUNC( const unsigned char *pData, int nDataSize ) \
+{ \
+    const int expectedSize = (SIZEEXPR); \
+    Assert( pData != NULL ); Assert( nDataSize == expectedSize ); \
+    if ( pData == NULL || nDataSize != expectedSize || !(TEX).IsValid() ) return; \
+    if ( memcmp( DATA, pData, expectedSize ) == 0 ) return; \
+    memcpy( DATA, pData, expectedSize ); (TEX)->Download(); \
+}
+RH_UPDATE_BYTES( UpdateDefRT_RHSurfaceCache, g_tex_RHSurfaceCache, g_RHSurfaceCacheData, RH_ATLAS_WIDTH * RH_ATLAS_HEIGHT * 4 )
+RH_UPDATE_BYTES( UpdateDefRT_RHOpenSky, g_tex_RHOpenSky, g_RHOpenSkyData, RH_SKY_CACHE_ATLAS_WIDTH * RH_SKY_CACHE_ATLAS_HEIGHT )
+RH_UPDATE_BYTES( UpdateDefRT_RHShadowGeometry32, g_tex_RHShadowGeometry32, g_RHShadowGeometry32Data, RH_SHADOW_MIP1_ATLAS_WIDTH * RH_SHADOW_MIP1_ATLAS_HEIGHT )
+RH_UPDATE_BYTES( UpdateDefRT_RHShadowDistance32, g_tex_RHShadowDistance32, g_RHShadowDistance32Data, RH_SHADOW_MIP1_ATLAS_WIDTH * RH_SHADOW_MIP1_ATLAS_HEIGHT )
+RH_UPDATE_BYTES( UpdateDefRT_RHShadowGeometry16, g_tex_RHShadowGeometry16, g_RHShadowGeometry16Data, RH_SHADOW_MIP2_ATLAS_WIDTH * RH_SHADOW_MIP2_ATLAS_HEIGHT )
+RH_UPDATE_BYTES( UpdateDefRT_RHShadowDistance16, g_tex_RHShadowDistance16, g_RHShadowDistance16Data, RH_SHADOW_MIP2_ATLAS_WIDTH * RH_SHADOW_MIP2_ATLAS_HEIGHT )
+#undef RH_UPDATE_BYTES
 
 ITexture *GetDefRT_RadianceHints( int setIndex, int channelIndex )
 {

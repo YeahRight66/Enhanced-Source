@@ -47,12 +47,15 @@ float4 RH_LimitSH( float4 sh, float directionalRatio )
 
 float4 RH_LimitRadianceSH( float4 sh )
 {
-    return RH_LimitSH( sh, 1.45f );
+    // A purely directional L1 projection reaches |L1|/DC = sqrt(3).  RH9's
+    // 1.45 hard clamp unnecessarily flattened directional sunlight.  Keep a
+    // small FP16 safety margin but preserve essentially the full legal L1 range.
+    return RH_LimitSH( sh, 1.70f );
 }
 
 float4 RH_LimitVisibilitySH( float4 sh )
 {
-    return RH_LimitSH( sh, 1.60f );
+    return RH_LimitSH( sh, 1.70f );
 }
 
 // L1 real spherical harmonics. Coefficient order: X, Y, Z, DC.
@@ -91,8 +94,10 @@ float3 RH_EvaluateDiffuse( float4 shR, float4 shG, float4 shB, float3 surfaceNor
 
 float RH_EvaluateVisibility( float4 visibilitySH, float3 direction )
 {
-    // A projected directional impulse evaluates to ~0.796 in its own direction.
-    return saturate( dot( visibilitySH, RH_ProjectDirection( direction ) ) * 1.25663706f );
+    // Visibility injection stores an average of SH basis samples. Reconstruct
+    // it as a spherical moment with the matching 4*PI normalization instead of
+    // the historical 0.4*PI tuning constant. Strength is calibrated by the CVar.
+    return saturate( dot( visibilitySH, RH_ProjectDirection( direction ) ) * 12.5663706144f );
 }
 
 float RH_EvaluateVisibilityTwoSided( float4 visibilitySH, float3 direction )
@@ -121,9 +126,11 @@ float RH_MetaConfidence( float4 meta )
     return saturate( meta.x ) * saturate( meta.w );
 }
 
-float RH_MetaBlockerDistance( float4 meta, float maximumDistanceCells )
+float RH_MetaSurfaceProximity( float4 meta )
 {
-    return saturate( meta.y ) * max( maximumDistanceCells, 0.0f );
+    // RH10: additive, all-phase near-surface moment. 0=open/far, 1=near a
+    // well-supported injected surface. This replaces RH9's phase-0-only min.
+    return saturate( meta.y );
 }
 
 float RH_EnergySimilarity( float centerEnergy, float sampleEnergy, float scale )
@@ -187,7 +194,7 @@ float4 RH_SampleAtlas( sampler volumeSampler, float3 uvw )
 }
 
 
-// Dedicated RH8 64^3 visibility field. It shares RH world-normalized UVW with
+// Generic flattened-atlas sampler for RH11 hierarchy levels.  The caller\n// supplies compile-time size constants; legacy FXC folds the arithmetic.\nfloat4 RH_SampleAtlasN( sampler volumeSampler, float3 uvw, float volumeSize, float atlasWidth )\n{\n    uvw = saturate( uvw );\n    float sliceWidth = 1.0f / volumeSize;\n    float atlasTexel = 1.0f / atlasWidth;\n    float volumeTexel = 1.0f / volumeSize;\n    float innerSliceWidth = atlasTexel * ( volumeSize - 1.0f );\n    float innerVolumeHeight = volumeTexel * ( volumeSize - 1.0f );\n    float zPosition = uvw.z * ( volumeSize - 1.0f );\n    float zSlice0 = floor( zPosition );\n    float zSlice1 = min( zSlice0 + 1.0f, volumeSize - 1.0f );\n    float zBlend = frac( zPosition );\n    float xInSlice = atlasTexel * 0.5f + uvw.x * innerSliceWidth;\n    float sampleY = volumeTexel * 0.5f + uvw.y * innerVolumeHeight;\n    float2 uv0 = float2( zSlice0 * sliceWidth + xInSlice, sampleY );\n    float2 uv1 = float2( zSlice1 * sliceWidth + xInSlice, sampleY );\n    float4 sample0 = tex2Dlod( volumeSampler, float4( uv0, 0.0f, 0.0f ) );\n    float4 sample1 = tex2Dlod( volumeSampler, float4( uv1, 0.0f, 0.0f ) );\n    return lerp( sample0, sample1, zBlend );\n}\n\nfloat4 RH_SampleHierarchy20( sampler s, float3 uvw )\n{\n    return RH_SampleAtlasN( s, uvw, RH_HIERARCHY_20_SIZE_F, RH_HIERARCHY_20_ATLAS_WIDTH_F );\n}\nfloat4 RH_SampleHierarchy10( sampler s, float3 uvw )\n{\n    return RH_SampleAtlasN( s, uvw, RH_HIERARCHY_10_SIZE_F, RH_HIERARCHY_10_ATLAS_WIDTH_F );\n}\nfloat4 RH_SampleHierarchy5( sampler s, float3 uvw )\n{\n    return RH_SampleAtlasN( s, uvw, RH_HIERARCHY_5_SIZE_F, RH_HIERARCHY_5_ATLAS_WIDTH_F );\n}\nfloat4 RH_SampleShadowMip32( sampler s, float3 uvw )\n{\n    return RH_SampleAtlasN( s, uvw, RH_SHADOW_MIP1_SIZE_F, RH_SHADOW_MIP1_ATLAS_WIDTH_F );\n}\nfloat4 RH_SampleShadowMip16( sampler s, float3 uvw )\n{\n    return RH_SampleAtlasN( s, uvw, RH_SHADOW_MIP2_SIZE_F, RH_SHADOW_MIP2_ATLAS_WIDTH_F );\n}\n\n// Dedicated RH8 64^3 visibility field. It shares RH world-normalized UVW with
 // the 40^3 radiance grid but uses a different flattened atlas layout.
 float4 RH_SampleShadowAtlas( sampler volumeSampler, float3 uvw )
 {

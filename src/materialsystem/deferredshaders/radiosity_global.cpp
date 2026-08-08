@@ -4,13 +4,14 @@
 #include "radiosity_gen_global_ps30.inc"
 #include "radiosity_gen_vs30.inc"
 
-BEGIN_VS_SHADER( RADIOSITY_GLOBAL, "RH 9.0 adaptive 16-sample sun/hemisphere and surface injection" )
+BEGIN_VS_SHADER( RADIOSITY_GLOBAL, "RH 10/11 adaptive sun/sky injection with relocation and open-sky cache" )
     BEGIN_SHADER_PARAMS
         SHADER_PARAM( RSMALBEDO, SHADER_PARAM_TYPE_TEXTURE, "", "Raw RSM material albedo" )
         SHADER_PARAM( GEOMETRY, SHADER_PARAM_TYPE_TEXTURE, "", "RH geometry occupancy" )
         SHADER_PARAM( DISTANCE, SHADER_PARAM_TYPE_TEXTURE, "", "RH geometry distance field" )
         SHADER_PARAM( SHADOWDISTANCE, SHADER_PARAM_TYPE_TEXTURE, "", "RH8 64^3 Euclidean distance field" )
         SHADER_PARAM( SURFACEGUIDE, SHADER_PARAM_TYPE_TEXTURE, "", "RH9 SDF-derived surface normal/coverage guide" )
+        SHADER_PARAM( OPENSKY, SHADER_PARAM_TYPE_TEXTURE, "", "RH10 cached Source SURF_SKY visibility" )
         SHADER_PARAM( SURFACEMODE, SHADER_PARAM_TYPE_INTEGER, "0", "0=sun radiance, 1=surface attributes, 2=hemisphere sky" )
         SHADER_PARAM( SAMPLEPHASE, SHADER_PARAM_TYPE_INTEGER, "0", "0..3=four-sample stratified sun phases; sky/surface use 0..1" )
     END_SHADER_PARAMS
@@ -29,6 +30,7 @@ BEGIN_VS_SHADER( RADIOSITY_GLOBAL, "RH 9.0 adaptive 16-sample sun/hemisphere and
         LoadTexture( DISTANCE );
         LoadTexture( SHADOWDISTANCE );
         LoadTexture( SURFACEGUIDE );
+        LoadTexture( OPENSKY );
     }
     SHADER_FALLBACK { return 0; }
 
@@ -54,6 +56,7 @@ BEGIN_VS_SHADER( RADIOSITY_GLOBAL, "RH 9.0 adaptive 16-sample sun/hemisphere and
             pShaderShadow->EnableTexture( SHADER_SAMPLER5, true );
             pShaderShadow->EnableTexture( SHADER_SAMPLER6, true );
             pShaderShadow->EnableTexture( SHADER_SAMPLER7, true );
+            pShaderShadow->EnableTexture( SHADER_SAMPLER8, true );
 
             int texCoordDimensions[] = { 2 };
             pShaderShadow->VertexShaderVertexFormat(
@@ -87,6 +90,7 @@ BEGIN_VS_SHADER( RADIOSITY_GLOBAL, "RH 9.0 adaptive 16-sample sun/hemisphere and
             BindTexture( SHADER_SAMPLER5, DISTANCE );
             BindTexture( SHADER_SAMPLER6, SHADOWDISTANCE );
             BindTexture( SHADER_SAMPLER7, SURFACEGUIDE );
+            BindTexture( SHADER_SAMPLER8, OPENSKY );
 
             pShaderAPI->SetPixelShaderConstant( 0, data.matWorldToRSM.Base(), 4 );
             pShaderAPI->SetPixelShaderConstant( 4, data.matRSMToWorld.Base(), 4 );
@@ -113,6 +117,10 @@ BEGIN_VS_SHADER( RADIOSITY_GLOBAL, "RH 9.0 adaptive 16-sample sun/hemisphere and
             ConVarRef adaptiveGatherFar( "deferred_rh_adaptive_gather_far" );
             ConVarRef relocation( "deferred_rh_cell_relocation" );
             ConVarRef surfaceCacheEnable( "deferred_rh_surface_cache_enable" );
+            ConVarRef relocationClearance( "deferred_rh_relocation_clearance" );
+            ConVarRef kernelEnergy( "deferred_rh_rsm_kernel_energy" );
+            ConVarRef skyCacheEnable( "deferred_rh_sky_cache_enable" );
+            ConVarRef skyCacheBlend( "deferred_rh_sky_cache_blend" );
 
             const float cell = MAX( cellSize.GetFloat(), 1.0f );
             const float legacyWorldRadius = worldSpread.GetFloat();
@@ -166,6 +174,20 @@ BEGIN_VS_SHADER( RADIOSITY_GLOBAL, "RH 9.0 adaptive 16-sample sun/hemisphere and
             pShaderAPI->SetPixelShaderConstant( 14, adaptive );
             float surfaceGuide[4] = { surfaceCacheEnable.GetBool() ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f };
             pShaderAPI->SetPixelShaderConstant( 15, surfaceGuide );
+
+            const Vector &shadowOrigin = data.vecOrigin[1];
+            const float invExtent = 1.0f / MAX( cell * RH_VOLUME_SIZE, 1.0f );
+            float shadowOffset[4] = {
+                ( origin.x - shadowOrigin.x ) * invExtent,
+                ( origin.y - shadowOrigin.y ) * invExtent,
+                ( origin.z - shadowOrigin.z ) * invExtent,
+                0.0f
+            };
+            pShaderAPI->SetPixelShaderConstant( 16, shadowOffset );
+            float stage10[4] = { clamp( relocationClearance.GetFloat(), 0.0f, 1.5f ),
+                clamp( kernelEnergy.GetFloat(), 0.0f, 2.0f ), skyCacheEnable.GetBool() ? 1.0f : 0.0f,
+                clamp( skyCacheBlend.GetFloat(), 0.0f, 1.0f ) };
+            pShaderAPI->SetPixelShaderConstant( 17, stage10 );
         }
 
         Draw();

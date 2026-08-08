@@ -94,6 +94,21 @@ extern ConVar deferred_rh_adaptive_diffusion;
 extern ConVar deferred_rh_adaptive_diffusion_near;
 extern ConVar deferred_rh_adaptive_diffusion_far;
 
+// RH10/11 integrated surface, sky and hierarchy controls.
+extern ConVar deferred_rh_surface_material_cache;
+extern ConVar deferred_rh_surface_material_scale;
+extern ConVar deferred_rh_cell_classification;
+extern ConVar deferred_rh_relocation_clearance;
+extern ConVar deferred_rh_receiver_visibility_weight;
+extern ConVar deferred_rh_rsm_kernel_energy;
+extern ConVar deferred_rh_sky_cache_enable;
+extern ConVar deferred_rh_sky_cache_blend;
+extern ConVar deferred_rh_sky_cache_trace_distance;
+extern ConVar deferred_rh_hierarchy_enable;
+extern ConVar deferred_rh_hierarchy_diffusion_blend;
+extern ConVar deferred_rh_hierarchy_receiver_fill;
+extern ConVar deferred_rh_shadow_hierarchy_enable;
+
 extern ConVar deferred_rh_debug_mode;
 
 // Compatibility aliases retained for old configs; RH7 no longer uses them

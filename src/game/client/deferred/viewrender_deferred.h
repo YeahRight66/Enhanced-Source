@@ -60,13 +60,17 @@ private:
 	void PerformRadiositySurface();
 	void PerformRadiosityVisibility();
 	void PerformRadiosityFilter();
+	void PerformRadiosityHierarchy( bool bCombined );
 	void UpdateRadiosityGeometry();
 	void BuildRadiosityDistanceField();
-	unsigned char BuildRadiosityStaticCell( const Vector &cellCenter, float cellSize ) const;
+	unsigned char BuildRadiosityStaticCell( const Vector &cellCenter, float cellSize, unsigned char *pSurfaceRGBA ) const;
 	void StampRadiosityDynamicModels( const Vector &origin, float cellSize );
 	void UpdateRadiosityShadowGeometry();
 	void BuildRadiosityShadowDistanceField();
 	void BuildRadiositySurfaceGuide();
+	void BuildRadiosityShadowHierarchy();
+	void UpdateRadiosityOpenSky();
+	unsigned char BuildRadiosityOpenSkyCell( const Vector &cellCenter ) const;
 	unsigned char BuildRadiosityShadowStaticCell( const Vector &cellCenter, float cellSize ) const;
 	void StampRadiosityShadowDynamicModels( const Vector &origin, float cellSize );
 	void EndRadiosity( const CViewSetup &view );
@@ -75,10 +79,13 @@ private:
 	void RenderCascadedShadows( const CViewSetup &view );
 
 	IMesh *GetRadianceHintsVolumeMesh();
+	IMesh *GetRadianceHintsHierarchyMesh( int level );
 	IMesh *CreateRadianceHintsVolumeMesh();
+	IMesh *CreateRadianceHintsVolumeMeshSize( int volumeSize );
 
 	Vector m_vecRadiosityOrigin[2];
 	IMesh *m_pMesh_RadianceHintsVolume;
+	IMesh *m_pMesh_RadianceHintsHierarchy[3];
 	bool m_bRadianceHintsInjected;
 	bool m_bRadianceHintsOriginValid;
 	float m_flRadianceHintsCellSize;
@@ -89,14 +96,27 @@ private:
 	CUtlVector< unsigned char > m_RHStaticGeometry;
 	CUtlVector< unsigned char > m_RHCombinedGeometry;
 	CUtlVector< unsigned char > m_RHGeometryDistance;
+	CUtlVector< unsigned char > m_RHStaticSurfaceCache;
+	CUtlVector< unsigned char > m_RHSurfaceCacheScratch;
 
 	Vector m_vecRHShadowGeometryOrigin;
 	float m_flRHShadowGeometryCellSize;
 	bool m_bRHShadowGeometryValid;
 	CUtlVector< unsigned char > m_RHShadowStaticGeometry;
 	CUtlVector< unsigned char > m_RHShadowCombinedGeometry;
-	CUtlVector< unsigned char > m_RHShadowGeometryDistance;
+	CUtlVector< unsigned char > m_RHShadowGeometryDistance;   // static Euclidean SDF
+	CUtlVector< unsigned char > m_RHShadowCombinedDistance;   // static SDF + dynamic OBB proximity
 	CUtlVector< unsigned char > m_RHSurfaceGuide;
+	CUtlVector< unsigned char > m_RHShadowGeometry32;
+	CUtlVector< unsigned char > m_RHShadowDistance32;
+	CUtlVector< unsigned char > m_RHShadowGeometry16;
+	CUtlVector< unsigned char > m_RHShadowDistance16;
+
+	Vector m_vecRHOpenSkyOrigin;
+	float m_flRHOpenSkyCellSize;
+	bool m_bRHOpenSkyValid;
+	CUtlVector< unsigned char > m_RHOpenSky;
+	CUtlVector< unsigned char > m_RHOpenSkyScratch;
 };
 
 

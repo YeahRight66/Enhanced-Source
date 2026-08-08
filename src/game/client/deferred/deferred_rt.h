@@ -32,11 +32,25 @@ ITexture *GetDefRT_RHShadowGeometry();
 ITexture *GetDefRT_RHShadowDistance();
 ITexture *GetDefRT_RHSurfaceGuide();
 ITexture *GetDefRT_RHShadowHalf();
+ITexture *GetDefRT_RHSurfaceCache();
+ITexture *GetDefRT_RHOpenSky();
+ITexture *GetDefRT_RHShadowGeometry32();
+ITexture *GetDefRT_RHShadowDistance32();
+ITexture *GetDefRT_RHShadowGeometry16();
+ITexture *GetDefRT_RHShadowDistance16();
+ITexture *GetDefRT_RHHierarchy( int level, int channel );
+ITexture *GetDefRT_RHHierarchyEnergy( int level ); // 0=10^3, 1=5^3
 void UpdateDefRT_RHGeometry( const unsigned char *pData, int nDataSize );
 void UpdateDefRT_RHGeometryDistance( const unsigned char *pData, int nDataSize );
 void UpdateDefRT_RHShadowGeometry( const unsigned char *pData, int nDataSize );
 void UpdateDefRT_RHShadowDistance( const unsigned char *pData, int nDataSize );
 void UpdateDefRT_RHSurfaceGuide( const unsigned char *pData, int nDataSize );
+void UpdateDefRT_RHSurfaceCache( const unsigned char *pData, int nDataSize );
+void UpdateDefRT_RHOpenSky( const unsigned char *pData, int nDataSize );
+void UpdateDefRT_RHShadowGeometry32( const unsigned char *pData, int nDataSize );
+void UpdateDefRT_RHShadowDistance32( const unsigned char *pData, int nDataSize );
+void UpdateDefRT_RHShadowGeometry16( const unsigned char *pData, int nDataSize );
+void UpdateDefRT_RHShadowDistance16( const unsigned char *pData, int nDataSize );
 
 ITexture *GetDefRT_RadianceHints( int setIndex, int channelIndex );
 // Compatibility aliases used by the existing deferred extension/debug code.

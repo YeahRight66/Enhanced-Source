@@ -65,7 +65,7 @@ ConVar deferred_rh_visibility_outer(
     "Directional blocker falloff radius, in RH cell units." );
 
 ConVar deferred_rh_visibility_strength(
-    "deferred_rh_visibility_strength", "1.25", FCVAR_ARCHIVE,
+    "deferred_rh_visibility_strength", "0.32", FCVAR_ARCHIVE,
     "Amplitude of the directional blocker field." );
 
 ConVar deferred_rh_visibility_decay(
@@ -155,20 +155,20 @@ ConVar deferred_rh_bounce_trace_width(
     "Cone width used while testing blockers during secondary transport." );
 
 ConVar deferred_rh_bounce_min_confidence(
-    "deferred_rh_bounce_min_confidence", "0.03", FCVAR_ARCHIVE,
+    "deferred_rh_bounce_min_confidence", "0.015", FCVAR_ARCHIVE,
     "Minimum filtered-cell confidence accepted by secondary transport." );
 
 // Jason-style low-energy RH diffusion layered on top of the physically generated
 // surface bounce. This is intentionally weak: it fills sparse low-frequency
 // regions without becoming the primary transport model.
 ConVar deferred_rh_diffusion_gain(
-    "deferred_rh_diffusion_gain", "0.065", FCVAR_ARCHIVE,
+    "deferred_rh_diffusion_gain", "0.10", FCVAR_ARCHIVE,
     "Low-energy RH diffusion gain added to the physical secondary bounce." );
 ConVar deferred_rh_diffusion_radius(
     "deferred_rh_diffusion_radius", "1.85", FCVAR_ARCHIVE,
     "Neighbour sampling radius in RH cells for the Jason-style diffusion layer." );
 ConVar deferred_rh_diffusion_min_confidence(
-    "deferred_rh_diffusion_min_confidence", "0.015", FCVAR_ARCHIVE,
+    "deferred_rh_diffusion_min_confidence", "0.008", FCVAR_ARCHIVE,
     "Minimum first-bounce confidence accepted by the diffusion layer." );
 
 ConVar deferred_rh_receiver_radius(
@@ -224,10 +224,10 @@ ConVar deferred_rh_shadow_extinction(
     "deferred_rh_shadow_extinction", "1.30", FCVAR_ARCHIVE,
     "Optical extinction for low-frequency indirect shadows." );
 ConVar deferred_rh_shadow_start_cells(
-    "deferred_rh_shadow_start_cells", "0.70", FCVAR_ARCHIVE,
+    "deferred_rh_shadow_start_cells", "0.20", FCVAR_ARCHIVE,
     "Distance from the cleared receiver at which the indirect-shadow cone starts." );
 ConVar deferred_rh_shadow_receiver_clearance(
-    "deferred_rh_shadow_receiver_clearance", "0.70", FCVAR_ARCHIVE,
+    "deferred_rh_shadow_receiver_clearance", "0.30", FCVAR_ARCHIVE,
     "Normal-space receiver clearance in RH cells used to avoid floor/wall self-shadowing." );
 ConVar deferred_rh_shadow_contact_strength(
     "deferred_rh_shadow_contact_strength", "1.0", FCVAR_ARCHIVE,
@@ -293,6 +293,51 @@ ConVar deferred_rh_adaptive_diffusion_near(
 ConVar deferred_rh_adaptive_diffusion_far(
     "deferred_rh_adaptive_diffusion_far", "2.50", FCVAR_ARCHIVE,
     "Diffusion radius in radiance cells in open space." );
+
+// RH10 material-aware surface cache, classification and relocation.
+ConVar deferred_rh_surface_material_cache(
+    "deferred_rh_surface_material_cache", "1", FCVAR_ARCHIVE,
+    "Use material-average static surface albedo captured from Source materials." );
+ConVar deferred_rh_surface_material_scale(
+    "deferred_rh_surface_material_scale", "1.0", FCVAR_ARCHIVE,
+    "Scale material-average albedo used by the static RH surface cache." );
+ConVar deferred_rh_cell_classification(
+    "deferred_rh_cell_classification", "1", FCVAR_ARCHIVE,
+    "Classify solid/surface/empty RH cells and reject invalid transport sources." );
+ConVar deferred_rh_relocation_clearance(
+    "deferred_rh_relocation_clearance", "0.55", FCVAR_ARCHIVE,
+    "Desired free-space clearance, in RH cells, for SDF-guided cell relocation." );
+ConVar deferred_rh_receiver_visibility_weight(
+    "deferred_rh_receiver_visibility_weight", "0.85", FCVAR_ARCHIVE,
+    "Reject receiver reconstruction samples separated by nearby blocker geometry." );
+ConVar deferred_rh_rsm_kernel_energy(
+    "deferred_rh_rsm_kernel_energy", "1.0", FCVAR_ARCHIVE,
+    "Energy calibration for the normalized fixed 16-sample RSM disk kernel." );
+
+// Source-aware coarse open-sky cache. SURF_SKY/no-hit rays are considered open.
+ConVar deferred_rh_sky_cache_enable(
+    "deferred_rh_sky_cache_enable", "1", FCVAR_ARCHIVE,
+    "Use a coarse world-space Source sky-visibility cache for RH hemisphere input." );
+ConVar deferred_rh_sky_cache_blend(
+    "deferred_rh_sky_cache_blend", "0.85", FCVAR_ARCHIVE,
+    "Blend cached Source sky visibility over local RH geometry visibility." );
+ConVar deferred_rh_sky_cache_trace_distance(
+    "deferred_rh_sky_cache_trace_distance", "4096", FCVAR_ARCHIVE,
+    "World-space trace distance for the coarse Source sky visibility cache." );
+
+// RH11 radiance and blocker hierarchies.
+ConVar deferred_rh_hierarchy_enable(
+    "deferred_rh_hierarchy_enable", "1", FCVAR_ARCHIVE,
+    "Enable 20^3/10^3/5^3 radiance hierarchy and broad-scale reconstruction." );
+ConVar deferred_rh_hierarchy_diffusion_blend(
+    "deferred_rh_hierarchy_diffusion_blend", "0.55", FCVAR_ARCHIVE,
+    "Blend coarse 20^3 radiance into wide diffusion samples in open space." );
+ConVar deferred_rh_hierarchy_receiver_fill(
+    "deferred_rh_hierarchy_receiver_fill", "0.22", FCVAR_ARCHIVE,
+    "Maximum broad radiance hierarchy fill for low-confidence receiver cells." );
+ConVar deferred_rh_shadow_hierarchy_enable(
+    "deferred_rh_shadow_hierarchy_enable", "1", FCVAR_ARCHIVE,
+    "Use conservative 32^3/16^3 blocker mips for wide/far SDF shadow steps." );
 
 ConVar deferred_rh_debug_mode(
     "deferred_rh_debug_mode", "0", FCVAR_NONE,

@@ -4,7 +4,7 @@
 #include "defconstruct_vs30.inc"
 #include "radiosity_blend_ps30.inc"
 
-BEGIN_VS_SHADER( RADIOSITY_BLEND, "RH 9.1 receiver / high-resolution SDF shadow pass" )
+BEGIN_VS_SHADER( RADIOSITY_BLEND, "RH10/11 visibility-aware receiver / hierarchical SDF shadow pass" )
     BEGIN_SHADER_PARAMS
         SHADER_PARAM( SHR0, SHADER_PARAM_TYPE_TEXTURE, "", "First-bounce red SH" )
         SHADER_PARAM( SHG0, SHADER_PARAM_TYPE_TEXTURE, "", "First-bounce green SH" )
@@ -15,6 +15,11 @@ BEGIN_VS_SHADER( RADIOSITY_BLEND, "RH 9.1 receiver / high-resolution SDF shadow 
         SHADER_PARAM( META0, SHADER_PARAM_TYPE_TEXTURE, "", "First-bounce metadata" )
         SHADER_PARAM( AUXTEXTURE, SHADER_PARAM_TYPE_TEXTURE, "", "Half-resolution shadow visibility or 64^3 shadow occupancy" )
         SHADER_PARAM( SHADOWDISTANCE, SHADER_PARAM_TYPE_TEXTURE, "", "64^3 Euclidean shadow distance field" )
+        SHADER_PARAM( EXTRA0, SHADER_PARAM_TYPE_TEXTURE, "", "RH10/11 auxiliary 0" )
+        SHADER_PARAM( EXTRA1, SHADER_PARAM_TYPE_TEXTURE, "", "RH10/11 auxiliary 1" )
+        SHADER_PARAM( EXTRA2, SHADER_PARAM_TYPE_TEXTURE, "", "RH10/11 auxiliary 2" )
+        SHADER_PARAM( EXTRA3, SHADER_PARAM_TYPE_TEXTURE, "", "RH10/11 auxiliary 3" )
+        SHADER_PARAM( EXTRA4, SHADER_PARAM_TYPE_TEXTURE, "", "RH10/11 auxiliary 4" )
         SHADER_PARAM( PASSMODE, SHADER_PARAM_TYPE_INTEGER, "0", "0=receiver, 1=half-res SDF visibility" )
     END_SHADER_PARAMS
 
@@ -24,6 +29,7 @@ BEGIN_VS_SHADER( RADIOSITY_BLEND, "RH 9.1 receiver / high-resolution SDF shadow 
         LoadTexture( SHR0 ); LoadTexture( SHG0 ); LoadTexture( SHB0 );
         LoadTexture( SHR1 ); LoadTexture( SHG1 ); LoadTexture( SHB1 );
         LoadTexture( META0 ); LoadTexture( AUXTEXTURE ); LoadTexture( SHADOWDISTANCE );
+        LoadTexture( EXTRA0 ); LoadTexture( EXTRA1 ); LoadTexture( EXTRA2 ); LoadTexture( EXTRA3 ); LoadTexture( EXTRA4 );
     }
     SHADER_FALLBACK { return 0; }
 
@@ -46,6 +52,11 @@ BEGIN_VS_SHADER( RADIOSITY_BLEND, "RH 9.1 receiver / high-resolution SDF shadow 
             pShaderShadow->EnableTexture( SHADER_SAMPLER8, true );
             pShaderShadow->EnableTexture( SHADER_SAMPLER9, true );
             pShaderShadow->EnableTexture( SHADER_SAMPLER10, true );
+            pShaderShadow->EnableTexture( SHADER_SAMPLER11, true );
+            pShaderShadow->EnableTexture( SHADER_SAMPLER12, true );
+            pShaderShadow->EnableTexture( SHADER_SAMPLER13, true );
+            pShaderShadow->EnableTexture( SHADER_SAMPLER14, true );
+            pShaderShadow->EnableTexture( SHADER_SAMPLER15, true );
             pShaderShadow->VertexShaderVertexFormat( VERTEX_POSITION, 1, NULL, 0 );
             DECLARE_STATIC_VERTEX_SHADER( defconstruct_vs30 );
             SET_STATIC_VERTEX_SHADER_COMBO( USEWORLDTRANSFORM, 0 );
@@ -62,6 +73,8 @@ BEGIN_VS_SHADER( RADIOSITY_BLEND, "RH 9.1 receiver / high-resolution SDF shadow 
             ConVarRef bounceCount( "deferred_rh_bounce_count" );
             DECLARE_DYNAMIC_PIXEL_SHADER( radiosity_blend_ps30 );
             SET_DYNAMIC_PIXEL_SHADER_COMBO( SECOND_BOUNCE, bounceCount.GetInt() > 0 ? 1 : 0 );
+            ConVarRef shadowHierarchy( "deferred_rh_shadow_hierarchy_enable" );
+            SET_DYNAMIC_PIXEL_SHADER_COMBO( SHADOW_HIERARCHY, ( nPassMode == 1 && shadowHierarchy.GetBool() ) ? 1 : 0 );
             SET_DYNAMIC_PIXEL_SHADER( radiosity_blend_ps30 );
 
             BindTexture( SHADER_SAMPLER0, GetDeferredExt()->GetTexture_Depth() );
@@ -69,6 +82,8 @@ BEGIN_VS_SHADER( RADIOSITY_BLEND, "RH 9.1 receiver / high-resolution SDF shadow 
             BindTexture( SHADER_SAMPLER2, SHR0 ); BindTexture( SHADER_SAMPLER3, SHG0 ); BindTexture( SHADER_SAMPLER4, SHB0 );
             BindTexture( SHADER_SAMPLER5, SHR1 ); BindTexture( SHADER_SAMPLER6, SHG1 ); BindTexture( SHADER_SAMPLER7, SHB1 );
             BindTexture( SHADER_SAMPLER8, META0 ); BindTexture( SHADER_SAMPLER9, AUXTEXTURE ); BindTexture( SHADER_SAMPLER10, SHADOWDISTANCE );
+            BindTexture( SHADER_SAMPLER11, EXTRA0 ); BindTexture( SHADER_SAMPLER12, EXTRA1 ); BindTexture( SHADER_SAMPLER13, EXTRA2 );
+            BindTexture( SHADER_SAMPLER14, EXTRA3 ); BindTexture( SHADER_SAMPLER15, EXTRA4 );
 
             CommitBaseDeferredConstants_Frustum( pShaderAPI, VERTEX_SHADER_SHADER_SPECIFIC_CONST_0 );
             CommitBaseDeferredConstants_Origin( pShaderAPI, 0 );
@@ -101,6 +116,9 @@ BEGIN_VS_SHADER( RADIOSITY_BLEND, "RH 9.1 receiver / high-resolution SDF shadow 
             ConVarRef legacyStart( "deferred_rh_shadow_start_cells" );
             ConVarRef shadowExtinction( "deferred_rh_shadow_extinction" );
             ConVarRef isotropic( "deferred_rh_shadow_isotropic_blend" );
+            ConVarRef receiverVisibilityWeight( "deferred_rh_receiver_visibility_weight" );
+            ConVarRef hierarchyEnable( "deferred_rh_hierarchy_enable" );
+            ConVarRef hierarchyFill( "deferred_rh_hierarchy_receiver_fill" );
 
             const Vector &origin = GetDeferredExt()->GetRadiosityData().vecOrigin[0];
             float c1[4] = { origin.x, origin.y, origin.z, 0.0f }; pShaderAPI->SetPixelShaderConstant( 1, c1 );
@@ -129,6 +147,20 @@ BEGIN_VS_SHADER( RADIOSITY_BLEND, "RH 9.1 receiver / high-resolution SDF shadow 
                 clamp( shadowExtinction.GetFloat(), 0.0f, 3.0f ),
                 clamp( isotropic.GetFloat(), 0.0f, 1.0f ) };
             pShaderAPI->SetPixelShaderConstant( 8, c8 );
+
+            const radiosityData_t &rhData = GetDeferredExt()->GetRadiosityData();
+            const Vector &shadowOrigin = rhData.vecOrigin[1];
+            const float invExtent = 1.0f / MAX( cell * RH_VOLUME_SIZE, 1.0f );
+            float c9[4] = {
+                ( origin.x - shadowOrigin.x ) * invExtent,
+                ( origin.y - shadowOrigin.y ) * invExtent,
+                ( origin.z - shadowOrigin.z ) * invExtent,
+                0.0f
+            };
+            pShaderAPI->SetPixelShaderConstant( 9, c9 );
+            float c10[4] = { clamp( receiverVisibilityWeight.GetFloat(), 0.0f, 1.0f ), hierarchyEnable.GetBool() ? 1.0f : 0.0f,
+                clamp( hierarchyFill.GetFloat(), 0.0f, 1.0f ), 0.0f };
+            pShaderAPI->SetPixelShaderConstant( 10, c10 );
         }
         Draw();
     }

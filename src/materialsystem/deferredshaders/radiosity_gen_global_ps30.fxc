@@ -23,6 +23,11 @@ const float4   g_vecRHSkySurface : register( c13 );
 const float4   g_vecRHAdaptive : register( c14 );
 // x surface-guide enable/blend.
 const float4   g_vecRHSurfaceGuideSettings : register( c15 );
+// xyz = radianceUVW -> independently snapped shadowUVW offset.
+const float3   g_vecRHShadowUVWOffset : register( c16 );
+// x relocation clearance (radiance cells), y RSM kernel-energy scale,
+// z open-sky cache enable, w open-sky cache blend.
+const float4   g_vecRHStage10 : register( c17 );
 
 sampler sRSMFlux       : register( s0 );
 sampler sRSMNormal     : register( s1 );
@@ -32,6 +37,7 @@ sampler sGeometry      : register( s4 );
 sampler sGeometryDist  : register( s5 );
 sampler sShadowDist    : register( s6 );
 sampler sSurfaceGuide  : register( s7 );
+sampler sOpenSky       : register( s8 );
 
 struct PS_INPUT
 {
@@ -121,7 +127,7 @@ float3 RH_ReconstructRSMPosition( float2 uv, float depth )
     shG += rhBasis * rhTransported.g; \
     shB += rhBasis * rhTransported.b; \
     confidenceSum += rhSampleWeight; \
-    nearestDistanceCells = min( nearestDistanceCells, lerp( 65504.0f, rhDistanceCells, step( 1.0e-5f, rhSampleWeight ) ) ); \
+    proximitySum += rhSampleWeight * saturate( 1.0f - rhDistanceCells / max( gatherCellsLocal, 1.0f ) ); \
 }
 #else
 // Five explicit lobes per permutation. The complete sky is assembled by two
@@ -137,7 +143,7 @@ float3 RH_ReconstructRSMPosition( float2 uv, float depth )
     float rhDistanceCells = RH_SampleAtlas( sGeometryDist, rhSampleUVW ).r * 255.0f; \
     float rhProximity = saturate( 1.0f - rhDistanceCells / max( rhTraceCells, 1.0f ) ); \
     float rhOpticalDepth = max( rhBlocker, rhProximity * 0.35f ) * rhSampleCells * rhInside; \
-    float rhVisibility = exp2( -max( g_vecRHSkySurface.x, 0.0f ) * rhOpticalDepth ); \
+    float rhVisibility = exp2( -max( g_vecRHSkySurface.x, 0.0f ) * rhOpticalDepth ) * openSkyVisibility; \
     skyBasis += RH_ProjectDirection( -rhSkyDirection ) * ( WEIGHT * rhVisibility ); \
 }
 
@@ -161,7 +167,11 @@ PS_OUTPUT main( const PS_INPUT In )
     float4 surfaceGuide = RH_SampleAtlas( sSurfaceGuide, In.vVolumeUVW );
     float guideAmount = saturate( surfaceGuide.a ) * saturate( g_vecRHSurfaceGuideSettings.x );
     float3 guideNormal = RH_DecodeSurfaceGuideNormal( surfaceGuide );
-    float3 relocatedUVW = In.vVolumeUVW + guideNormal * ( guideAmount * clamp( g_vecRHAdaptive.w, 0.0f, 0.45f ) / RH_VOLUME_SIZE_F );
+    float shadowDistanceBase = RH_ShadowDistanceCells( sShadowDist, In.vVolumeUVW + g_vecRHShadowUVWOffset );
+    float distanceRadiance = shadowDistanceBase * ( RH_VOLUME_SIZE_F / RH_SHADOW_VOLUME_SIZE_F );
+    float desiredClearance = max( g_vecRHStage10.x, 0.0f );
+    float relocationCells = min( clamp( g_vecRHAdaptive.w, 0.0f, 0.45f ), max( desiredClearance - distanceRadiance, 0.0f ) );
+    float3 relocatedUVW = In.vVolumeUVW + guideNormal * ( guideAmount * relocationCells / RH_VOLUME_SIZE_F );
     float3 cellCenterWS = g_vecGridOrigin + relocatedUVW * g_vecRHSettings.x;
     float4 projected = mul( float4( cellCenterWS, 1.0f ), g_matWorldToRSM );
     float2 centerUV = projected.xy / max( abs( projected.w ), 1.0e-6f );
@@ -189,22 +199,29 @@ PS_OUTPUT main( const PS_INPUT In )
     float4 surfaceGuide = RH_SampleAtlas( sSurfaceGuide, In.vVolumeUVW );
     float guideAmount = saturate( surfaceGuide.a ) * saturate( g_vecRHSurfaceGuideSettings.x );
     float3 guideNormal = RH_DecodeSurfaceGuideNormal( surfaceGuide );
-    float3 relocatedUVW = In.vVolumeUVW + guideNormal * ( guideAmount * clamp( g_vecRHAdaptive.w, 0.0f, 0.45f ) / RH_VOLUME_SIZE_F );
+    float shadowDistanceCells = RH_ShadowDistanceCells( sShadowDist, In.vVolumeUVW + g_vecRHShadowUVWOffset );
+    float distanceRadianceCells = shadowDistanceCells * ( RH_VOLUME_SIZE_F / RH_SHADOW_VOLUME_SIZE_F );
+    float desiredClearance = max( g_vecRHStage10.x, 0.0f );
+    float relocationCells = min( clamp( g_vecRHAdaptive.w, 0.0f, 0.45f ), max( desiredClearance - distanceRadianceCells, 0.0f ) );
+    float3 relocatedUVW = In.vVolumeUVW + guideNormal * ( guideAmount * relocationCells / RH_VOLUME_SIZE_F );
     float3 cellCenterWS = g_vecGridOrigin + relocatedUVW * g_vecRHSettings.x;
     float4 shR = 0.0f;
     float4 shG = 0.0f;
     float4 shB = 0.0f;
     float confidenceSum = 0.0f;
-    float nearestDistanceCells = 65504.0f;
-    float shadowDistanceCells = RH_ShadowDistanceCells( sShadowDist, In.vVolumeUVW );
-    float distanceRadianceCells = shadowDistanceCells * ( RH_VOLUME_SIZE_F / RH_SHADOW_VOLUME_SIZE_F );
+    float proximitySum = 0.0f;
     float adaptiveT = saturate( distanceRadianceCells / 4.0f );
     float adaptiveGatherCells = lerp( max( g_vecRHAdaptive.y, 1.0f ), max( g_vecRHAdaptive.z, 1.0f ), adaptiveT );
     float baseGatherCells = g_vecRHSettings.z / max( g_vecRHSettings.y, 1.0f );
     float gatherCellsLocal = lerp( baseGatherCells, adaptiveGatherCells, saturate( g_vecRHAdaptive.x ) );
     float gatherWorldRadius = gatherCellsLocal * max( g_vecRHSettings.y, 1.0f );
-    float sampleProjectedArea = 2.0f * RH_PI * gatherWorldRadius * gatherWorldRadius
-        / RH_RADIANCE_SAMPLE_COUNT;
+    // The fixed 16-point kernel's radial window has mean 0.6784. Normalize
+    // against that actual stencil instead of assuming the 0.5 mean of an ideal
+    // continuous disk. deferred_rh_rsm_kernel_energy remains an explicit final
+    // calibration scalar for RSM discretization/material conventions.
+    const float RH_KERNEL_RADIAL_MEAN = 0.6784f;
+    float sampleProjectedArea = RH_PI * gatherWorldRadius * gatherWorldRadius
+        * max( g_vecRHStage10.y, 0.0f ) / ( RH_RADIANCE_SAMPLE_COUNT * RH_KERNEL_RADIAL_MEAN );
 
 #if SAMPLE_PHASE == 0
     // Cardinal stratum above the cell centre. Phase 1 is its exact Z reflection.
@@ -246,27 +263,26 @@ PS_OUTPUT main( const PS_INPUT In )
     float normalizedEnergy = saturate(
         RH_RadianceEnergy( Out.vSH_R, Out.vSH_G, Out.vSH_B )
         / max( g_vecRHQuality.y, 0.25f ) );
-#if SAMPLE_PHASE == 0
+    // All four phases contribute to metadata additively. Meta.y is now a stable
+    // near-surface proximity moment instead of a phase-0-only minimum distance.
     Out.vMeta = float4(
         saturate( confidenceSum / RH_RADIANCE_SAMPLE_COUNT ),
-        valid * saturate( nearestDistanceCells / gatherCells ) + ( 1.0f - valid ),
+        saturate( proximitySum / RH_RADIANCE_SAMPLE_COUNT ),
         normalizedEnergy,
         valid );
-#else
-    // Added to phase 0. Distance is retained from the nearest inner-cardinal stratum;
-    // confidence, energy and validity accumulate all later stratified phases.
-    Out.vMeta = float4(
-        saturate( confidenceSum / RH_RADIANCE_SAMPLE_COUNT ),
-        0.0f,
-        normalizedEnergy,
-        valid );
-#endif
 #else
     const float horizontal = 0.9682458366f;
     float skyEnabled = saturate( g_vecRHSkyUpper.w );
     float skyIntensity = max( g_vecRHSkyLower.w, 0.0f ) * skyEnabled;
     float3 upperSky = max( g_vecRHSkyUpper.rgb, 0.0f ) * skyIntensity;
     float3 lowerSky = max( g_vecRHSkyLower.rgb, 0.0f ) * skyIntensity;
+
+    float skyCellWorld = g_vecRHSettings.x / RH_SKY_CACHE_SIZE_F;
+    float3 skyOriginWS = floor( g_vecGridOrigin / max( skyCellWorld, 1.0f ) + 0.5f ) * skyCellWorld;
+    float3 skyCellWS = g_vecGridOrigin + In.vVolumeUVW * g_vecRHSettings.x;
+    float3 skyUVW = ( skyCellWS - skyOriginWS ) / max( g_vecRHSettings.x, 1.0f );
+    float openSky = RH_SampleAtlasN( sOpenSky, skyUVW, RH_SKY_CACHE_SIZE_F, RH_SKY_CACHE_ATLAS_WIDTH_F ).r;
+    float openSkyVisibility = lerp( 1.0f, openSky, saturate( g_vecRHStage10.z ) * saturate( g_vecRHStage10.w ) );
 
     float4 skyBasis = 0.0f;
     float3 skyColour = 0.0f;
@@ -293,7 +309,10 @@ PS_OUTPUT main( const PS_INPUT In )
     float valid = step( 1.0e-5f, skyEnergy );
     Out.vMeta = float4(
         saturate( skyEnergy / max( g_vecRHQuality.y, 0.25f ) ),
-        0.5f,
+        // Meta.y belongs to the sun-RSM nearest-surface estimate.  Sky passes
+        // are additive, so writing 0.5 here previously pushed the field toward
+        // 1.0 every frame and destroyed that semantic.
+        0.0f,
         saturate( skyEnergy / max( g_vecRHQuality.y, 0.25f ) ),
         valid * 0.5f );
 #endif

@@ -1,0 +1,113 @@
+// STATIC: "SOURCE_LEVEL" "0..2"
+// STATIC: "COMBINED" "0..1"
+// RH11 hierarchy reduction. 0: 40->20, 1: 20->10, 2: 10->5.
+
+#include "common_ps_fxc.h"
+#include "radiance_hints_common_fxc.h"
+
+sampler sR0 : register( s0 );
+sampler sG0 : register( s1 );
+sampler sB0 : register( s2 );
+sampler sR1 : register( s3 );
+sampler sG1 : register( s4 );
+sampler sB1 : register( s5 );
+
+// x = second-bounce scale, y = max radiance.
+const float4 g_RHHierarchy : register( c0 );
+
+struct PS_INPUT
+{
+    float3 vVolumeUVW : TEXCOORD0;
+    float2 vAtlasUV   : TEXCOORD1;
+};
+
+struct PS_OUTPUT
+{
+    float4 vR      : COLOR0;
+    float4 vG      : COLOR1;
+    float4 vB      : COLOR2;
+    float4 vEnergy : COLOR3;
+};
+
+float4 RH_HierarchySampleR( float3 uvw )
+{
+#if SOURCE_LEVEL == 0
+    float4 v = RH_SampleAtlas( sR0, uvw );
+#if COMBINED
+    v += RH_SampleAtlas( sR1, uvw ) * max( g_RHHierarchy.x, 0.0f );
+#endif
+    return v;
+#elif SOURCE_LEVEL == 1
+    return RH_SampleHierarchy20( sR0, uvw );
+#else
+    return RH_SampleHierarchy10( sR0, uvw );
+#endif
+}
+float4 RH_HierarchySampleG( float3 uvw )
+{
+#if SOURCE_LEVEL == 0
+    float4 v = RH_SampleAtlas( sG0, uvw );
+#if COMBINED
+    v += RH_SampleAtlas( sG1, uvw ) * max( g_RHHierarchy.x, 0.0f );
+#endif
+    return v;
+#elif SOURCE_LEVEL == 1
+    return RH_SampleHierarchy20( sG0, uvw );
+#else
+    return RH_SampleHierarchy10( sG0, uvw );
+#endif
+}
+float4 RH_HierarchySampleB( float3 uvw )
+{
+#if SOURCE_LEVEL == 0
+    float4 v = RH_SampleAtlas( sB0, uvw );
+#if COMBINED
+    v += RH_SampleAtlas( sB1, uvw ) * max( g_RHHierarchy.x, 0.0f );
+#endif
+    return v;
+#elif SOURCE_LEVEL == 1
+    return RH_SampleHierarchy20( sB0, uvw );
+#else
+    return RH_SampleHierarchy10( sB0, uvw );
+#endif
+}
+
+PS_OUTPUT main( const PS_INPUT In )
+{
+    PS_OUTPUT Out;
+#if SOURCE_LEVEL == 0
+    const float sourceSize = RH_VOLUME_SIZE_F;
+#elif SOURCE_LEVEL == 1
+    const float sourceSize = RH_HIERARCHY_20_SIZE_F;
+#else
+    const float sourceSize = RH_HIERARCHY_10_SIZE_F;
+#endif
+    // Exact 2x2x2 box reduction. The eight child centers sit +/- half a source
+    // cell from the coarse-cell center. Fixed expansion is deliberate for FXC.
+    float o = 0.5f / sourceSize;
+    float3 p = In.vVolumeUVW;
+#define RH_SUM8( FN ) ( \
+    FN( p + float3(-o,-o,-o) ) + FN( p + float3( o,-o,-o) ) + \
+    FN( p + float3(-o, o,-o) ) + FN( p + float3( o, o,-o) ) + \
+    FN( p + float3(-o,-o, o) ) + FN( p + float3( o,-o, o) ) + \
+    FN( p + float3(-o, o, o) ) + FN( p + float3( o, o, o) ) ) * 0.125f
+    float4 shR = RH_SUM8( RH_HierarchySampleR );
+    float4 shG = RH_SUM8( RH_HierarchySampleG );
+    float4 shB = RH_SUM8( RH_HierarchySampleB );
+#undef RH_SUM8
+
+    shR = RH_LimitRadianceSH( shR );
+    shG = RH_LimitRadianceSH( shG );
+    shB = RH_LimitRadianceSH( shB );
+
+    const float RH_Y00 = 0.2820947918f;
+    float3 averageRadiance = max( float3( shR.w, shG.w, shB.w ) * RH_Y00, 0.0f );
+    float maximumValue = max( g_RHHierarchy.y, 0.25f );
+    averageRadiance = min( averageRadiance, maximumValue );
+
+    Out.vR = shR;
+    Out.vG = shG;
+    Out.vB = shB;
+    Out.vEnergy = float4( averageRadiance, RH_DirectionalConfidence( shR, shG, shB ) );
+    return Out;
+}

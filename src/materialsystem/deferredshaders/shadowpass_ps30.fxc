@@ -102,14 +102,27 @@ PS_OUTPUT main( const PS_INPUT In )
 	lightDirection = lerp( float3( 0.0f, 0.0f, 1.0f ), lightDirection, lightValid );
 
 	float directCosine = saturate( dot( normal, lightDirection ) );
-	// Store Lambertian exitant radiance. Injection integrates this over the
-	// projected RSM area; the sun cosine belongs here while the separate
-	// emitter-to-cell cosine belongs to the transport geometry term.
-	float3 reflectedRadiance = max( albedo.rgb, 0.0f )
-		* max( g_vecRHLightDiffuse, 0.0f ) * ( directCosine * 0.3183098862f );
-	Out.vColor_1 = float4( min( reflectedRadiance, 60000.0f ), saturate( albedo.a ) );
+	// The RSM is sampled in the light's *projected* area domain. A texel covers
+	// dA_projected = dA_surface * NdotL, so the NdotL in Lambertian exitant
+	// radiance cancels when converting the sampled projected area back to surface
+	// area during RH injection. Store albedo * sunIrradiance / PI and use alpha as
+	// a sun-facing validity mask; injection applies only the emitter-to-cell cosine.
+	float sunFacing = step( 1.0e-4f, directCosine );
+	// Opaque Source materials frequently repurpose base-texture alpha as a mask
+	// (phong/envmap/self-illum workflows).  It is not geometric coverage.  Using
+	// albedo.a here silently discarded perfectly opaque RH emitters/surfaces.
+	// Only alpha-tested permutations use texture alpha as coverage.
+#if ALPHATEST
+	float rhSurfaceCoverage = step( g_flAlphaRef, albedo.a );
+#else
+	float rhSurfaceCoverage = 1.0f;
+#endif
+	float3 projectedRadianceDensity = max( albedo.rgb, 0.0f )
+		* max( g_vecRHLightDiffuse, 0.0f ) * 0.3183098862f;
+	Out.vColor_1 = float4( min( projectedRadianceDensity, 60000.0f ),
+		rhSurfaceCoverage * sunFacing );
 	Out.vColor_2 = float4( normal * 0.5f + 0.5f, 1.0f );
-	Out.vColor_3 = float4( max( albedo.rgb, 0.0f ), saturate( albedo.a ) );
+	Out.vColor_3 = float4( max( albedo.rgb, 0.0f ), rhSurfaceCoverage );
 #endif
 
 #if ALPHATEST
