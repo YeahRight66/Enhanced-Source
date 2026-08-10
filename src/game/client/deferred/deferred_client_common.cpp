@@ -21,8 +21,10 @@ ConVar deferred_override_globalLight_diffuse( "deferred_override_globalLight_dif
 ConVar deferred_override_globalLight_ambient_high( "deferred_override_globalLight_ambient_high", "0 0.04 0.08" );
 ConVar deferred_override_globalLight_ambient_low( "deferred_override_globalLight_ambient_low", "0 0.07 0.09" );
 
-ConVar deferred_radiosity_enable( "deferred_radiosity_enable", "0" );
-ConVar deferred_radiosity_debug( "deferred_radiosity_debug", "0" );
+ConVar deferred_radiosity_enable( "deferred_radiosity_enable", "1", FCVAR_ARCHIVE,
+	"Compatibility alias: master-enable daylight GI." );
+ConVar deferred_radiosity_debug( "deferred_radiosity_debug", "0", FCVAR_NONE,
+	"Compatibility alias: show first-bounce daylight GI, bounds, and statistics." );
 
 #include "deferred/deferred_radiance_hints_convars.inc"
 

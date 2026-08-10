@@ -9,8 +9,7 @@ sampler sSH_R       : register( s0 );
 sampler sSH_G       : register( s1 );
 sampler sSH_B       : register( s2 );
 sampler sMeta       : register( s3 );
-sampler sVisibility : register( s4 );
-sampler sGeometry   : register( s5 );
+sampler sBlockerField : register( s4 );
 
 // x filter strength, y confidence fill boost, z log-energy similarity,
 // w reliable-cell anchor strength.
@@ -20,6 +19,8 @@ const float4 g_RHFilter : register( c0 );
 const float4 g_RHBlocker : register( c1 );
 // x maximum radiance.
 const float4 g_RHQuality : register( c2 );
+// xyz = radiance boundary UV to independently snapped blocker boundary UV.
+const float3 g_RHBlockerUVWOffset : register( c3 );
 
 struct PS_INPUT
 {
@@ -42,13 +43,13 @@ struct PS_OUTPUT
     float rhInside = RH_InsideVolume( rhSampleUVW ); \
     float4 rhMeta = RH_SampleAtlas( sMeta, rhSampleUVW ); \
     float rhConfidence = RH_MetaConfidence( rhMeta ); \
-    float rhValid = saturate( rhMeta.w ) * step( 1.0e-5f, rhMeta.z ); \
+    float rhValid = step( 1.0e-5f, rhMeta.z ); \
     float rhEnergySimilarity = RH_EnergySimilarity( centerMeta.z, rhMeta.z, g_RHFilter.z ); \
     rhEnergySimilarity = lerp( 1.0f, rhEnergySimilarity, centerConfidence ); \
     float3 rhMidUVW = In.vVolumeUVW + rhDirection * ( 0.5f * g_RHBlocker.w / RH_VOLUME_SIZE_F ); \
-    float rhDirectionalBlocker = RH_EvaluateVisibilityTwoSided( RH_SampleAtlas( sVisibility, rhMidUVW ), rhDirection ); \
-    float rhStaticBlocker = RH_SampleAtlas( sGeometry, rhMidUVW ).r; \
-    float rhBlocker = max( rhDirectionalBlocker, rhStaticBlocker ); \
+    float4 rhField = RH_SampleShadowAtlas( sBlockerField, rhMidUVW + g_RHBlockerUVWOffset ); \
+    float rhDistanceBlocker = saturate( 1.0f - RH_BlockerDistanceCells( rhField ) / 0.55f ); \
+    float rhBlocker = RH_BlockerOpacity( rhField ) * rhDistanceBlocker; \
     float rhBias = clamp( g_RHBlocker.y, 0.0f, 0.95f ); \
     rhBlocker = saturate( ( rhBlocker - rhBias ) / max( 1.0f - rhBias, 0.05f ) ); \
     float rhTransmittance = max( exp2( -4.0f * max( g_RHBlocker.x, 0.0f ) * rhBlocker ), saturate( g_RHBlocker.z ) ); \
@@ -61,6 +62,7 @@ struct PS_OUTPUT
     confidenceSum += rhConfidence * rhWeight; \
     distanceSum += rhMeta.y * rhWeight; \
     energySum += rhMeta.z * rhWeight; \
+    visibilitySum += rhMeta.w * rhWeight; \
     weightSum += rhWeight; \
 }
 
@@ -73,8 +75,9 @@ PS_OUTPUT main( const PS_INPUT In )
     // below the old ps_3_0 compiler's texture/instruction pressure threshold.
     float4 centerMeta = tex2Dlod( sMeta, float4( In.vAtlasUV, 0.0f, 0.0f ) );
     float centerConfidence = RH_MetaConfidence( centerMeta );
+    float centerValid = step( 1.0e-5f, centerMeta.z );
     float centerAnchor = lerp( 1.0f, 2.25f, saturate( g_RHFilter.w ) * centerConfidence );
-    float centerWeight = lerp( 0.12f, 1.0f + centerConfidence * centerAnchor, saturate( centerMeta.w ) );
+    float centerWeight = lerp( 0.12f, 1.0f + centerConfidence * centerAnchor, centerValid );
 
     float4 sumR = RH_LimitRadianceSH( tex2Dlod( sSH_R, float4( In.vAtlasUV, 0.0f, 0.0f ) ) ) * centerWeight;
     float4 sumG = RH_LimitRadianceSH( tex2Dlod( sSH_G, float4( In.vAtlasUV, 0.0f, 0.0f ) ) ) * centerWeight;
@@ -82,6 +85,7 @@ PS_OUTPUT main( const PS_INPUT In )
     float confidenceSum = centerConfidence * centerWeight;
     float distanceSum = centerMeta.y * centerWeight;
     float energySum = centerMeta.z * centerWeight;
+    float visibilitySum = centerMeta.w * centerWeight;
     float weightSum = centerWeight;
 
 #if FILTER_PHASE == 0
@@ -105,11 +109,10 @@ PS_OUTPUT main( const PS_INPUT In )
     float outputEnergy = saturate(
         RH_RadianceEnergy( Out.vSH_R, Out.vSH_G, Out.vSH_B )
         / max( g_RHQuality.x, 0.25f ) );
-    float valid = step( 1.0e-5f, outputEnergy );
     Out.vMeta = float4(
         confidence,
         saturate( distanceSum * inverseWeight ),
         max( outputEnergy, saturate( energySum * inverseWeight ) * 0.20f ),
-        valid );
+        saturate( visibilitySum * inverseWeight ) );
     return Out;
 }

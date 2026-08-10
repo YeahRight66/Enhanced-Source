@@ -102,27 +102,62 @@ struct volumeData_t
 #endif
 };
 
-struct radiosityData_t
+enum DaylightGIClip_t
 {
-    radiosityData_t()
+    DAYLIGHT_GI_CLIP_NEAR = 0,
+    DAYLIGHT_GI_CLIP_FAR,
+    DAYLIGHT_GI_CLIP_COUNT
+};
+
+enum
+{
+    DAYLIGHT_GI_WORK_SET_COUNT = 3,
+    DAYLIGHT_GI_SH_CHANNEL_COUNT = 4
+};
+
+struct daylightGIClipDesc_t
+{
+    daylightGIClipDesc_t()
     {
-        vecOrigin[0].Init();
-        vecOrigin[1].Init();
+        vecRadianceOrigin.Init();
+        flRadianceCellSize = 1.0f;
+        flExtent = 1.0f;
+        vecBlockerOrigin.Init();
+        flBlockerCellSize = 1.0f;
+        flBlockerExtent = 1.0f;
+    }
+
+    Vector vecRadianceOrigin;
+    float flRadianceCellSize;
+    float flExtent;
+    Vector vecBlockerOrigin;
+    float flBlockerCellSize;
+    float flBlockerExtent;
+};
+
+struct daylightGIData_t
+{
+    daylightGIData_t()
+    {
         matWorldToRSM.Identity();
         matRSMToWorld.Identity();
         vecRSMParams.Init();
+        iActiveClip = DAYLIGHT_GI_CLIP_NEAR;
+        nValidClipMask = 0;
     }
 
-    // Kept as a pair for compatibility with older RH callers. RH 4.0 uses [0].
-    Vector vecOrigin[2];
+    daylightGIClipDesc_t clips[ DAYLIGHT_GI_CLIP_COUNT ];
 
     // Native VMatrix layout is uploaded directly and consumed by mul( float4, matrix ).
     VMatrix matWorldToRSM;
     VMatrix matRSMToWorld;
 
     // x = RSM resolution, y = inverse resolution,
-    // z = RSM world-space side length, w = RH cell size.
+    // z = RSM world-space side length, w = active clip cell size.
     Vector4D vecRSMParams;
+
+    int iActiveClip;
+    unsigned int nValidClipMask;
 };
 
 class IDeferredExtension : public IBaseInterface
@@ -145,7 +180,10 @@ public:
 
 	virtual void CommitVolumeData( const volumeData_t &data ) = 0;
 
-	virtual void CommitRadiosityData( const radiosityData_t &data ) = 0;
+	virtual void CommitDaylightGIData( const daylightGIData_t &data ) = 0;
+	virtual void CommitDaylightGIActiveClip( int clip ) = 0;
+	virtual void CommitDaylightGIRSMData( const VMatrix &worldToRSM,
+		const VMatrix &rsmToWorld, const Vector4D &rsmParams ) = 0;
 
 	virtual void CommitLightData_Global( const lightData_Global_t &data ) = 0;
 	virtual float *CommitLightData_Common( float *pFlData, int numRows,
@@ -165,13 +203,16 @@ public:
 	virtual void CommitTexture_ProjectedDepth( const int &index, ITexture *pTexShadowDepth ) = 0;
 	virtual void CommitTexture_Cookie( const int &index, ITexture *pTexCookie ) = 0;
 	virtual void CommitTexture_VolumePrePass( ITexture *pTexVolumePrePass ) = 0;
-	virtual void CommitTexture_ShadowRadOutput_Ortho( ITexture *pAlbedo, ITexture *pNormal ) = 0;
 	virtual void CommitTexture_RadianceHintsRSM( ITexture *pFlux, ITexture *pNormal, ITexture *pDepth ) = 0;
-	virtual void CommitTexture_Radiosity( ITexture *pTexRadBuffer0, ITexture *pTexRadBuffer1,
-		ITexture *pTexRadNormal0, ITexture *pTexRadNormal1 ) = 0;
+	virtual void CommitTexture_DaylightGIRadiance( int clip, int setIndex,
+		ITexture *pSHR, ITexture *pSHG, ITexture *pSHB, ITexture *pMeta ) = 0;
+	virtual void CommitTexture_DaylightGICache( int clip,
+		ITexture *pSurfaceAlbedo, ITexture *pSurfaceNormal, ITexture *pGeometry,
+		ITexture *pBlockerField,
+		ITexture *pSurfaceGuide, ITexture *pSurfaceCache, ITexture *pOpenSky ) = 0;
 };
 
-#define DEFERRED_EXTENSION_VERSION "DeferredExtensionVersion002"
+#define DEFERRED_EXTENSION_VERSION "DeferredExtensionVersion004"
 
 #ifdef STDSHADER_DX9_DLL_EXPORT
 
@@ -199,7 +240,10 @@ public:
 	virtual void CommitShadowData_General( const shadowData_general_t &data );
 
 	virtual void CommitVolumeData( const volumeData_t &data );
-	virtual void CommitRadiosityData( const radiosityData_t &data );
+	virtual void CommitDaylightGIData( const daylightGIData_t &data );
+	virtual void CommitDaylightGIActiveClip( int clip );
+	virtual void CommitDaylightGIRSMData( const VMatrix &worldToRSM,
+		const VMatrix &rsmToWorld, const Vector4D &rsmParams );
 
 	virtual void CommitLightData_Global( const lightData_Global_t &data );
 	virtual float *CommitLightData_Common( float *pFlData, int numRows,
@@ -219,10 +263,13 @@ public:
 	virtual void CommitTexture_ProjectedDepth( const int &index, ITexture *pTexShadowDepth );
 	virtual void CommitTexture_Cookie( const int &index, ITexture *pTexCookie );
 	virtual void CommitTexture_VolumePrePass( ITexture *pTexVolumePrePass );
-	virtual void CommitTexture_ShadowRadOutput_Ortho( ITexture *pAlbedo, ITexture *pNormal );
 	virtual void CommitTexture_RadianceHintsRSM( ITexture *pFlux, ITexture *pNormal, ITexture *pDepth );
-	virtual void CommitTexture_Radiosity( ITexture *pTexRadBuffer0, ITexture *pTexRadBuffer1,
-		ITexture *pTexRadNormal0, ITexture *pTexRadNormal1 );
+	virtual void CommitTexture_DaylightGIRadiance( int clip, int setIndex,
+		ITexture *pSHR, ITexture *pSHG, ITexture *pSHB, ITexture *pMeta );
+	virtual void CommitTexture_DaylightGICache( int clip,
+		ITexture *pSurfaceAlbedo, ITexture *pSurfaceNormal, ITexture *pGeometry,
+		ITexture *pBlockerField,
+		ITexture *pSurfaceGuide, ITexture *pSurfaceCache, ITexture *pOpenSky );
 
 	inline float *GetOriginBase();
 	inline float *GetForwardBase();
@@ -246,7 +293,7 @@ public:
 	inline const shadowData_general_t &GetShadowData_General();
 
 	inline const volumeData_t &GetVolumeData();
-	inline const radiosityData_t &GetRadiosityData();
+	inline const daylightGIData_t &GetDaylightGIData();
 
 	inline const lightData_Global_t &GetLightData_Global();
 
@@ -264,13 +311,17 @@ public:
 	inline ITexture *GetTexture_ShadowDepth_Proj( const int &index );
 	inline ITexture *GetTexture_Cookie( const int &index );
 	inline ITexture *GetTexture_VolumePrePass();
-	inline ITexture *GetTexture_ShadowRad_Ortho_Albedo();
-	inline ITexture *GetTexture_ShadowRad_Ortho_Normal();
 	inline ITexture *GetTexture_RadianceHintsRSMFlux();
 	inline ITexture *GetTexture_RadianceHintsRSMNormal();
 	inline ITexture *GetTexture_RadianceHintsRSMDepth();
-	inline ITexture *GetTexture_RadBuffer( const int &index );
-	inline ITexture *GetTexture_RadNormal( const int &index );
+	inline ITexture *GetTexture_DaylightGIRadiance( int clip, int setIndex, int channel );
+	inline ITexture *GetTexture_DaylightGISurfaceAlbedo( int clip );
+	inline ITexture *GetTexture_DaylightGISurfaceNormal( int clip );
+	inline ITexture *GetTexture_DaylightGIGeometry( int clip );
+	inline ITexture *GetTexture_DaylightGIBlockerField( int clip );
+	inline ITexture *GetTexture_DaylightGISurfaceGuide( int clip );
+	inline ITexture *GetTexture_DaylightGISurfaceCache( int clip );
+	inline ITexture *GetTexture_DaylightGIOpenSky( int clip );
 
 private:
 	bool m_bDefLightingEnabled;
@@ -288,7 +339,7 @@ private:
 	shadowData_general_t m_dataGeneral;
 
 	volumeData_t m_dataVolume;
-	radiosityData_t m_dataRadiosity;
+	daylightGIData_t m_dataDaylightGI;
 
 	lightData_Global_t m_globalLight;
 	float *m_pflCommonLightData;
@@ -312,10 +363,15 @@ private:
 	ITexture *m_pTexShadowDepth_Proj[ MAX_SHADOW_PROJ ];
 	ITexture *m_pTexCookie[ NUM_COOKIE_SLOTS ];
 	ITexture *m_pTexVolumePrePass;
-	ITexture *m_pTexShadowRad_Ortho[ 2 ];
 	ITexture *m_pTexRadianceHintsRSM[ 3 ];
-	ITexture *m_pTexRadBuffer[ 2 ];
-	ITexture *m_pTexRadNormal[ 2 ];
+	ITexture *m_pTexDaylightGIRadiance[ DAYLIGHT_GI_CLIP_COUNT ][ DAYLIGHT_GI_WORK_SET_COUNT ][ DAYLIGHT_GI_SH_CHANNEL_COUNT ];
+	ITexture *m_pTexDaylightGISurfaceAlbedo[ DAYLIGHT_GI_CLIP_COUNT ];
+	ITexture *m_pTexDaylightGISurfaceNormal[ DAYLIGHT_GI_CLIP_COUNT ];
+	ITexture *m_pTexDaylightGIGeometry[ DAYLIGHT_GI_CLIP_COUNT ];
+	ITexture *m_pTexDaylightGIBlockerField[ DAYLIGHT_GI_CLIP_COUNT ];
+	ITexture *m_pTexDaylightGISurfaceGuide[ DAYLIGHT_GI_CLIP_COUNT ];
+	ITexture *m_pTexDaylightGISurfaceCache[ DAYLIGHT_GI_CLIP_COUNT ];
+	ITexture *m_pTexDaylightGIOpenSky[ DAYLIGHT_GI_CLIP_COUNT ];
 };
 
 float *CDeferredExtension::GetOriginBase()
@@ -374,9 +430,9 @@ const volumeData_t &CDeferredExtension::GetVolumeData()
 	return m_dataVolume;
 }
 
-const radiosityData_t &CDeferredExtension::GetRadiosityData()
+const daylightGIData_t &CDeferredExtension::GetDaylightGIData()
 {
-	return m_dataRadiosity;
+	return m_dataDaylightGI;
 }
 
 int CDeferredExtension::GetNumActiveLights_ShadowedCookied()
@@ -454,14 +510,6 @@ ITexture *CDeferredExtension::GetTexture_VolumePrePass()
 {
 	return m_pTexVolumePrePass;
 }
-ITexture *CDeferredExtension::GetTexture_ShadowRad_Ortho_Albedo()
-{
-	return m_pTexShadowRad_Ortho[0];
-}
-ITexture *CDeferredExtension::GetTexture_ShadowRad_Ortho_Normal()
-{
-    return m_pTexShadowRad_Ortho[1];
-}
 ITexture *CDeferredExtension::GetTexture_RadianceHintsRSMFlux()
 {
     return m_pTexRadianceHintsRSM[0];
@@ -474,16 +522,27 @@ ITexture *CDeferredExtension::GetTexture_RadianceHintsRSMDepth()
 {
     return m_pTexRadianceHintsRSM[2];
 }
-ITexture *CDeferredExtension::GetTexture_RadBuffer( const int &index )
+ITexture *CDeferredExtension::GetTexture_DaylightGIRadiance( int clip, int setIndex, int channel )
 {
-	Assert( index >= 0 && index < 2 );
-	return m_pTexRadBuffer[index];
+    Assert( clip >= 0 && clip < DAYLIGHT_GI_CLIP_COUNT );
+    Assert( setIndex >= 0 && setIndex < DAYLIGHT_GI_WORK_SET_COUNT );
+    Assert( channel >= 0 && channel < DAYLIGHT_GI_SH_CHANNEL_COUNT );
+    return m_pTexDaylightGIRadiance[clip][setIndex][channel];
 }
-ITexture *CDeferredExtension::GetTexture_RadNormal( const int &index )
-{
-	Assert( index >= 0 && index < 2 );
-	return m_pTexRadNormal[index];
+#define DAYLIGHT_GI_TEXTURE_GETTER( NAME, MEMBER ) \
+ITexture *CDeferredExtension::NAME( int clip ) \
+{ \
+    Assert( clip >= 0 && clip < DAYLIGHT_GI_CLIP_COUNT ); \
+    return MEMBER[clip]; \
 }
+DAYLIGHT_GI_TEXTURE_GETTER( GetTexture_DaylightGISurfaceAlbedo, m_pTexDaylightGISurfaceAlbedo )
+DAYLIGHT_GI_TEXTURE_GETTER( GetTexture_DaylightGISurfaceNormal, m_pTexDaylightGISurfaceNormal )
+DAYLIGHT_GI_TEXTURE_GETTER( GetTexture_DaylightGIGeometry, m_pTexDaylightGIGeometry )
+DAYLIGHT_GI_TEXTURE_GETTER( GetTexture_DaylightGIBlockerField, m_pTexDaylightGIBlockerField )
+DAYLIGHT_GI_TEXTURE_GETTER( GetTexture_DaylightGISurfaceGuide, m_pTexDaylightGISurfaceGuide )
+DAYLIGHT_GI_TEXTURE_GETTER( GetTexture_DaylightGISurfaceCache, m_pTexDaylightGISurfaceCache )
+DAYLIGHT_GI_TEXTURE_GETTER( GetTexture_DaylightGIOpenSky, m_pTexDaylightGIOpenSky )
+#undef DAYLIGHT_GI_TEXTURE_GETTER
 #endif
 
 #ifdef CLIENT_DLL

@@ -12,5 +12,9 @@
 	"$SHADOWGEOMETRY"		"_rt_rh_shadowgeometry"
 	"$SURFACEALBEDO"		"_rt_rh_surfacealbedo"
 	"$SURFACENORMAL"		"_rt_rh_surfacenormal"
+	"$SURFACECACHE"		"_rt_rh_surfacecache"
+	"$HIER20R"		"_rt_rh_hierarchy20_r"
+	"$HIER20G"		"_rt_rh_hierarchy20_g"
+	"$HIER20B"		"_rt_rh_hierarchy20_b"
 	"$BOUNCEMODE"		"0"
 }

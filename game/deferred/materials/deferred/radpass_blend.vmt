@@ -9,5 +9,10 @@
 	"$META0"		"_rt_rh_meta_00"
 	"$AUXTEXTURE"		"_rt_rh_shadowhalf"
 	"$SHADOWDISTANCE"		"_rt_rh_shadowdistance"
+	"$EXTRA0"		"_rt_rh_hierarchy20_r"
+	"$EXTRA1"		"_rt_rh_hierarchy20_g"
+	"$EXTRA2"		"_rt_rh_hierarchy20_b"
+	"$EXTRA3"		"_rt_rh_hierarchy10_energy"
+	"$EXTRA4"		"_rt_rh_hierarchy5_energy"
 	"$PASSMODE"		"0"
 }

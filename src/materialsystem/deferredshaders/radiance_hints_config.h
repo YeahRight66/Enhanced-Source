@@ -1,9 +1,9 @@
 #ifndef RADIANCE_HINTS_CONFIG_H
 #define RADIANCE_HINTS_CONFIG_H
 
-// Radiance Hints 10/11 integrated surface-cache + hierarchy configuration.
-// This header intentionally overrides legacy RH macros locally. Do not include
-// it from deferred_global_common.h or common_deferred_fxc.h.
+// Two-level daylight GI configuration. This header intentionally overrides
+// legacy RH macros locally. Do not include it from deferred_global_common.h or
+// common_deferred_fxc.h; it must remain valid in both MSVC and FXC.
 
 #ifdef RH_VOLUME_SIZE
 # undef RH_VOLUME_SIZE
@@ -51,6 +51,16 @@
 #define RH_PRESET_BALANCED 0
 #define RH_PRESET_HIGH     1
 
+#define RH_CLIP_LEVEL_COUNT                2
+#define RH_CLIP_NEAR                       0
+#define RH_CLIP_FAR                        1
+#define RH_CLIP_NEAR_CELL_SIZE             20.0f
+#define RH_CLIP_FAR_CELL_SIZE              80.0f
+#define RH_CLIP_NEAR_EXTENT                640.0f
+#define RH_CLIP_FAR_EXTENT                 2560.0f
+#define RH_CLIP_BLEND_CELLS                4.0f
+#define RH_CLIP_FAR_FADE_CELLS             2.0f
+
 #ifndef RH_QUALITY_PRESET
 # define RH_QUALITY_PRESET RH_PRESET_HIGH
 #endif
@@ -68,7 +78,7 @@
 #   define RH_UPSAMPLE_TAP_COUNT          4
 #elif RH_QUALITY_PRESET == RH_PRESET_HIGH
     // GTX 1050 target.
-#   define RH_VOLUME_SIZE                 40
+#   define RH_VOLUME_SIZE                 32
 #   define RH_RSM_RESOLUTION              768
 #   define RH_RADIANCE_SAMPLE_COUNT       16
 #   define RH_VISIBILITY_SAMPLE_COUNT     8
@@ -88,8 +98,8 @@
 #define RH_ATLAS_HEIGHT_F                  ( RH_ATLAS_HEIGHT * 1.0f )
 #define RH_RSM_RESOLUTION_F                ( RH_RSM_RESOLUTION * 1.0f )
 
-// RH8/9 decouples diffuse-radiance resolution from visibility resolution.
-// The 64^3 shadow field covers the exact same world extent as the 40^3 RH grid.
+// Each clip owns an independent 64^3 visibility field covering the exact same
+// world extent as its 32^3 radiance grid.
 #define RH_SHADOW_VOLUME_SIZE              64
 #define RH_SHADOW_VOLUME_SIZE_F            64.0f
 #define RH_SHADOW_ATLAS_WIDTH              ( RH_SHADOW_VOLUME_SIZE * RH_SHADOW_VOLUME_SIZE )
@@ -99,8 +109,8 @@
 #define RH_SHADOW_DISTANCE_MAX_CELLS       16.0f
 #define RH_SHADOW_TRACE_STEPS              6
 
-// RH11 conservative shadow hierarchy. Distances remain encoded in base 64^3
-// shadow-cell units so a shader can switch levels without changing units.
+// Legacy hierarchy dimensions are retained only so the compile-disabled
+// fallback source remains parseable; production GI does not allocate them.
 #define RH_SHADOW_MIP1_SIZE                32
 #define RH_SHADOW_MIP1_SIZE_F              32.0f
 #define RH_SHADOW_MIP1_ATLAS_WIDTH         ( RH_SHADOW_MIP1_SIZE * RH_SHADOW_MIP1_SIZE )
@@ -114,8 +124,8 @@
 #define RH_SHADOW_MIP2_ATLAS_WIDTH_F       ( RH_SHADOW_MIP2_ATLAS_WIDTH * 1.0f )
 #define RH_SHADOW_MIP2_ATLAS_HEIGHT_F      ( RH_SHADOW_MIP2_ATLAS_HEIGHT * 1.0f )
 
-// RH11 radiance hierarchy. Each level stores the same RGB L1 SH convention as
-// the 40^3 volume but downsampled with energy-preserving coefficient averages.
+// Legacy radiance-hierarchy dimensions; not allocated or scheduled by the
+// production two-clip path.
 #define RH_HIERARCHY_20_SIZE               20
 #define RH_HIERARCHY_20_SIZE_F             20.0f
 #define RH_HIERARCHY_20_ATLAS_WIDTH        ( RH_HIERARCHY_20_SIZE * RH_HIERARCHY_20_SIZE )
@@ -137,7 +147,7 @@
 
 // Cached open-sky visibility is intentionally coarse. It is world-space,
 // independent of lighting history, and only refreshes when its 80-unit cells
-// move, avoiding the frame hitch of tracing sky rays for every 40^3 cell.
+// move, avoiding the frame hitch of tracing sky rays for every 32^3 cell.
 #define RH_SKY_CACHE_SIZE                  10
 #define RH_SKY_CACHE_SIZE_F                10.0f
 #define RH_SKY_CACHE_ATLAS_WIDTH           ( RH_SKY_CACHE_SIZE * RH_SKY_CACHE_SIZE )
@@ -149,6 +159,9 @@
 // set 1 stores freshly generated surface bounce, and set 2 stores its
 // geometry-aware transport result. Metadata from set 0 remains authoritative.
 #define RH_SET_COUNT                       3
+#define RH_SET_INJECTION                   0
+#define RH_SET_SURFACE                     1
+#define RH_SET_TRANSPORT                   2
 #define RH_CHANNEL_COUNT                   4
 #define RH_CHANNEL_SH_R                    0
 #define RH_CHANNEL_SH_G                    1
@@ -235,6 +248,9 @@
 #ifdef DEFRTNAME_RH_SHADOW_DISTANCE
 # undef DEFRTNAME_RH_SHADOW_DISTANCE
 #endif
+#ifdef DEFRTNAME_GI_BLOCKER_FIELD
+# undef DEFRTNAME_GI_BLOCKER_FIELD
+#endif
 #ifdef DEFRTNAME_RH_SURFACE_GUIDE
 # undef DEFRTNAME_RH_SURFACE_GUIDE
 #endif
@@ -263,21 +279,22 @@
 #define DEFRTNAME_RH_INDIRECT_HALF         "_rt_RH_IndirectHalf"
 #define DEFRTNAME_RH_SHADOW_GEOMETRY       "_rt_RH_ShadowGeometry"
 #define DEFRTNAME_RH_SHADOW_DISTANCE       "_rt_RH_ShadowDistance"
+#define DEFRTNAME_GI_BLOCKER_FIELD         "_rt_GI_BlockerField"
 #define DEFRTNAME_RH_SURFACE_GUIDE         "_rt_RH_SurfaceGuide"
 #define DEFRTNAME_RH_SHADOW_HALF           "_rt_RH_ShadowHalf"
 #define DEFRTNAME_RH_GEOMETRY              "_rt_RH_Geometry"
 
-// RH10 static material/sky caches.
+// Static material/open-sky caches.
 #define DEFRTNAME_RH_SURFACE_CACHE         "_rt_RH_SurfaceCache"
 #define DEFRTNAME_RH_OPEN_SKY              "_rt_RH_OpenSky10"
 
-// RH11 conservative blocker hierarchy.
+// Compile-disabled legacy blocker-hierarchy names.
 #define DEFRTNAME_RH_SHADOW_GEOMETRY_32    "_rt_RH_ShadowGeometry32"
 #define DEFRTNAME_RH_SHADOW_DISTANCE_32    "_rt_RH_ShadowDistance32"
 #define DEFRTNAME_RH_SHADOW_GEOMETRY_16    "_rt_RH_ShadowGeometry16"
 #define DEFRTNAME_RH_SHADOW_DISTANCE_16    "_rt_RH_ShadowDistance16"
 
-// RH11 RGB L1-SH radiance hierarchy: three channels per level.
+// Compile-disabled legacy radiance-hierarchy names.
 #define DEFRTNAME_RH_HIERARCHY20_R         "_rt_RH_Hierarchy20_R"
 #define DEFRTNAME_RH_HIERARCHY20_G         "_rt_RH_Hierarchy20_G"
 #define DEFRTNAME_RH_HIERARCHY20_B         "_rt_RH_Hierarchy20_B"

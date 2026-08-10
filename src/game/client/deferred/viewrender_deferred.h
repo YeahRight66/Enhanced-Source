@@ -4,6 +4,7 @@
 #include "viewrender.h"
 
 #include "deferred/deferred_shared_common.h"
+#include "../../../materialsystem/deferredshaders/radiance_hints_config.h"
 #include "tier1/utlvector.h"
 
 
@@ -55,68 +56,72 @@ private:
 	void BeginRadiosity( const CViewSetup &view );
 	void UpdateRadiosityPosition();
 	void RenderRadianceHintsRSM( const CViewSetup &view );
-	void PerformRadiosityGlobal();
-	void PerformRadiositySky();
-	void PerformRadiositySurface();
-	void PerformRadiosityVisibility();
-	void PerformRadiosityFilter();
-	void PerformRadiosityHierarchy( bool bCombined );
-	void UpdateRadiosityGeometry();
-	void BuildRadiosityDistanceField();
-	unsigned char BuildRadiosityStaticCell( const Vector &cellCenter, float cellSize, unsigned char *pSurfaceRGBA ) const;
-	void StampRadiosityDynamicModels( const Vector &origin, float cellSize );
-	void UpdateRadiosityShadowGeometry();
-	void BuildRadiosityShadowDistanceField();
-	void BuildRadiositySurfaceGuide();
-	void BuildRadiosityShadowHierarchy();
-	void UpdateRadiosityOpenSky();
+	void PerformRadiosityGlobal( int clip );
+	void PerformRadiositySky( int clip );
+	void PerformRadiositySurface( int clip );
+	void PerformRadiosityFilter( int clip );
+	void UpdateRadiosityGeometry( int clip );
+	unsigned char BuildRadiosityStaticCell( const Vector &cellCenter, float cellSize,
+		unsigned char *pSurfaceRGBA, unsigned char *pSurfaceGuideRGBA ) const;
+	void StampRadiosityDynamicModels( int clip, const Vector &origin, float cellSize );
+	void UpdateRadiosityShadowGeometry( int clip );
+	void BuildRadiosityShadowDistanceField( int clip );
+	void BuildRadiosityStaticBlockerField( int clip );
+	void BuildRadiositySurfaceGuide( int clip );
+	void UpdateRadiosityOpenSky( int clip );
 	unsigned char BuildRadiosityOpenSkyCell( const Vector &cellCenter ) const;
-	unsigned char BuildRadiosityShadowStaticCell( const Vector &cellCenter, float cellSize ) const;
-	void StampRadiosityShadowDynamicModels( const Vector &origin, float cellSize );
+	unsigned char BuildRadiosityShadowStaticCell( const Vector &cellCenter, float cellSize,
+		unsigned char *pTraceNormal ) const;
+	void StampRadiosityShadowDynamicModels( int clip, const Vector &origin, float cellSize );
 	void EndRadiosity( const CViewSetup &view );
 	void DebugRadiosity( const CViewSetup &view );
 
 	void RenderCascadedShadows( const CViewSetup &view );
 
 	IMesh *GetRadianceHintsVolumeMesh();
-	IMesh *GetRadianceHintsHierarchyMesh( int level );
 	IMesh *CreateRadianceHintsVolumeMesh();
 	IMesh *CreateRadianceHintsVolumeMeshSize( int volumeSize );
 
 	Vector m_vecRadiosityOrigin[2];
 	IMesh *m_pMesh_RadianceHintsVolume;
-	IMesh *m_pMesh_RadianceHintsHierarchy[3];
 	bool m_bRadianceHintsInjected;
-	bool m_bRadianceHintsOriginValid;
-	float m_flRadianceHintsCellSize;
+	bool m_bRadianceHintsOriginValid[ RH_CLIP_LEVEL_COUNT ];
+	float m_flRadianceHintsCellSize[ RH_CLIP_LEVEL_COUNT ];
+	float m_flGICacheUpdateMilliseconds;
+	int m_nGICoarseCellsRebuilt[ RH_CLIP_LEVEL_COUNT ];
+	int m_nGIFineCellsRebuilt[ RH_CLIP_LEVEL_COUNT ];
+	int m_nGIFineCellsTraced[ RH_CLIP_LEVEL_COUNT ];
+	int m_nGISkyCellsRebuilt[ RH_CLIP_LEVEL_COUNT ];
+	int m_nGIDynamicBlockers[ RH_CLIP_LEVEL_COUNT ];
 
-	Vector m_vecRHGeometryOrigin;
-	float m_flRHGeometryCellSize;
-	bool m_bRHGeometryValid;
-	CUtlVector< unsigned char > m_RHStaticGeometry;
-	CUtlVector< unsigned char > m_RHCombinedGeometry;
-	CUtlVector< unsigned char > m_RHGeometryDistance;
-	CUtlVector< unsigned char > m_RHStaticSurfaceCache;
-	CUtlVector< unsigned char > m_RHSurfaceCacheScratch;
+	Vector m_vecRHGeometryOrigin[ RH_CLIP_LEVEL_COUNT ];
+	float m_flRHGeometryCellSize[ RH_CLIP_LEVEL_COUNT ];
+	bool m_bRHGeometryValid[ RH_CLIP_LEVEL_COUNT ];
+	CUtlVector< unsigned char > m_RHStaticGeometry[ RH_CLIP_LEVEL_COUNT ];
+	CUtlVector< unsigned char > m_RHCombinedGeometry[ RH_CLIP_LEVEL_COUNT ];
+	CUtlVector< unsigned char > m_RHStaticSurfaceCache[ RH_CLIP_LEVEL_COUNT ];
+	CUtlVector< unsigned char > m_RHSurfaceCacheScratch[ RH_CLIP_LEVEL_COUNT ];
+	CUtlVector< unsigned char > m_RHStaticSurfaceGuide[ RH_CLIP_LEVEL_COUNT ];
+	CUtlVector< unsigned char > m_RHSurfaceGuideScratch[ RH_CLIP_LEVEL_COUNT ];
 
-	Vector m_vecRHShadowGeometryOrigin;
-	float m_flRHShadowGeometryCellSize;
-	bool m_bRHShadowGeometryValid;
-	CUtlVector< unsigned char > m_RHShadowStaticGeometry;
-	CUtlVector< unsigned char > m_RHShadowCombinedGeometry;
-	CUtlVector< unsigned char > m_RHShadowGeometryDistance;   // static Euclidean SDF
-	CUtlVector< unsigned char > m_RHShadowCombinedDistance;   // static SDF + dynamic OBB proximity
-	CUtlVector< unsigned char > m_RHSurfaceGuide;
-	CUtlVector< unsigned char > m_RHShadowGeometry32;
-	CUtlVector< unsigned char > m_RHShadowDistance32;
-	CUtlVector< unsigned char > m_RHShadowGeometry16;
-	CUtlVector< unsigned char > m_RHShadowDistance16;
+	Vector m_vecRHShadowGeometryOrigin[ RH_CLIP_LEVEL_COUNT ];
+	float m_flRHShadowGeometryCellSize[ RH_CLIP_LEVEL_COUNT ];
+	bool m_bRHShadowGeometryValid[ RH_CLIP_LEVEL_COUNT ];
+	CUtlVector< unsigned char > m_RHShadowStaticGeometry[ RH_CLIP_LEVEL_COUNT ];
+	CUtlVector< unsigned char > m_RHShadowCombinedGeometry[ RH_CLIP_LEVEL_COUNT ];
+	CUtlVector< unsigned char > m_RHShadowGeometryDistance[ RH_CLIP_LEVEL_COUNT ];
+	CUtlVector< unsigned char > m_RHShadowCombinedDistance[ RH_CLIP_LEVEL_COUNT ];
+	CUtlVector< unsigned char > m_RHShadowStaticTraceNormal[ RH_CLIP_LEVEL_COUNT ];
+	CUtlVector< unsigned char > m_RHShadowTraceNormalScratch[ RH_CLIP_LEVEL_COUNT ];
+	CUtlVector< unsigned char > m_RHShadowStaticBlockerField[ RH_CLIP_LEVEL_COUNT ];
+	CUtlVector< unsigned char > m_RHShadowCombinedBlockerField[ RH_CLIP_LEVEL_COUNT ];
+	CUtlVector< unsigned char > m_RHSurfaceGuide[ RH_CLIP_LEVEL_COUNT ];
 
-	Vector m_vecRHOpenSkyOrigin;
-	float m_flRHOpenSkyCellSize;
-	bool m_bRHOpenSkyValid;
-	CUtlVector< unsigned char > m_RHOpenSky;
-	CUtlVector< unsigned char > m_RHOpenSkyScratch;
+	Vector m_vecRHOpenSkyOrigin[ RH_CLIP_LEVEL_COUNT ];
+	float m_flRHOpenSkyCellSize[ RH_CLIP_LEVEL_COUNT ];
+	bool m_bRHOpenSkyValid[ RH_CLIP_LEVEL_COUNT ];
+	CUtlVector< unsigned char > m_RHOpenSky[ RH_CLIP_LEVEL_COUNT ];
+	CUtlVector< unsigned char > m_RHOpenSkyScratch[ RH_CLIP_LEVEL_COUNT ];
 };
 
 

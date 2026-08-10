@@ -52,16 +52,19 @@ PS_OUTPUT main( const PS_INPUT In )
 	float3 flNormal = normalize( flNormalCtrl.xyz * 2.0f - 1.0f );
 	UnpackLightingControls( flNormalCtrl.a, phong_exp, half_lambert, litface );
 
-	float3 flLitNormal = lerp( 1, dot( flNormal, g_vecLightVec_Forward ), litface ) * flNormal;
+	// Keep the geometric/shading normal unit length.  The old litface scaling
+	// multiplied it by N.L and the diffuse dot below applied N.L a second time.
+	// Material half-Lambert/litface controls must not change the physical global
+	// sun ramp; local lights retain their existing material-specific behavior.
+	float3 flLitNormal = flNormal;
 
 	float flSpecular = max( 0, dot( normalize( -In.vecWorldRay + g_vecLightVec_Forward ), flLitNormal ) );
 	flSpecular = pow( flSpecular, phong_exp ) * dot( -In.vecWorldRay, flLitNormal );
 
 	float viewFwdDot = dot( g_vecLightVec_Forward.xyz, flLitNormal );
-	float litDot = lerp( viewFwdDot, viewFwdDot * 0.5f + 0.5f, half_lambert );
 
 	float3 diffuse = g_light_diffuse;
-	float lightAmount = saturate( litDot );
+	float lightAmount = saturate( viewFwdDot );
 	float3 ambient = lerp( g_light_ambient_low_half, g_light_ambient_high, viewFwdDot );
 
 #if HAS_SHADOW
@@ -81,7 +84,11 @@ PS_OUTPUT main( const PS_INPUT In )
 	}
 #endif
 
-	float4 lighting = float4( lerp( ambient, diffuse * ( litDot ), lightAmount ), flSpecular * lightAmount );
+	// lightAmount already contains max( N.L, 0 ) and the CSM visibility term.
+	// Interpolating ambient toward diffuse multiplied the Lambert term twice and
+	// also attenuated ambient with the sun shadow.  Keep indirect/ambient and
+	// direct sunlight as independent additive terms.
+	float4 lighting = float4( ambient + diffuse * lightAmount, flSpecular * lightAmount );
 
 	Out.vColor_0 = WriteLighting( lighting );
 

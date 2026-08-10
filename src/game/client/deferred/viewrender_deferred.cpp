@@ -67,6 +67,7 @@
 #include "shadereditor/shadereditorsystem.h"
 #endif
 #include "deferred/deferred_shared_common.h"
+#include "deferred/daylight_gi_math.h"
 #include "../../../materialsystem/deferredshaders/radiance_hints_config.h"
 
 
@@ -207,16 +208,6 @@ IMesh *CDeferredViewRender::GetRadianceHintsVolumeMesh()
 
 	Assert( m_pMesh_RadianceHintsVolume != NULL );
 	return m_pMesh_RadianceHintsVolume;
-}
-
-IMesh *CDeferredViewRender::GetRadianceHintsHierarchyMesh( int level )
-{
-    level = clamp( level, 0, 2 );
-    const int sizes[3] = { RH_HIERARCHY_20_SIZE, RH_HIERARCHY_10_SIZE, RH_HIERARCHY_5_SIZE };
-    if ( m_pMesh_RadianceHintsHierarchy[level] == NULL )
-        m_pMesh_RadianceHintsHierarchy[level] = CreateRadianceHintsVolumeMeshSize( sizes[level] );
-    Assert( m_pMesh_RadianceHintsHierarchy[level] != NULL );
-    return m_pMesh_RadianceHintsHierarchy[level];
 }
 
 IMesh *CDeferredViewRender::CreateRadianceHintsVolumeMesh()
@@ -464,11 +455,9 @@ class CRadianceHintsRSMView : public CBaseShadowView
 {
 	DECLARE_CLASS( CRadianceHintsRSMView, CBaseShadowView );
 public:
-	CRadianceHintsRSMView( CViewRender *pMainView, const Vector &rhOrigin, const Vector &rhShadowOrigin,
-		float extent, float cellSize, bool reverseDirection )
-		: CBaseShadowView( pMainView ), m_vecRHOrigin( rhOrigin ), m_vecRHShadowOrigin( rhShadowOrigin ),
-		  m_flExtent( extent ), m_flCellSize( cellSize ), m_flRSMWorldSide( extent ),
-		  m_bReverseDirection( reverseDirection ) {}
+	CRadianceHintsRSMView( CViewRender *pMainView, const Vector &rhOrigin, float extent, float cellSize )
+		: CBaseShadowView( pMainView ), m_vecRHOrigin( rhOrigin ),
+		  m_flExtent( extent ), m_flCellSize( cellSize ), m_flRSMWorldSide( extent ) {}
 
 	virtual void CalcShadowView();
 	virtual void CommitData();
@@ -476,11 +465,9 @@ public:
 
 private:
 	Vector m_vecRHOrigin;
-	Vector m_vecRHShadowOrigin;
 	float m_flExtent;
 	float m_flCellSize;
 	float m_flRSMWorldSide;
-	bool m_bReverseDirection;
 };
 
 class CDualParaboloidShadowView : public CBaseShadowView
@@ -659,19 +646,28 @@ extern void FinishCurrentView();
 CDeferredViewRender::CDeferredViewRender()
 {
 	m_pMesh_RadianceHintsVolume = NULL;
-    for ( int i = 0; i < 3; ++i ) m_pMesh_RadianceHintsHierarchy[i] = NULL;
 	m_bRadianceHintsInjected = false;
-	m_bRadianceHintsOriginValid = false;
-	m_flRadianceHintsCellSize = 0.0f;
-	m_vecRHGeometryOrigin.Init();
-	m_flRHGeometryCellSize = 0.0f;
-	m_bRHGeometryValid = false;
-	m_vecRHShadowGeometryOrigin.Init();
-	m_flRHShadowGeometryCellSize = 0.0f;
-	m_bRHShadowGeometryValid = false;
-    m_vecRHOpenSkyOrigin.Init();
-    m_flRHOpenSkyCellSize = 0.0f;
-    m_bRHOpenSkyValid = false;
+	m_flGICacheUpdateMilliseconds = 0.0f;
+	for ( int clip = 0; clip < RH_CLIP_LEVEL_COUNT; ++clip )
+	{
+		m_vecRadiosityOrigin[clip].Init();
+		m_bRadianceHintsOriginValid[clip] = false;
+		m_flRadianceHintsCellSize[clip] = 0.0f;
+		m_vecRHGeometryOrigin[clip].Init();
+		m_flRHGeometryCellSize[clip] = 0.0f;
+		m_bRHGeometryValid[clip] = false;
+		m_vecRHShadowGeometryOrigin[clip].Init();
+		m_flRHShadowGeometryCellSize[clip] = 0.0f;
+		m_bRHShadowGeometryValid[clip] = false;
+		m_vecRHOpenSkyOrigin[clip].Init();
+		m_flRHOpenSkyCellSize[clip] = 0.0f;
+		m_bRHOpenSkyValid[clip] = false;
+		m_nGICoarseCellsRebuilt[clip] = 0;
+		m_nGIFineCellsRebuilt[clip] = 0;
+		m_nGIFineCellsTraced[clip] = 0;
+		m_nGISkyCellsRebuilt[clip] = 0;
+		m_nGIDynamicBlockers[clip] = 0;
+	}
 }
 
 void CDeferredViewRender::Init()
@@ -687,79 +683,96 @@ void CDeferredViewRender::Shutdown()
 		pRenderContext->DestroyStaticMesh( m_pMesh_RadianceHintsVolume );
 		m_pMesh_RadianceHintsVolume = NULL;
 	}
-
-    {
-        CMatRenderContextPtr pRenderContext( materials );
-        for ( int i = 0; i < 3; ++i )
-        {
-            if ( m_pMesh_RadianceHintsHierarchy[i] != NULL )
-            {
-                pRenderContext->DestroyStaticMesh( m_pMesh_RadianceHintsHierarchy[i] );
-                m_pMesh_RadianceHintsHierarchy[i] = NULL;
-            }
-        }
-    }
-
-	m_RHStaticGeometry.Purge();
-	m_RHCombinedGeometry.Purge();
-	m_RHGeometryDistance.Purge();
-    m_RHStaticSurfaceCache.Purge();
-    m_RHSurfaceCacheScratch.Purge();
-	m_RHShadowStaticGeometry.Purge();
-	m_RHShadowCombinedGeometry.Purge();
-	m_RHShadowGeometryDistance.Purge();
-	m_RHShadowCombinedDistance.Purge();
-	m_RHSurfaceGuide.Purge();
-    m_RHShadowGeometry32.Purge();
-    m_RHShadowDistance32.Purge();
-    m_RHShadowGeometry16.Purge();
-    m_RHShadowDistance16.Purge();
-    m_RHOpenSky.Purge();
-    m_RHOpenSkyScratch.Purge();
-	m_bRHGeometryValid = false;
-	m_bRHShadowGeometryValid = false;
-    m_bRHOpenSkyValid = false;
+	for ( int clip = 0; clip < RH_CLIP_LEVEL_COUNT; ++clip )
+	{
+		m_RHStaticGeometry[clip].Purge();
+		m_RHCombinedGeometry[clip].Purge();
+		m_RHStaticSurfaceCache[clip].Purge();
+		m_RHSurfaceCacheScratch[clip].Purge();
+		m_RHStaticSurfaceGuide[clip].Purge();
+		m_RHSurfaceGuideScratch[clip].Purge();
+		m_RHShadowStaticGeometry[clip].Purge();
+		m_RHShadowCombinedGeometry[clip].Purge();
+		m_RHShadowGeometryDistance[clip].Purge();
+		m_RHShadowCombinedDistance[clip].Purge();
+		m_RHShadowStaticTraceNormal[clip].Purge();
+		m_RHShadowTraceNormalScratch[clip].Purge();
+		m_RHShadowStaticBlockerField[clip].Purge();
+		m_RHShadowCombinedBlockerField[clip].Purge();
+		m_RHSurfaceGuide[clip].Purge();
+		m_RHOpenSky[clip].Purge();
+		m_RHOpenSkyScratch[clip].Purge();
+		m_bRHGeometryValid[clip] = false;
+		m_bRHShadowGeometryValid[clip] = false;
+		m_bRHOpenSkyValid[clip] = false;
+	}
 
 	BaseClass::Shutdown();
 }
 
 void CDeferredViewRender::LevelInit()
 {
-	m_bRadianceHintsOriginValid = false;
-	m_flRadianceHintsCellSize = 0.0f;
-	m_bRHGeometryValid = false;
-	m_flRHGeometryCellSize = 0.0f;
-	m_bRHShadowGeometryValid = false;
-    m_bRHOpenSkyValid = false;
-    m_flRHOpenSkyCellSize = 0.0f;
-	m_flRHShadowGeometryCellSize = 0.0f;
-	m_RHStaticGeometry.Purge();
-	m_RHCombinedGeometry.Purge();
-	m_RHGeometryDistance.Purge();
-	m_RHShadowStaticGeometry.Purge();
-	m_RHShadowCombinedGeometry.Purge();
-	m_RHShadowGeometryDistance.Purge();
-	m_RHShadowCombinedDistance.Purge();
-	m_RHSurfaceGuide.Purge();
+	for ( int clip = 0; clip < RH_CLIP_LEVEL_COUNT; ++clip )
+	{
+		m_bRadianceHintsOriginValid[clip] = false;
+		m_flRadianceHintsCellSize[clip] = 0.0f;
+		m_bRHGeometryValid[clip] = false;
+		m_flRHGeometryCellSize[clip] = 0.0f;
+		m_bRHShadowGeometryValid[clip] = false;
+		m_flRHShadowGeometryCellSize[clip] = 0.0f;
+		m_bRHOpenSkyValid[clip] = false;
+		m_flRHOpenSkyCellSize[clip] = 0.0f;
+		m_RHStaticGeometry[clip].Purge();
+		m_RHCombinedGeometry[clip].Purge();
+		m_RHStaticSurfaceCache[clip].Purge();
+		m_RHSurfaceCacheScratch[clip].Purge();
+		m_RHStaticSurfaceGuide[clip].Purge();
+		m_RHSurfaceGuideScratch[clip].Purge();
+		m_RHShadowStaticGeometry[clip].Purge();
+		m_RHShadowCombinedGeometry[clip].Purge();
+		m_RHShadowGeometryDistance[clip].Purge();
+		m_RHShadowCombinedDistance[clip].Purge();
+		m_RHShadowStaticTraceNormal[clip].Purge();
+		m_RHShadowTraceNormalScratch[clip].Purge();
+		m_RHShadowStaticBlockerField[clip].Purge();
+		m_RHShadowCombinedBlockerField[clip].Purge();
+		m_RHSurfaceGuide[clip].Purge();
+		m_RHOpenSky[clip].Purge();
+		m_RHOpenSkyScratch[clip].Purge();
+	}
 	BaseClass::LevelInit();
 }
 
 void CDeferredViewRender::LevelShutdown()
 {
-	m_bRadianceHintsOriginValid = false;
-	m_flRadianceHintsCellSize = 0.0f;
-	m_bRHGeometryValid = false;
-	m_flRHGeometryCellSize = 0.0f;
-	m_bRHShadowGeometryValid = false;
-	m_flRHShadowGeometryCellSize = 0.0f;
-	m_RHStaticGeometry.Purge();
-	m_RHCombinedGeometry.Purge();
-	m_RHGeometryDistance.Purge();
-	m_RHShadowStaticGeometry.Purge();
-	m_RHShadowCombinedGeometry.Purge();
-	m_RHShadowGeometryDistance.Purge();
-	m_RHShadowCombinedDistance.Purge();
-	m_RHSurfaceGuide.Purge();
+	for ( int clip = 0; clip < RH_CLIP_LEVEL_COUNT; ++clip )
+	{
+		m_bRadianceHintsOriginValid[clip] = false;
+		m_flRadianceHintsCellSize[clip] = 0.0f;
+		m_bRHGeometryValid[clip] = false;
+		m_flRHGeometryCellSize[clip] = 0.0f;
+		m_bRHShadowGeometryValid[clip] = false;
+		m_flRHShadowGeometryCellSize[clip] = 0.0f;
+		m_bRHOpenSkyValid[clip] = false;
+		m_flRHOpenSkyCellSize[clip] = 0.0f;
+		m_RHStaticGeometry[clip].Purge();
+		m_RHCombinedGeometry[clip].Purge();
+		m_RHStaticSurfaceCache[clip].Purge();
+		m_RHSurfaceCacheScratch[clip].Purge();
+		m_RHStaticSurfaceGuide[clip].Purge();
+		m_RHSurfaceGuideScratch[clip].Purge();
+		m_RHShadowStaticGeometry[clip].Purge();
+		m_RHShadowCombinedGeometry[clip].Purge();
+		m_RHShadowGeometryDistance[clip].Purge();
+		m_RHShadowCombinedDistance[clip].Purge();
+		m_RHShadowStaticTraceNormal[clip].Purge();
+		m_RHShadowTraceNormalScratch[clip].Purge();
+		m_RHShadowStaticBlockerField[clip].Purge();
+		m_RHShadowCombinedBlockerField[clip].Purge();
+		m_RHSurfaceGuide[clip].Purge();
+		m_RHOpenSky[clip].Purge();
+		m_RHOpenSkyScratch[clip].Purge();
+	}
 	BaseClass::LevelShutdown();
 }
 
@@ -784,7 +797,7 @@ void CDeferredViewRender::ViewDrawSceneDeferred( const CViewSetup &view, int nCl
 #endif
 
 #if DEFCFG_ENABLE_RADIOSITY
-	if ( deferred_radiosity_debug.GetBool() || deferred_rh_debug_mode.GetInt() > 0 )
+	if ( deferred_gi_debug.GetInt() > 0 || deferred_gi_stats.GetBool() || deferred_radiosity_debug.GetBool() )
 		DebugRadiosity( view );
 #endif
 
@@ -1020,7 +1033,8 @@ static lightData_Global_t GetActiveGlobalLightState()
 void CDeferredViewRender::PerformLighting( const CViewSetup &view )
 {
 	bool bResetLightAccum = false;
-	const bool bRHEnabled = DEFCFG_ENABLE_RADIOSITY != 0 && deferred_radiosity_enable.GetBool();
+	const bool bRHEnabled = DEFCFG_ENABLE_RADIOSITY != 0 &&
+		deferred_gi_enable.GetBool() && deferred_radiosity_enable.GetBool();
 
 	if ( bRHEnabled )
 		BeginRadiosity( view );
@@ -1063,12 +1077,11 @@ void CDeferredViewRender::PerformLighting( const CViewSetup &view )
 			}
 
 			// The stock global-light pass adds ambient-high/ambient-low directly and
-			// without RH geometry visibility. RH7 already consumed the original
+			// without GI geometry visibility. The sky injection consumed the original
 			// colours during PerformRadiositySky(), so commit a direct-light copy with
 			// zero ambient before the fullscreen global pass. This avoids double
 			// lighting and allows RH sky occlusion to remain visible.
-			if ( bRHEnabled && deferred_rh_sky_enable.GetBool() &&
-				deferred_rh_sky_replace_global_ambient.GetBool() )
+			if ( bRHEnabled && m_bRadianceHintsInjected )
 			{
 				defData_setGlobalLightState directLightState = lightDataState;
 				directLightState.state.ambh.Init();
@@ -1116,67 +1129,67 @@ void CDeferredViewRender::PerformLighting( const CViewSetup &view )
 
 void CDeferredViewRender::BeginRadiosity( const CViewSetup &view )
 {
-	const float cellSize = MAX( deferred_rh_cell_size.GetFloat(), 1.0f );
-	const float extent = cellSize * RH_VOLUME_SIZE;
-	Vector desiredOrigin = view.origin - Vector( extent, extent, extent ) * 0.5f;
-
-	for ( int axis = 0; axis < 3; ++axis )
-		desiredOrigin[axis] = floor( desiredOrigin[axis] / cellSize ) * cellSize;
-
-	Vector origin = desiredOrigin;
-	const bool cellSizeChanged = fabs( m_flRadianceHintsCellSize - cellSize ) > 0.01f;
-	if ( m_bRadianceHintsOriginValid && !cellSizeChanged )
+	const double cacheUpdateStart = Plat_FloatTime();
+	m_bRadianceHintsInjected = false;
+	const float clipCellSize[ RH_CLIP_LEVEL_COUNT ] =
 	{
-		origin = m_vecRadiosityOrigin[0];
-		const float deadZone = MAX( deferred_rh_origin_hysteresis.GetFloat(), 0.0f ) * cellSize;
+		RH_CLIP_NEAR_CELL_SIZE,
+		RH_CLIP_FAR_CELL_SIZE
+	};
+
+	for ( int clip = 0; clip < RH_CLIP_LEVEL_COUNT; ++clip )
+	{
+		m_nGICoarseCellsRebuilt[clip] = 0;
+		m_nGIFineCellsRebuilt[clip] = 0;
+		m_nGIFineCellsTraced[clip] = 0;
+		m_nGISkyCellsRebuilt[clip] = 0;
+		m_nGIDynamicBlockers[clip] = 0;
+		const float cellSize = clipCellSize[clip];
+		const float extent = cellSize * RH_VOLUME_SIZE;
+		Vector desiredOrigin = view.origin - Vector( extent, extent, extent ) * 0.5f;
 		for ( int axis = 0; axis < 3; ++axis )
-		{
-			if ( fabs( desiredOrigin[axis] - origin[axis] ) > deadZone )
-				origin[axis] = desiredOrigin[axis];
-		}
+			desiredOrigin[axis] = floor( desiredOrigin[axis] / cellSize ) * cellSize;
+
+		if ( !deferred_gi_freeze.GetBool() || !m_bRadianceHintsOriginValid[clip] )
+			m_vecRadiosityOrigin[clip] = desiredOrigin;
+		m_bRadianceHintsOriginValid[clip] = true;
+		m_flRadianceHintsCellSize[clip] = cellSize;
+
+		UpdateRadiosityGeometry( clip );
+		UpdateRadiosityShadowGeometry( clip );
+		UpdateRadiosityOpenSky( clip );
 	}
 
-	m_bRadianceHintsOriginValid = true;
-	m_flRadianceHintsCellSize = cellSize;
-	m_vecRadiosityOrigin[0] = origin;
-	m_vecRadiosityOrigin[1] = origin;
-	m_bRadianceHintsInjected = false;
-	UpdateRadiosityGeometry();
-	UpdateRadiosityShadowGeometry();
-	UpdateRadiosityOpenSky();
-
 	CMatRenderContextPtr pRenderContext( materials );
-	for ( int set = 0; set < RH_SET_COUNT; ++set )
+	const bool bSecondBounce = deferred_gi_quality.GetInt() > 0 &&
+		deferred_gi_bounce_intensity.GetFloat() > 0.0f;
+	for ( int clip = 0; clip < RH_CLIP_LEVEL_COUNT; ++clip )
 	{
+		// Injection is additive across stable RSM phases, so only its destination
+		// needs a clear. Filter targets are completely overwritten and transport
+		// is cleared immediately before its additive XYZ passes.
 		for ( int channel = 0; channel < RH_CHANNEL_COUNT; ++channel )
 		{
-			pRenderContext->PushRenderTargetAndViewport( GetDefRT_RadianceHints( set, channel ), NULL,
+			pRenderContext->PushRenderTargetAndViewport( GetDefRT_DaylightGIRadiance( clip, RH_SET_INJECTION, channel ), NULL,
 				0, 0, RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT );
+			pRenderContext->ClearColor4ub( 0, 0, 0, 0 );
+			pRenderContext->ClearBuffers( true, false );
+			pRenderContext->PopRenderTargetAndViewport();
+		}
+
+		if ( bSecondBounce )
+		{
+			pRenderContext->PushRenderTargetAndViewport( GetDefRT_DaylightGISurfaceAlbedo( clip ), NULL,
+				0, 0, RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT );
+			pRenderContext->SetRenderTargetEx( 1, GetDefRT_DaylightGISurfaceNormal( clip ) );
 			pRenderContext->ClearColor4ub( 0, 0, 0, 0 );
 			pRenderContext->ClearBuffers( true, false );
 			pRenderContext->PopRenderTargetAndViewport();
 		}
 	}
 
-	pRenderContext->PushRenderTargetAndViewport( GetDefRT_RHVisibility(), NULL,
-		0, 0, RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT );
-	pRenderContext->ClearColor4ub( 0, 0, 0, 0 );
-	pRenderContext->ClearBuffers( true, false );
-	pRenderContext->PopRenderTargetAndViewport();
-
-	pRenderContext->PushRenderTargetAndViewport( GetDefRT_RHSurfaceAlbedo(), NULL,
-		0, 0, RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT );
-	pRenderContext->ClearColor4ub( 0, 0, 0, 0 );
-	pRenderContext->ClearBuffers( true, false );
-	pRenderContext->PopRenderTargetAndViewport();
-
-	pRenderContext->PushRenderTargetAndViewport( GetDefRT_RHSurfaceNormal(), NULL,
-		0, 0, RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT );
-	pRenderContext->ClearColor4ub( 0, 0, 0, 0 );
-	pRenderContext->ClearBuffers( true, false );
-	pRenderContext->PopRenderTargetAndViewport();
-
 	UpdateRadiosityPosition();
+	m_flGICacheUpdateMilliseconds = (float)( ( Plat_FloatTime() - cacheUpdateStart ) * 1000.0 );
 }
 
 
@@ -1184,7 +1197,7 @@ namespace
 {
     inline int RHGeometryAtlasIndex( int x, int y, int z )
     {
-        return y * RH_ATLAS_WIDTH + z * RH_VOLUME_SIZE + x;
+        return DaylightGIAtlasIndex( x, y, z, RH_VOLUME_SIZE );
     }
 
     inline int RHClampCellIndex( int value )
@@ -1194,7 +1207,7 @@ namespace
 
     inline int RHShadowAtlasIndex( int x, int y, int z )
     {
-        return y * RH_SHADOW_ATLAS_WIDTH + z * RH_SHADOW_VOLUME_SIZE + x;
+        return DaylightGIAtlasIndex( x, y, z, RH_SHADOW_VOLUME_SIZE );
     }
 
     inline int RHClampShadowCellIndex( int value )
@@ -1207,57 +1220,48 @@ namespace
         return y * size * size + z * size + x;
     }
 
-    // Felzenszwalb/Huttenlocher 1D squared-Euclidean distance transform.
-    // 64 samples per line keeps the stack footprint tiny and gives the SDF
-    // rotationally consistent distances unlike RH7's Manhattan field.
-    void RHDistanceTransform1D( const float *f, float *d )
+    void RHEncodeOctNormal( const Vector &inputNormal, unsigned char *pEncoded )
     {
-        int v[ RH_SHADOW_VOLUME_SIZE ];
-        float z[ RH_SHADOW_VOLUME_SIZE + 1 ];
-        int k = 0;
-        v[0] = 0;
-        z[0] = -1.0e20f;
-        z[1] =  1.0e20f;
+        Vector normal = inputNormal;
+        if ( VectorNormalize( normal ) < 0.001f )
+            normal.Init( 0.0f, 0.0f, 1.0f );
 
-        for ( int q = 1; q < RH_SHADOW_VOLUME_SIZE; ++q )
+        const float inverseL1 = 1.0f / MAX(
+            fabs( normal.x ) + fabs( normal.y ) + fabs( normal.z ), 1.0e-5f );
+        float octX = normal.x * inverseL1;
+        float octY = normal.y * inverseL1;
+        if ( normal.z < 0.0f )
         {
-            float separation = 0.0f;
-            for ( ;; )
-            {
-                const int vk = v[k];
-                separation = ( ( f[q] + (float)( q * q ) ) -
-                    ( f[vk] + (float)( vk * vk ) ) ) /
-                    ( 2.0f * (float)( q - vk ) );
-                if ( separation > z[k] || k == 0 )
-                    break;
-                --k;
-            }
-            if ( separation <= z[k] )
-                separation = z[k] + 1.0e-4f;
-            ++k;
-            v[k] = q;
-            z[k] = separation;
-            z[k + 1] = 1.0e20f;
+            const float oldX = octX;
+            octX = ( 1.0f - fabs( octY ) ) * ( oldX >= 0.0f ? 1.0f : -1.0f );
+            octY = ( 1.0f - fabs( oldX ) ) * ( octY >= 0.0f ? 1.0f : -1.0f );
         }
 
-        k = 0;
-        for ( int q = 0; q < RH_SHADOW_VOLUME_SIZE; ++q )
-        {
-            while ( z[k + 1] < (float)q )
-                ++k;
-            const float delta = (float)( q - v[k] );
-            d[q] = delta * delta + f[ v[k] ];
-        }
+        pEncoded[0] = (unsigned char)clamp(
+            (int)floor( ( octX * 0.5f + 0.5f ) * 255.0f + 0.5f ), 0, 255 );
+        pEncoded[1] = (unsigned char)clamp(
+            (int)floor( ( octY * 0.5f + 0.5f ) * 255.0f + 0.5f ), 0, 255 );
     }
+
 }
 
-unsigned char CDeferredViewRender::BuildRadiosityStaticCell( const Vector &cellCenter, float cellSize, unsigned char *pSurfaceRGBA ) const
+unsigned char CDeferredViewRender::BuildRadiosityStaticCell( const Vector &cellCenter, float cellSize,
+    unsigned char *pSurfaceRGBA, unsigned char *pSurfaceGuideRGBA ) const
 {
     if ( pSurfaceRGBA != NULL )
         memset( pSurfaceRGBA, 0, 4 );
+    if ( pSurfaceGuideRGBA != NULL )
+    {
+        pSurfaceGuideRGBA[0] = 128;
+        pSurfaceGuideRGBA[1] = 128;
+        pSurfaceGuideRGBA[2] = 255;
+        pSurfaceGuideRGBA[3] = 0;
+    }
 
-    const float hullScale = clamp( deferred_rh_geometry_hull_scale.GetFloat(), 0.10f, 0.49f );
-    const float halfExtent = cellSize * hullScale;
+    // Full-voxel coarse traces form a conservative broad phase for the 64^3
+    // cache. Gapless coverage is required or a thin wall could suppress every
+    // fine trace in the cell that actually contains it.
+    const float halfExtent = cellSize * 0.499f;
     const Vector hullMins( -halfExtent, -halfExtent, -halfExtent );
     const Vector hullMaxs(  halfExtent,  halfExtent,  halfExtent );
     const Vector epsilon( 0.0f, 0.0f, MAX( cellSize * 0.0025f, 0.01f ) );
@@ -1270,19 +1274,39 @@ unsigned char CDeferredViewRender::BuildRadiosityStaticCell( const Vector &cellC
     enginetrace->TraceRay( ray, MASK_SOLID, &filter, &trace );
 
     const bool occupied = trace.startsolid || trace.allsolid || trace.fraction < 1.0f;
-    if ( occupied && pSurfaceRGBA != NULL && deferred_rh_surface_material_cache.GetBool() &&
+    if ( occupied && pSurfaceGuideRGBA != NULL )
+    {
+        Vector traceNormal = trace.plane.normal;
+        if ( VectorNormalize( traceNormal ) > 0.001f )
+        {
+            for ( int axis = 0; axis < 3; ++axis )
+            {
+                const int encoded = (int)floor( ( traceNormal[axis] * 0.5f + 0.5f ) * 255.0f + 0.5f );
+                pSurfaceGuideRGBA[axis] = (unsigned char)clamp( encoded, 0, 255 );
+            }
+            pSurfaceGuideRGBA[3] = 255;
+        }
+    }
+
+    if ( occupied && pSurfaceRGBA != NULL &&
          trace.surface.name != NULL && trace.surface.name[0] != '\0' )
     {
         IMaterial *pMaterial = materials->FindMaterial( trace.surface.name, TEXTURE_GROUP_WORLD, false );
         if ( pMaterial == NULL || pMaterial->IsErrorMaterial() )
             pMaterial = materials->FindMaterial( trace.surface.name, TEXTURE_GROUP_MODEL, false );
 
-        if ( pMaterial != NULL && !pMaterial->IsErrorMaterial() &&
-             !pMaterial->IsTranslucent() && !pMaterial->IsAlphaTested() )
+        if ( pMaterial != NULL && !pMaterial->IsErrorMaterial() && !pMaterial->IsTranslucent() )
         {
             float color[3] = { 0.52f, 0.52f, 0.52f };
             float modulation[3] = { 1.0f, 1.0f, 1.0f };
-            pMaterial->GetLowResColorSample( 0.5f, 0.5f, color );
+            // Engine traces do not expose brush texture coordinates here. A
+            // stable world-space sample still preserves coarse material colour
+            // variation and avoids every cached cell reading the texture centre.
+            float sampleU = fabs( cellCenter.x * ( 1.0f / 256.0f ) );
+            float sampleV = fabs( cellCenter.y * ( 1.0f / 256.0f ) );
+            sampleU -= floor( sampleU );
+            sampleV -= floor( sampleV );
+            pMaterial->GetLowResColorSample( sampleU, sampleV, color );
             pMaterial->GetColorModulation( &modulation[0], &modulation[1], &modulation[2] );
             for ( int c = 0; c < 3; ++c )
             {
@@ -1296,10 +1320,10 @@ unsigned char CDeferredViewRender::BuildRadiosityStaticCell( const Vector &cellC
     return occupied ? 255 : 0;
 }
 
-void CDeferredViewRender::StampRadiosityDynamicModels( const Vector &origin, float cellSize )
+void CDeferredViewRender::StampRadiosityDynamicModels( int clip, const Vector &origin, float cellSize )
 {
     CClientEntityList *pEntityList = cl_entitylist;
-    if ( !deferred_rh_dynamic_model_blockers.GetBool() || pEntityList == NULL )
+    if ( !deferred_gi_dynamic_blockers.GetBool() || pEntityList == NULL )
         return;
 
     const float conservativeRadius = cellSize * 0.8660254f;
@@ -1313,7 +1337,10 @@ void CDeferredViewRender::StampRadiosityDynamicModels( const Vector &origin, flo
             continue;
 
         const model_t *pModel = pRenderable->GetModel();
-        if ( pModel == NULL || modelinfo->GetModelType( pModel ) != mod_studio )
+        if ( pModel == NULL )
+            continue;
+        const modtype_t modelType = modelinfo->GetModelType( pModel );
+        if ( modelType != mod_studio && modelType != mod_brush )
             continue;
 
         Vector worldMins, worldMaxs;
@@ -1357,101 +1384,52 @@ void CDeferredViewRender::StampRadiosityDynamicModels( const Vector &origin, flo
                 localCenter.z >= localMins.z && localCenter.z <= localMaxs.z;
 
             if ( inside )
-                m_RHCombinedGeometry[ RHGeometryAtlasIndex( x, y, z ) ] = 255;
+                m_RHCombinedGeometry[clip][ RHGeometryAtlasIndex( x, y, z ) ] = 255;
         }
     }
 }
 
-void CDeferredViewRender::BuildRadiosityDistanceField()
+void CDeferredViewRender::UpdateRadiosityGeometry( int clip )
 {
     const int cellCount = RH_ATLAS_WIDTH * RH_ATLAS_HEIGHT;
-    if ( m_RHGeometryDistance.Count() != cellCount )
-        m_RHGeometryDistance.SetCount( cellCount );
+    const float cellSize = MAX( m_flRadianceHintsCellSize[clip], 1.0f );
+    const Vector origin = m_vecRadiosityOrigin[clip];
 
-    // Conservative six-neighbour chamfer distance in cell units. The field is
-    // intentionally Manhattan rather than Euclidean: it is cheap, monotonic,
-    // and safe for adaptive cone stepping near thin Source brush geometry.
-    for ( int i = 0; i < cellCount; ++i )
-        m_RHGeometryDistance[i] = m_RHCombinedGeometry[i] > 0 ? 0 : 255;
-
-    for ( int z = 0; z < RH_VOLUME_SIZE; ++z )
-    for ( int y = 0; y < RH_VOLUME_SIZE; ++y )
-    for ( int x = 0; x < RH_VOLUME_SIZE; ++x )
-    {
-        const int index = RHGeometryAtlasIndex( x, y, z );
-        int value = m_RHGeometryDistance[index];
-        if ( x > 0 ) value = MIN( value, (int)m_RHGeometryDistance[ RHGeometryAtlasIndex( x - 1, y, z ) ] + 1 );
-        if ( y > 0 ) value = MIN( value, (int)m_RHGeometryDistance[ RHGeometryAtlasIndex( x, y - 1, z ) ] + 1 );
-        if ( z > 0 ) value = MIN( value, (int)m_RHGeometryDistance[ RHGeometryAtlasIndex( x, y, z - 1 ) ] + 1 );
-        m_RHGeometryDistance[index] = (unsigned char)MIN( value, 255 );
-    }
-
-    for ( int z = RH_VOLUME_SIZE - 1; z >= 0; --z )
-    for ( int y = RH_VOLUME_SIZE - 1; y >= 0; --y )
-    for ( int x = RH_VOLUME_SIZE - 1; x >= 0; --x )
-    {
-        const int index = RHGeometryAtlasIndex( x, y, z );
-        int value = m_RHGeometryDistance[index];
-        if ( x + 1 < RH_VOLUME_SIZE ) value = MIN( value, (int)m_RHGeometryDistance[ RHGeometryAtlasIndex( x + 1, y, z ) ] + 1 );
-        if ( y + 1 < RH_VOLUME_SIZE ) value = MIN( value, (int)m_RHGeometryDistance[ RHGeometryAtlasIndex( x, y + 1, z ) ] + 1 );
-        if ( z + 1 < RH_VOLUME_SIZE ) value = MIN( value, (int)m_RHGeometryDistance[ RHGeometryAtlasIndex( x, y, z + 1 ) ] + 1 );
-        m_RHGeometryDistance[index] = (unsigned char)MIN( value, 255 );
-    }
-}
-
-void CDeferredViewRender::UpdateRadiosityGeometry()
-{
-    const int cellCount = RH_ATLAS_WIDTH * RH_ATLAS_HEIGHT;
-    const float cellSize = MAX( m_flRadianceHintsCellSize, 1.0f );
-    const Vector origin = m_vecRadiosityOrigin[0];
-
-    if ( m_RHStaticGeometry.Count() != cellCount )
-        m_RHStaticGeometry.SetCount( cellCount );
-    if ( m_RHCombinedGeometry.Count() != cellCount )
-        m_RHCombinedGeometry.SetCount( cellCount );
+    if ( m_RHStaticGeometry[clip].Count() != cellCount )
+        m_RHStaticGeometry[clip].SetCount( cellCount );
+    if ( m_RHCombinedGeometry[clip].Count() != cellCount )
+        m_RHCombinedGeometry[clip].SetCount( cellCount );
     const int surfaceBytes = cellCount * 4;
-    if ( m_RHStaticSurfaceCache.Count() != surfaceBytes ) m_RHStaticSurfaceCache.SetCount( surfaceBytes );
-    if ( m_RHSurfaceCacheScratch.Count() != surfaceBytes ) m_RHSurfaceCacheScratch.SetCount( surfaceBytes );
+    if ( m_RHStaticSurfaceCache[clip].Count() != surfaceBytes ) m_RHStaticSurfaceCache[clip].SetCount( surfaceBytes );
+    if ( m_RHSurfaceCacheScratch[clip].Count() != surfaceBytes ) m_RHSurfaceCacheScratch[clip].SetCount( surfaceBytes );
+    if ( m_RHStaticSurfaceGuide[clip].Count() != surfaceBytes ) m_RHStaticSurfaceGuide[clip].SetCount( surfaceBytes );
+    if ( m_RHSurfaceGuideScratch[clip].Count() != surfaceBytes ) m_RHSurfaceGuideScratch[clip].SetCount( surfaceBytes );
 
-    if ( !deferred_rh_cpu_geometry_enable.GetBool() )
-    {
-        memset( m_RHStaticGeometry.Base(), 0, cellCount );
-        memset( m_RHCombinedGeometry.Base(), 0, cellCount );
-        if ( m_RHGeometryDistance.Count() != cellCount )
-            m_RHGeometryDistance.SetCount( cellCount );
-        memset( m_RHGeometryDistance.Base(), 255, cellCount );
-        memset( m_RHStaticSurfaceCache.Base(), 0, surfaceBytes );
-        m_bRHGeometryValid = false;
-        UpdateDefRT_RHGeometry( m_RHCombinedGeometry.Base(), cellCount );
-        UpdateDefRT_RHGeometryDistance( m_RHGeometryDistance.Base(), cellCount );
-        UpdateDefRT_RHSurfaceCache( m_RHStaticSurfaceCache.Base(), surfaceBytes );
-        return;
-    }
-
-    const bool sameCellSize = m_bRHGeometryValid && fabs( m_flRHGeometryCellSize - cellSize ) <= 0.01f;
+    const bool sameCellSize = m_bRHGeometryValid[clip] && fabs( m_flRHGeometryCellSize[clip] - cellSize ) <= 0.01f;
     int shift[3] = { RH_VOLUME_SIZE, RH_VOLUME_SIZE, RH_VOLUME_SIZE };
     bool integerShift = sameCellSize;
     if ( sameCellSize )
     {
         for ( int axis = 0; axis < 3; ++axis )
         {
-            const float deltaCells = ( origin[axis] - m_vecRHGeometryOrigin[axis] ) / cellSize;
+            const float deltaCells = ( origin[axis] - m_vecRHGeometryOrigin[clip][axis] ) / cellSize;
             shift[axis] = (int)( deltaCells >= 0.0f ? floor( deltaCells + 0.5f ) : ceil( deltaCells - 0.5f ) );
             if ( fabs( deltaCells - shift[axis] ) > 0.01f )
                 integerShift = false;
         }
     }
 
-    const bool originChanged = !m_bRHGeometryValid || !sameCellSize ||
-        origin.DistToSqr( m_vecRHGeometryOrigin ) > 0.01f;
+    const bool originChanged = !m_bRHGeometryValid[clip] || !sameCellSize ||
+        origin.DistToSqr( m_vecRHGeometryOrigin[clip] ) > 0.01f;
 
     if ( originChanged )
     {
         // Preserve the previous static field as a read-only source while the
         // new camera-aligned atlas is rebuilt. Cells that remain at the same
         // world location are copied; only newly exposed slabs are traced.
-        memcpy( m_RHCombinedGeometry.Base(), m_RHStaticGeometry.Base(), cellCount );
-        memcpy( m_RHSurfaceCacheScratch.Base(), m_RHStaticSurfaceCache.Base(), surfaceBytes );
+        memcpy( m_RHCombinedGeometry[clip].Base(), m_RHStaticGeometry[clip].Base(), cellCount );
+        memcpy( m_RHSurfaceCacheScratch[clip].Base(), m_RHStaticSurfaceCache[clip].Base(), surfaceBytes );
+        memcpy( m_RHSurfaceGuideScratch[clip].Base(), m_RHStaticSurfaceGuide[clip].Base(), surfaceBytes );
 
         for ( int z = 0; z < RH_VOLUME_SIZE; ++z )
         for ( int y = 0; y < RH_VOLUME_SIZE; ++y )
@@ -1469,38 +1447,49 @@ void CDeferredViewRender::UpdateRadiosityGeometry()
             if ( reusable )
             {
                 const int oldIndex = RHGeometryAtlasIndex( oldX, oldY, oldZ );
-                m_RHStaticGeometry[newIndex] = m_RHCombinedGeometry[ oldIndex ];
-                memcpy( m_RHStaticSurfaceCache.Base() + newIndex * 4,
-                    m_RHSurfaceCacheScratch.Base() + oldIndex * 4, 4 );
+                m_RHStaticGeometry[clip][newIndex] = m_RHCombinedGeometry[clip][ oldIndex ];
+                memcpy( m_RHStaticSurfaceCache[clip].Base() + newIndex * 4,
+                    m_RHSurfaceCacheScratch[clip].Base() + oldIndex * 4, 4 );
+                memcpy( m_RHStaticSurfaceGuide[clip].Base() + newIndex * 4,
+                    m_RHSurfaceGuideScratch[clip].Base() + oldIndex * 4, 4 );
             }
             else
             {
+				++m_nGICoarseCellsRebuilt[clip];
                 const Vector cellCenter = origin + Vector(
                     ( x + 0.5f ) * cellSize,
                     ( y + 0.5f ) * cellSize,
                     ( z + 0.5f ) * cellSize );
-                m_RHStaticGeometry[newIndex] = BuildRadiosityStaticCell( cellCenter, cellSize,
-                    m_RHStaticSurfaceCache.Base() + newIndex * 4 );
+                m_RHStaticGeometry[clip][newIndex] = BuildRadiosityStaticCell( cellCenter, cellSize,
+                    m_RHStaticSurfaceCache[clip].Base() + newIndex * 4,
+                    m_RHStaticSurfaceGuide[clip].Base() + newIndex * 4 );
             }
         }
 
-        m_vecRHGeometryOrigin = origin;
-        m_flRHGeometryCellSize = cellSize;
-        m_bRHGeometryValid = true;
+        m_vecRHGeometryOrigin[clip] = origin;
+        m_flRHGeometryCellSize[clip] = cellSize;
+        m_bRHGeometryValid[clip] = true;
     }
 
-    memcpy( m_RHCombinedGeometry.Base(), m_RHStaticGeometry.Base(), cellCount );
-    StampRadiosityDynamicModels( origin, cellSize );
-    BuildRadiosityDistanceField();
-    UpdateDefRT_RHGeometry( m_RHCombinedGeometry.Base(), cellCount );
-    UpdateDefRT_RHGeometryDistance( m_RHGeometryDistance.Base(), cellCount );
-    UpdateDefRT_RHSurfaceCache( m_RHStaticSurfaceCache.Base(), surfaceBytes );
+    memcpy( m_RHCombinedGeometry[clip].Base(), m_RHStaticGeometry[clip].Base(), cellCount );
+    StampRadiosityDynamicModels( clip, origin, cellSize );
+    UpdateDefRT_DaylightGIGeometry( clip, m_RHCombinedGeometry[clip].Base(), cellCount );
+    UpdateDefRT_DaylightGISurfaceCache( clip, m_RHStaticSurfaceCache[clip].Base(), surfaceBytes );
 }
 
-unsigned char CDeferredViewRender::BuildRadiosityShadowStaticCell( const Vector &cellCenter, float cellSize ) const
+unsigned char CDeferredViewRender::BuildRadiosityShadowStaticCell( const Vector &cellCenter, float cellSize,
+    unsigned char *pTraceNormal ) const
 {
-    const float hullScale = clamp( deferred_rh_geometry_hull_scale.GetFloat(), 0.10f, 0.49f );
-    const float halfExtent = cellSize * hullScale;
+    if ( pTraceNormal != NULL )
+    {
+        pTraceNormal[0] = 128; pTraceNormal[1] = 128;
+        pTraceNormal[2] = 0; pTraceNormal[3] = 0;
+    }
+    // The blocker grid must cover the complete voxel. Leaving the legacy 16%
+    // gap between neighbouring trace hulls allowed thin BSP walls to fall
+    // between far-clip samples. A tiny epsilon avoids ambiguous shared-face
+    // contacts while still providing effectively gapless conservative coverage.
+    const float halfExtent = cellSize * 0.499f;
     const Vector hullMins( -halfExtent, -halfExtent, -halfExtent );
     const Vector hullMaxs(  halfExtent,  halfExtent,  halfExtent );
     const Vector epsilon( 0.0f, 0.0f, MAX( cellSize * 0.0025f, 0.01f ) );
@@ -1509,25 +1498,44 @@ unsigned char CDeferredViewRender::BuildRadiosityShadowStaticCell( const Vector 
     CTraceFilterWorldAndPropsOnly filter;
     trace_t trace;
     enginetrace->TraceRay( ray, MASK_SOLID, &filter, &trace );
-    return ( trace.startsolid || trace.allsolid || trace.fraction < 1.0f ) ? 255 : 0;
+    if ( !( trace.startsolid || trace.allsolid || trace.fraction < 1.0f ) )
+        return 0;
+
+    Vector traceNormal = trace.plane.normal;
+    if ( pTraceNormal != NULL && VectorNormalize( traceNormal ) > 0.001f )
+    {
+        RHEncodeOctNormal( traceNormal, pTraceNormal );
+        pTraceNormal[2] = 255;
+    }
+
+    // Alpha-tested leaves and fences block a fraction of the transport ray.
+    // Opaque BSP/prop surfaces remain binary, which keeps the EDT topology
+    // robust while the packed field carries material transmittance separately.
+    if ( trace.surface.name != NULL && trace.surface.name[0] != '\0' )
+    {
+        IMaterial *pMaterial = materials->FindMaterial( trace.surface.name, TEXTURE_GROUP_WORLD, false );
+        if ( pMaterial == NULL || pMaterial->IsErrorMaterial() )
+            pMaterial = materials->FindMaterial( trace.surface.name, TEXTURE_GROUP_MODEL, false );
+        if ( pMaterial != NULL && !pMaterial->IsErrorMaterial() && pMaterial->IsAlphaTested() )
+            return 160;
+    }
+    return 255;
 }
 
-void CDeferredViewRender::StampRadiosityShadowDynamicModels( const Vector &origin, float cellSize )
+void CDeferredViewRender::StampRadiosityShadowDynamicModels( int clip, const Vector &origin, float cellSize )
 {
     CClientEntityList *pEntityList = cl_entitylist;
-    if ( !deferred_rh_dynamic_model_blockers.GetBool() || pEntityList == NULL )
+    if ( !deferred_gi_dynamic_blockers.GetBool() || pEntityList == NULL )
         return;
 
-    // The static Euclidean SDF does not contain moving studio models.  RH9.2
-    // sampled dynamic occupancy but could sphere-trace straight over a model
+    // The static Euclidean SDF does not contain moving studio models. Sampling
+    // dynamic occupancy alone can sphere-trace straight over a model
     // when the static SDF returned a long step.  Build a cheap OBB-distance
     // overlay while we already visit dynamic model bounds; this avoids a full
     // 64^3 EDT every frame and keeps dynamic blockers visible to SDF stepping.
-    const float conservativeRadius = cellSize * 0.75f;
-    const float dynamicDistanceCells = clamp(
-        deferred_rh_shadow_sdf_max_step.GetFloat() + 1.0f, 1.5f, 6.0f );
+    const float conservativeRadius = cellSize * 0.8660254f;
+    const float dynamicDistanceCells = 3.0f;
     const float dynamicInfluenceWorld = dynamicDistanceCells * cellSize;
-    const float encodeScale = 255.0f / RH_SHADOW_DISTANCE_MAX_CELLS;
 
     const int highestEntity = pEntityList->GetHighestEntityIndex();
     for ( int entityIndex = 1; entityIndex <= highestEntity; ++entityIndex )
@@ -1537,7 +1545,10 @@ void CDeferredViewRender::StampRadiosityShadowDynamicModels( const Vector &origi
         if ( pRenderable == NULL || !pRenderable->ShouldDraw() )
             continue;
         const model_t *pModel = pRenderable->GetModel();
-        if ( pModel == NULL || modelinfo->GetModelType( pModel ) != mod_studio )
+        if ( pModel == NULL )
+            continue;
+        const modtype_t modelType = modelinfo->GetModelType( pModel );
+        if ( modelType != mod_studio && modelType != mod_brush )
             continue;
 
         Vector worldMins, worldMaxs;
@@ -1557,6 +1568,7 @@ void CDeferredViewRender::StampRadiosityShadowDynamicModels( const Vector &origi
             maxCell[axis] = RHClampShadowCellIndex( maxCell[axis] );
         }
         if ( !overlaps ) continue;
+		++m_nGIDynamicBlockers[clip];
 
         Vector localMins, localMaxs;
         pRenderable->GetRenderBounds( localMins, localMaxs );
@@ -1575,39 +1587,69 @@ void CDeferredViewRender::StampRadiosityShadowDynamicModels( const Vector &origi
             Vector localCenter;
             VectorITransform( center, renderToWorld, localCenter );
 
-            float dx = 0.0f, dy = 0.0f, dz = 0.0f;
-            if ( localCenter.x < localMins.x ) dx = localMins.x - localCenter.x;
-            else if ( localCenter.x > localMaxs.x ) dx = localCenter.x - localMaxs.x;
-            if ( localCenter.y < localMins.y ) dy = localMins.y - localCenter.y;
-            else if ( localCenter.y > localMaxs.y ) dy = localCenter.y - localMaxs.y;
-            if ( localCenter.z < localMins.z ) dz = localMins.z - localCenter.z;
-            else if ( localCenter.z > localMaxs.z ) dz = localCenter.z - localMaxs.z;
+            Vector closestLocal(
+                clamp( localCenter.x, localMins.x, localMaxs.x ),
+                clamp( localCenter.y, localMins.y, localMaxs.y ),
+                clamp( localCenter.z, localMins.z, localMaxs.z ) );
+            Vector localNormal = localCenter - closestLocal;
+            const float distanceWorld = localNormal.Length();
+            const bool inside = distanceWorld <= 1.0e-4f;
+            if ( inside )
+            {
+                m_RHShadowCombinedGeometry[clip][ atlasIndex ] = 255;
 
-            const float distanceWorld = sqrtf( dx * dx + dy * dy + dz * dz );
-            if ( distanceWorld <= 1.0e-4f )
-                m_RHShadowCombinedGeometry[ atlasIndex ] = 255;
+                // Pick the nearest OBB face when the sample lies inside. This
+                // supplies stable relocation directions for moving blockers.
+                const float faceDistance[6] =
+                {
+                    localCenter.x - localMins.x, localMaxs.x - localCenter.x,
+                    localCenter.y - localMins.y, localMaxs.y - localCenter.y,
+                    localCenter.z - localMins.z, localMaxs.z - localCenter.z
+                };
+                int nearestFace = 0;
+                for ( int face = 1; face < 6; ++face )
+                    if ( faceDistance[face] < faceDistance[nearestFace] ) nearestFace = face;
+                localNormal.Init( 0.0f, 0.0f, 0.0f );
+                localNormal[nearestFace / 2] = ( nearestFace & 1 ) ? 1.0f : -1.0f;
+            }
+            else
+            {
+                VectorNormalize( localNormal );
+            }
 
             if ( distanceWorld <= dynamicInfluenceWorld )
             {
                 const float distanceCells = MIN(
                     distanceWorld / MAX( cellSize, 1.0f ),
                     RH_SHADOW_DISTANCE_MAX_CELLS );
-                const unsigned char encoded = (unsigned char)clamp(
-                    (int)floor( distanceCells * encodeScale + 0.5f ), 0, 255 );
-                m_RHShadowCombinedDistance[ atlasIndex ] =
-                    MIN( m_RHShadowCombinedDistance[ atlasIndex ], encoded );
+                const unsigned char encoded = DaylightGIEncodeDistance(
+                    distanceCells, RH_SHADOW_DISTANCE_MAX_CELLS );
+                m_RHShadowCombinedDistance[clip][ atlasIndex ] =
+                    MIN( m_RHShadowCombinedDistance[clip][ atlasIndex ], encoded );
+
+                unsigned char *pPacked = m_RHShadowCombinedBlockerField[clip].Base() + atlasIndex * 4;
+                if ( encoded <= pPacked[0] )
+                {
+                    Vector worldNormal;
+                    VectorRotate( localNormal, renderToWorld, worldNormal );
+                    pPacked[0] = encoded;
+                    pPacked[1] = 255;
+                    RHEncodeOctNormal( worldNormal, pPacked + 2 );
+                }
+                if ( inside )
+                    pPacked[1] = 255;
             }
         }
     }
 }
 
-void CDeferredViewRender::BuildRadiosityShadowDistanceField()
+void CDeferredViewRender::BuildRadiosityShadowDistanceField( int clip )
 {
     const int N = RH_SHADOW_VOLUME_SIZE;
     const int count = RH_SHADOW_ATLAS_WIDTH * RH_SHADOW_ATLAS_HEIGHT;
 
-    // Keep the EDT scratch storage alive between grid shifts. RH9.1 allocated
-    // ~2 MiB of float scratch every time the snapped RH origin moved, which
+    // Keep the EDT scratch storage alive between grid shifts. Allocating
+    // ~2 MiB of float scratch every time the snapped GI origin moves would
     // amplified the visible movement hitch on older Source allocators.
     static CUtlVector<float> s_fieldA;
     static CUtlVector<float> s_fieldB;
@@ -1618,7 +1660,7 @@ void CDeferredViewRender::BuildRadiosityShadowDistanceField()
 
     const float farValue = 1.0e7f;
     for ( int i = 0; i < count; ++i )
-        fieldA[i] = m_RHShadowStaticGeometry[i] > 0 ? 0.0f : farValue;
+        fieldA[i] = m_RHShadowStaticGeometry[clip][i] > 0 ? 0.0f : farValue;
 
     float lineIn[ RH_SHADOW_VOLUME_SIZE ];
     float lineOut[ RH_SHADOW_VOLUME_SIZE ];
@@ -1628,7 +1670,7 @@ void CDeferredViewRender::BuildRadiosityShadowDistanceField()
     for ( int y = 0; y < N; ++y )
     {
         for ( int x = 0; x < N; ++x ) lineIn[x] = fieldA[ RHShadowAtlasIndex( x, y, z ) ];
-        RHDistanceTransform1D( lineIn, lineOut );
+        DaylightGIDistanceTransform1D<RH_SHADOW_VOLUME_SIZE>( lineIn, lineOut );
         for ( int x = 0; x < N; ++x ) fieldB[ RHShadowAtlasIndex( x, y, z ) ] = lineOut[x];
     }
     // Y transform.
@@ -1636,7 +1678,7 @@ void CDeferredViewRender::BuildRadiosityShadowDistanceField()
     for ( int x = 0; x < N; ++x )
     {
         for ( int y = 0; y < N; ++y ) lineIn[y] = fieldB[ RHShadowAtlasIndex( x, y, z ) ];
-        RHDistanceTransform1D( lineIn, lineOut );
+        DaylightGIDistanceTransform1D<RH_SHADOW_VOLUME_SIZE>( lineIn, lineOut );
         for ( int y = 0; y < N; ++y ) fieldA[ RHShadowAtlasIndex( x, y, z ) ] = lineOut[y];
     }
     // Z transform.
@@ -1644,28 +1686,122 @@ void CDeferredViewRender::BuildRadiosityShadowDistanceField()
     for ( int x = 0; x < N; ++x )
     {
         for ( int z = 0; z < N; ++z ) lineIn[z] = fieldA[ RHShadowAtlasIndex( x, y, z ) ];
-        RHDistanceTransform1D( lineIn, lineOut );
+        DaylightGIDistanceTransform1D<RH_SHADOW_VOLUME_SIZE>( lineIn, lineOut );
         for ( int z = 0; z < N; ++z ) fieldB[ RHShadowAtlasIndex( x, y, z ) ] = lineOut[z];
     }
 
-    if ( m_RHShadowGeometryDistance.Count() != count ) m_RHShadowGeometryDistance.SetCount( count );
+    if ( m_RHShadowGeometryDistance[clip].Count() != count ) m_RHShadowGeometryDistance[clip].SetCount( count );
     for ( int i = 0; i < count; ++i )
     {
-        const float distanceCells = MIN( sqrtf( MAX( fieldB[i], 0.0f ) ), RH_SHADOW_DISTANCE_MAX_CELLS );
-        const int encoded = (int)floor( distanceCells * ( 255.0f / RH_SHADOW_DISTANCE_MAX_CELLS ) + 0.5f );
-        m_RHShadowGeometryDistance[i] = (unsigned char)clamp( encoded, 0, 255 );
+        // The EDT measures centre-to-centre distance. Subtract the voxel
+        // half-diagonal to obtain a conservative lower bound to the occupied
+        // cube itself, then round down so 8-bit quantisation cannot lengthen a
+        // sphere-tracing step through thin geometry.
+        const float distanceCells = MIN( DaylightGIConservativeDistanceCells( fieldB[i] ),
+            RH_SHADOW_DISTANCE_MAX_CELLS );
+        m_RHShadowGeometryDistance[clip][i] = DaylightGIEncodeDistance(
+            distanceCells, RH_SHADOW_DISTANCE_MAX_CELLS );
     }
 }
 
-void CDeferredViewRender::BuildRadiositySurfaceGuide()
+void CDeferredViewRender::BuildRadiosityStaticBlockerField( int clip )
+{
+    const int count = RH_SHADOW_ATLAS_WIDTH * RH_SHADOW_ATLAS_HEIGHT;
+    const int fieldBytes = count * 4;
+    if ( m_RHShadowStaticBlockerField[clip].Count() != fieldBytes )
+        m_RHShadowStaticBlockerField[clip].SetCount( fieldBytes );
+
+    for ( int z = 0; z < RH_SHADOW_VOLUME_SIZE; ++z )
+    for ( int y = 0; y < RH_SHADOW_VOLUME_SIZE; ++y )
+    for ( int x = 0; x < RH_SHADOW_VOLUME_SIZE; ++x )
+    {
+        const int x0 = RHClampShadowCellIndex( x - 1 );
+        const int x1 = RHClampShadowCellIndex( x + 1 );
+        const int y0 = RHClampShadowCellIndex( y - 1 );
+        const int y1 = RHClampShadowCellIndex( y + 1 );
+        const int z0 = RHClampShadowCellIndex( z - 1 );
+        const int z1 = RHClampShadowCellIndex( z + 1 );
+        const Vector gradient(
+            (float)m_RHShadowGeometryDistance[clip][ RHShadowAtlasIndex( x1, y, z ) ] -
+                (float)m_RHShadowGeometryDistance[clip][ RHShadowAtlasIndex( x0, y, z ) ],
+            (float)m_RHShadowGeometryDistance[clip][ RHShadowAtlasIndex( x, y1, z ) ] -
+                (float)m_RHShadowGeometryDistance[clip][ RHShadowAtlasIndex( x, y0, z ) ],
+            (float)m_RHShadowGeometryDistance[clip][ RHShadowAtlasIndex( x, y, z1 ) ] -
+                (float)m_RHShadowGeometryDistance[clip][ RHShadowAtlasIndex( x, y, z0 ) ] );
+
+        const int atlasIndex = RHShadowAtlasIndex( x, y, z );
+        int nearestBlockerIndex = atlasIndex;
+        unsigned char *pField = m_RHShadowStaticBlockerField[clip].Base() + atlasIndex * 4;
+        pField[0] = m_RHShadowGeometryDistance[clip][atlasIndex];
+        pField[1] = m_RHShadowStaticGeometry[clip][atlasIndex];
+
+        // Carry the nearest blocker's material opacity through the narrow SDF
+        // band. Fixed-count SM3 traces can then use conservative distance
+        // without turning alpha-tested surfaces into either holes or slabs.
+        const float distanceCells = pField[0] * ( RH_SHADOW_DISTANCE_MAX_CELLS / 255.0f );
+        if ( pField[1] == 0 && distanceCells <= 1.5f )
+        {
+            Vector outward = gradient;
+            if ( VectorNormalize( outward ) > 0.001f )
+            {
+                const float centerDistance = distanceCells + 0.8660254038f +
+                    RH_SHADOW_DISTANCE_MAX_CELLS / 255.0f;
+                const int nearestX = RHClampShadowCellIndex( (int)floor( x - outward.x * centerDistance + 0.5f ) );
+                const int nearestY = RHClampShadowCellIndex( (int)floor( y - outward.y * centerDistance + 0.5f ) );
+                const int nearestZ = RHClampShadowCellIndex( (int)floor( z - outward.z * centerDistance + 0.5f ) );
+                nearestBlockerIndex = RHShadowAtlasIndex( nearestX, nearestY, nearestZ );
+                pField[1] = m_RHShadowStaticGeometry[clip][nearestBlockerIndex];
+
+                if ( pField[1] == 0 )
+                {
+                    float nearestSquared = 1.0e20f;
+                    for ( int oz = -1; oz <= 1; ++oz )
+                    for ( int oy = -1; oy <= 1; ++oy )
+                    for ( int ox = -1; ox <= 1; ++ox )
+                    {
+                        const int candidateX = RHClampShadowCellIndex( nearestX + ox );
+                        const int candidateY = RHClampShadowCellIndex( nearestY + oy );
+                        const int candidateZ = RHClampShadowCellIndex( nearestZ + oz );
+                        const int candidateIndex = RHShadowAtlasIndex(
+                            candidateX, candidateY, candidateZ );
+                        const unsigned char opacity = m_RHShadowStaticGeometry[clip][candidateIndex];
+                        const float squared = (float)( ox * ox + oy * oy + oz * oz );
+                        if ( opacity != 0 && squared < nearestSquared )
+                        {
+                            nearestSquared = squared;
+                            pField[1] = opacity;
+                            nearestBlockerIndex = candidateIndex;
+                        }
+                    }
+                }
+            }
+        }
+        // Reuse the traced plane normal from the nearest occupied cell across
+        // the narrow SDF band. The distance gradient is only a fallback when
+        // the trace did not provide a stable plane (for example start-solid).
+        const unsigned char *pTraceNormal = m_RHShadowStaticTraceNormal[clip].Base() +
+            nearestBlockerIndex * 4;
+        if ( pTraceNormal[2] != 0 )
+        {
+            pField[2] = pTraceNormal[0];
+            pField[3] = pTraceNormal[1];
+        }
+        else
+        {
+            RHEncodeOctNormal( gradient, pField + 2 );
+        }
+    }
+}
+
+void CDeferredViewRender::BuildRadiositySurfaceGuide( int clip )
 {
     const int count = RH_ATLAS_WIDTH * RH_ATLAS_HEIGHT;
-    if ( m_RHSurfaceGuide.Count() != count * 4 ) m_RHSurfaceGuide.SetCount( count * 4 );
+    if ( m_RHSurfaceGuide[clip].Count() != count * 4 ) m_RHSurfaceGuide[clip].SetCount( count * 4 );
 
-    const float radianceCell = MAX( m_flRadianceHintsCellSize, 1.0f );
-    const float shadowCell = MAX( m_flRHShadowGeometryCellSize, 1.0f );
-    const Vector radianceOrigin = m_vecRadiosityOrigin[0];
-    const Vector shadowOrigin = m_vecRHShadowGeometryOrigin;
+    const float radianceCell = MAX( m_flRadianceHintsCellSize[clip], 1.0f );
+    const float shadowCell = MAX( m_flRHShadowGeometryCellSize[clip], 1.0f );
+    const Vector radianceOrigin = m_vecRadiosityOrigin[clip];
+    const Vector shadowOrigin = m_vecRHShadowGeometryOrigin[clip];
 
     for ( int z = 0; z < RH_VOLUME_SIZE; ++z )
     for ( int y = 0; y < RH_VOLUME_SIZE; ++y )
@@ -1685,12 +1821,23 @@ void CDeferredViewRender::BuildRadiositySurfaceGuide()
             szUnclamped >= 0 && szUnclamped < RH_SHADOW_VOLUME_SIZE;
 
         const int index = RHGeometryAtlasIndex( x, y, z ) * 4;
+        // Prefer the actual collision plane normal captured while tracing this
+        // radiance cell. The SDF gradient below is only a fallback for nearby
+        // cells or traces that began inside solid and had no reliable plane.
+        if ( m_RHStaticSurfaceGuide[clip].Count() == count * 4 &&
+             m_RHStaticSurfaceGuide[clip][index + 3] > 0 )
+        {
+            memcpy( m_RHSurfaceGuide[clip].Base() + index,
+                m_RHStaticSurfaceGuide[clip].Base() + index, 4 );
+            continue;
+        }
+
         if ( !insideShadow )
         {
-            m_RHSurfaceGuide[index + 0] = 128;
-            m_RHSurfaceGuide[index + 1] = 128;
-            m_RHSurfaceGuide[index + 2] = 255;
-            m_RHSurfaceGuide[index + 3] = 0;
+            m_RHSurfaceGuide[clip][index + 0] = 128;
+            m_RHSurfaceGuide[clip][index + 1] = 128;
+            m_RHSurfaceGuide[clip][index + 2] = 255;
+            m_RHSurfaceGuide[clip][index + 3] = 0;
             continue;
         }
 
@@ -1701,80 +1848,65 @@ void CDeferredViewRender::BuildRadiositySurfaceGuide()
         const int sy0 = RHClampShadowCellIndex( sy - 1 ), sy1 = RHClampShadowCellIndex( sy + 1 );
         const int sz0 = RHClampShadowCellIndex( sz - 1 ), sz1 = RHClampShadowCellIndex( sz + 1 );
 
-        const float dx = (float)m_RHShadowGeometryDistance[ RHShadowAtlasIndex( sx1, sy, sz ) ] -
-                         (float)m_RHShadowGeometryDistance[ RHShadowAtlasIndex( sx0, sy, sz ) ];
-        const float dy = (float)m_RHShadowGeometryDistance[ RHShadowAtlasIndex( sx, sy1, sz ) ] -
-                         (float)m_RHShadowGeometryDistance[ RHShadowAtlasIndex( sx, sy0, sz ) ];
-        const float dz = (float)m_RHShadowGeometryDistance[ RHShadowAtlasIndex( sx, sy, sz1 ) ] -
-                         (float)m_RHShadowGeometryDistance[ RHShadowAtlasIndex( sx, sy, sz0 ) ];
+        const float dx = (float)m_RHShadowGeometryDistance[clip][ RHShadowAtlasIndex( sx1, sy, sz ) ] -
+                         (float)m_RHShadowGeometryDistance[clip][ RHShadowAtlasIndex( sx0, sy, sz ) ];
+        const float dy = (float)m_RHShadowGeometryDistance[clip][ RHShadowAtlasIndex( sx, sy1, sz ) ] -
+                         (float)m_RHShadowGeometryDistance[clip][ RHShadowAtlasIndex( sx, sy0, sz ) ];
+        const float dz = (float)m_RHShadowGeometryDistance[clip][ RHShadowAtlasIndex( sx, sy, sz1 ) ] -
+                         (float)m_RHShadowGeometryDistance[clip][ RHShadowAtlasIndex( sx, sy, sz0 ) ];
 
         Vector normal( dx, dy, dz );
         const float gradientLength = VectorNormalize( normal );
         if ( gradientLength < 0.001f ) normal.Init( 0.0f, 0.0f, 1.0f );
 
         const int shadowIndex = RHShadowAtlasIndex( sx, sy, sz );
-        const float distanceCells = m_RHShadowGeometryDistance[ shadowIndex ] *
+        const float distanceCells = m_RHShadowGeometryDistance[clip][ shadowIndex ] *
             ( RH_SHADOW_DISTANCE_MAX_CELLS / 255.0f );
-        const bool occupied = m_RHShadowStaticGeometry[ shadowIndex ] > 0;
-        (void)occupied;
         // A zero/ambiguous SDF gradient has no reliable surface orientation.
         // The old fallback normal (+Z) still received coverage in free cells,
         // creating fake horizontal bounce surfaces in narrow/equidistant spaces.
         const float gradientValid = gradientLength > 0.001f ? 1.0f : 0.0f;
-        const float coverage = clamp( 1.0f - distanceCells / 2.5f, 0.0f, 1.0f ) * gradientValid;
+        // Keep the fallback cache to a single fine-voxel shell. A thick 2.5-cell
+        // shell creates several parallel emitters around one wall and is the
+        // main source of over-bright corners after the physical second bounce.
+        const float coverage = clamp( ( 1.25f - distanceCells ) / 1.25f, 0.0f, 1.0f ) * gradientValid;
 
-        m_RHSurfaceGuide[index + 0] = (unsigned char)clamp( (int)floor( ( normal.x * 0.5f + 0.5f ) * 255.0f + 0.5f ), 0, 255 );
-        m_RHSurfaceGuide[index + 1] = (unsigned char)clamp( (int)floor( ( normal.y * 0.5f + 0.5f ) * 255.0f + 0.5f ), 0, 255 );
-        m_RHSurfaceGuide[index + 2] = (unsigned char)clamp( (int)floor( ( normal.z * 0.5f + 0.5f ) * 255.0f + 0.5f ), 0, 255 );
-        m_RHSurfaceGuide[index + 3] = (unsigned char)clamp( (int)floor( coverage * 255.0f + 0.5f ), 0, 255 );
+        m_RHSurfaceGuide[clip][index + 0] = (unsigned char)clamp( (int)floor( ( normal.x * 0.5f + 0.5f ) * 255.0f + 0.5f ), 0, 255 );
+        m_RHSurfaceGuide[clip][index + 1] = (unsigned char)clamp( (int)floor( ( normal.y * 0.5f + 0.5f ) * 255.0f + 0.5f ), 0, 255 );
+        m_RHSurfaceGuide[clip][index + 2] = (unsigned char)clamp( (int)floor( ( normal.z * 0.5f + 0.5f ) * 255.0f + 0.5f ), 0, 255 );
+        m_RHSurfaceGuide[clip][index + 3] = (unsigned char)clamp( (int)floor( coverage * 255.0f + 0.5f ), 0, 255 );
     }
 }
 
-void CDeferredViewRender::UpdateRadiosityShadowGeometry()
+void CDeferredViewRender::UpdateRadiosityShadowGeometry( int clip )
 {
     const int count = RH_SHADOW_ATLAS_WIDTH * RH_SHADOW_ATLAS_HEIGHT;
-    const float radianceCell = MAX( m_flRadianceHintsCellSize, 1.0f );
+    const float radianceCell = MAX( m_flRadianceHintsCellSize[clip], 1.0f );
     const float extent = radianceCell * RH_VOLUME_SIZE;
     const float shadowCell = extent / RH_SHADOW_VOLUME_SIZE_F;
-    const Vector radianceOrigin = m_vecRadiosityOrigin[0];
+    const Vector radianceOrigin = m_vecRadiosityOrigin[clip];
 
-    // The 64^3 cache has its own origin. RH9.1 forced it to the 40^3 radiance
-    // origin; a 20-unit radiance shift equals 1.6 shadow cells at the default
-    // 800-unit extent, so every movement invalidated all 262k cells. Snapping
-    // independently to the shadow-cell lattice gives exact integer shifts.
+    // The 64^3 cache has an explicit origin and snaps independently to its
+    // blocker-cell lattice. This guarantees exact integer slab shifts and keeps
+    // the world-to-blocker transform correct for both clip levels.
     Vector desiredShadowOrigin = radianceOrigin;
     for ( int axis = 0; axis < 3; ++axis )
         desiredShadowOrigin[axis] =
             floor( desiredShadowOrigin[axis] / shadowCell + 0.5f ) * shadowCell;
 
-    if ( m_RHShadowStaticGeometry.Count() != count ) m_RHShadowStaticGeometry.SetCount( count );
-    if ( m_RHShadowCombinedGeometry.Count() != count ) m_RHShadowCombinedGeometry.SetCount( count );
-    if ( m_RHShadowGeometryDistance.Count() != count ) m_RHShadowGeometryDistance.SetCount( count );
-    if ( m_RHShadowCombinedDistance.Count() != count ) m_RHShadowCombinedDistance.SetCount( count );
+    if ( m_RHShadowStaticGeometry[clip].Count() != count ) m_RHShadowStaticGeometry[clip].SetCount( count );
+    if ( m_RHShadowCombinedGeometry[clip].Count() != count ) m_RHShadowCombinedGeometry[clip].SetCount( count );
+    if ( m_RHShadowGeometryDistance[clip].Count() != count ) m_RHShadowGeometryDistance[clip].SetCount( count );
+    if ( m_RHShadowCombinedDistance[clip].Count() != count ) m_RHShadowCombinedDistance[clip].SetCount( count );
+    const int traceNormalBytes = count * 4;
+    if ( m_RHShadowStaticTraceNormal[clip].Count() != traceNormalBytes ) m_RHShadowStaticTraceNormal[clip].SetCount( traceNormalBytes );
+    if ( m_RHShadowTraceNormalScratch[clip].Count() != traceNormalBytes ) m_RHShadowTraceNormalScratch[clip].SetCount( traceNormalBytes );
+    const int blockerBytes = count * 4;
+    if ( m_RHShadowStaticBlockerField[clip].Count() != blockerBytes ) m_RHShadowStaticBlockerField[clip].SetCount( blockerBytes );
+    if ( m_RHShadowCombinedBlockerField[clip].Count() != blockerBytes ) m_RHShadowCombinedBlockerField[clip].SetCount( blockerBytes );
 
-    if ( !deferred_rh_cpu_geometry_enable.GetBool() )
-    {
-        memset( m_RHShadowStaticGeometry.Base(), 0, count );
-        memset( m_RHShadowCombinedGeometry.Base(), 0, count );
-        memset( m_RHShadowGeometryDistance.Base(), 255, count );
-        memset( m_RHShadowCombinedDistance.Base(), 255, count );
-        const int guideBytes = RH_ATLAS_WIDTH * RH_ATLAS_HEIGHT * 4;
-        if ( m_RHSurfaceGuide.Count() != guideBytes ) m_RHSurfaceGuide.SetCount( guideBytes );
-        memset( m_RHSurfaceGuide.Base(), 0, guideBytes );
-
-        m_vecRHShadowGeometryOrigin = desiredShadowOrigin;
-        m_flRHShadowGeometryCellSize = shadowCell;
-        m_vecRadiosityOrigin[1] = desiredShadowOrigin;
-        m_bRHShadowGeometryValid = false;
-
-        UpdateDefRT_RHShadowGeometry( m_RHShadowCombinedGeometry.Base(), count );
-        UpdateDefRT_RHShadowDistance( m_RHShadowCombinedDistance.Base(), count );
-        UpdateDefRT_RHSurfaceGuide( m_RHSurfaceGuide.Base(), guideBytes );
-        return;
-    }
-
-    const bool sameCellSize = m_bRHShadowGeometryValid &&
-        fabs( m_flRHShadowGeometryCellSize - shadowCell ) <= 0.01f;
+    const bool sameCellSize = m_bRHShadowGeometryValid[clip] &&
+        fabs( m_flRHShadowGeometryCellSize[clip] - shadowCell ) <= 0.01f;
     int shift[3] = { RH_SHADOW_VOLUME_SIZE, RH_SHADOW_VOLUME_SIZE, RH_SHADOW_VOLUME_SIZE };
     bool integerShift = sameCellSize;
 
@@ -1783,7 +1915,7 @@ void CDeferredViewRender::UpdateRadiosityShadowGeometry()
         for ( int axis = 0; axis < 3; ++axis )
         {
             const float deltaCells =
-                ( desiredShadowOrigin[axis] - m_vecRHShadowGeometryOrigin[axis] ) / shadowCell;
+                ( desiredShadowOrigin[axis] - m_vecRHShadowGeometryOrigin[clip][axis] ) / shadowCell;
             shift[axis] = (int)( deltaCells >= 0.0f
                 ? floor( deltaCells + 0.5f )
                 : ceil( deltaCells - 0.5f ) );
@@ -1792,15 +1924,17 @@ void CDeferredViewRender::UpdateRadiosityShadowGeometry()
         }
     }
 
-    const bool originChanged = !m_bRHShadowGeometryValid || !sameCellSize ||
-        desiredShadowOrigin.DistToSqr( m_vecRHShadowGeometryOrigin ) > 0.01f;
+    const bool originChanged = !m_bRHShadowGeometryValid[clip] || !sameCellSize ||
+        desiredShadowOrigin.DistToSqr( m_vecRHShadowGeometryOrigin[clip] ) > 0.01f;
 
     if ( originChanged )
     {
         // m_RHShadowCombinedGeometry is scratch here. Copying the previous
         // static cache lets us remap surviving cells without touching the
         // trace system; only newly exposed slabs are queried.
-        memcpy( m_RHShadowCombinedGeometry.Base(), m_RHShadowStaticGeometry.Base(), count );
+        memcpy( m_RHShadowCombinedGeometry[clip].Base(), m_RHShadowStaticGeometry[clip].Base(), count );
+        memcpy( m_RHShadowTraceNormalScratch[clip].Base(),
+            m_RHShadowStaticTraceNormal[clip].Base(), traceNormalBytes );
 
         const bool canReuse = integerShift &&
             shift[0] > -RH_SHADOW_VOLUME_SIZE && shift[0] < RH_SHADOW_VOLUME_SIZE &&
@@ -1822,126 +1956,75 @@ void CDeferredViewRender::UpdateRadiosityShadowGeometry()
 
             if ( reusable )
             {
-                m_RHShadowStaticGeometry[newIndex] =
-                    m_RHShadowCombinedGeometry[ RHShadowAtlasIndex( oldX, oldY, oldZ ) ];
+                m_RHShadowStaticGeometry[clip][newIndex] =
+                    m_RHShadowCombinedGeometry[clip][ RHShadowAtlasIndex( oldX, oldY, oldZ ) ];
+                const int oldIndex = RHShadowAtlasIndex( oldX, oldY, oldZ );
+                memcpy( m_RHShadowStaticTraceNormal[clip].Base() + newIndex * 4,
+                    m_RHShadowTraceNormalScratch[clip].Base() + oldIndex * 4, 4 );
                 continue;
             }
+			++m_nGIFineCellsRebuilt[clip];
 
             const Vector center = desiredShadowOrigin + Vector(
                 ( x + 0.5f ) * shadowCell,
                 ( y + 0.5f ) * shadowCell,
                 ( z + 0.5f ) * shadowCell );
 
-            // Use the already-updated 40^3 field as a broad phase. Because the
-            // two grids now have independent origins, map through world space.
-            const int cx = (int)floor( ( center.x - radianceOrigin.x ) / radianceCell );
-            const int cy = (int)floor( ( center.y - radianceOrigin.y ) / radianceCell );
-            const int cz = (int)floor( ( center.z - radianceOrigin.z ) / radianceCell );
-            const bool insideCoarse =
-                cx >= 0 && cx < RH_VOLUME_SIZE &&
-                cy >= 0 && cy < RH_VOLUME_SIZE &&
-                cz >= 0 && cz < RH_VOLUME_SIZE;
-
-            if ( insideCoarse &&
-                 m_RHGeometryDistance[ RHGeometryAtlasIndex( cx, cy, cz ) ] > 1 )
+            // The 32^3 cache uses gapless full-voxel hull traces and is therefore
+            // a conservative broad phase. It removes the prohibitive 64^3 cold
+            // trace cost without reintroducing the old thin-wall holes caused by
+            // a sparse/undersized coarse gate.
+            const Vector coarseVoxel = DaylightGIWorldToVoxel( center,
+                m_vecRHGeometryOrigin[clip], MAX( m_flRHGeometryCellSize[clip], 1.0f ) );
+            const int coarseX = (int)floor( coarseVoxel.x );
+            const int coarseY = (int)floor( coarseVoxel.y );
+            const int coarseZ = (int)floor( coarseVoxel.z );
+            const bool insideCoarse = coarseX >= 0 && coarseX < RH_VOLUME_SIZE &&
+                coarseY >= 0 && coarseY < RH_VOLUME_SIZE &&
+                coarseZ >= 0 && coarseZ < RH_VOLUME_SIZE;
+            const bool coarseOccupied = insideCoarse && m_RHStaticGeometry[clip][
+                RHGeometryAtlasIndex( coarseX, coarseY, coarseZ ) ] != 0;
+            if ( coarseOccupied )
             {
-                m_RHShadowStaticGeometry[newIndex] = 0;
-                continue;
+				++m_nGIFineCellsTraced[clip];
+                m_RHShadowStaticGeometry[clip][newIndex] =
+                    BuildRadiosityShadowStaticCell( center, shadowCell,
+                        m_RHShadowStaticTraceNormal[clip].Base() + newIndex * 4 );
             }
-
-            // Cells in the tiny shadow-grid guard strip outside the radiance
-            // bounds are traced directly so that receiver/SDF samples remain
-            // conservative at the overlap edge.
-            m_RHShadowStaticGeometry[newIndex] =
-                BuildRadiosityShadowStaticCell( center, shadowCell );
+            else
+            {
+                m_RHShadowStaticGeometry[clip][newIndex] = 0;
+                unsigned char *pTraceNormal = m_RHShadowStaticTraceNormal[clip].Base() + newIndex * 4;
+                pTraceNormal[0] = 128; pTraceNormal[1] = 128;
+                pTraceNormal[2] = 0; pTraceNormal[3] = 0;
+            }
         }
 
-        m_vecRHShadowGeometryOrigin = desiredShadowOrigin;
-        m_flRHShadowGeometryCellSize = shadowCell;
-        m_bRHShadowGeometryValid = true;
+        m_vecRHShadowGeometryOrigin[clip] = desiredShadowOrigin;
+        m_flRHShadowGeometryCellSize[clip] = shadowCell;
+        m_bRHShadowGeometryValid[clip] = true;
 
         // Exact EDT + surface guide are rebuilt only after an actual integer
-        // shadow-grid shift, never merely because the 40^3 origin moved.
-        BuildRadiosityShadowDistanceField();
-        BuildRadiositySurfaceGuide();
+        // blocker-grid shift, never merely because the 32^3 origin moved.
+        BuildRadiosityShadowDistanceField( clip );
+        BuildRadiosityStaticBlockerField( clip );
+        BuildRadiositySurfaceGuide( clip );
 
-        if ( m_RHSurfaceGuide.Count() > 0 )
-            UpdateDefRT_RHSurfaceGuide( m_RHSurfaceGuide.Base(), m_RHSurfaceGuide.Count() );
+        if ( m_RHSurfaceGuide[clip].Count() > 0 )
+            UpdateDefRT_DaylightGISurfaceGuide( clip, m_RHSurfaceGuide[clip].Base(), m_RHSurfaceGuide[clip].Count() );
     }
 
-    // vecOrigin[1] is reserved for the independently snapped 64^3 shadow grid.
-    // Shaders use the origin delta to map radiance UVW -> shadow UVW.
-    m_vecRadiosityOrigin[1] = m_vecRHShadowGeometryOrigin;
-
-    memcpy( m_RHShadowCombinedGeometry.Base(), m_RHShadowStaticGeometry.Base(), count );
-    memcpy( m_RHShadowCombinedDistance.Base(), m_RHShadowGeometryDistance.Base(), count );
-    StampRadiosityShadowDynamicModels( m_vecRHShadowGeometryOrigin, shadowCell );
-    BuildRadiosityShadowHierarchy();
-    UpdateDefRT_RHShadowGeometry( m_RHShadowCombinedGeometry.Base(), count );
-    UpdateDefRT_RHShadowDistance( m_RHShadowCombinedDistance.Base(), count );
-}
-
-void CDeferredViewRender::BuildRadiosityShadowHierarchy()
-{
-    const int count32 = RH_SHADOW_MIP1_ATLAS_WIDTH * RH_SHADOW_MIP1_ATLAS_HEIGHT;
-    const int count16 = RH_SHADOW_MIP2_ATLAS_WIDTH * RH_SHADOW_MIP2_ATLAS_HEIGHT;
-    if ( m_RHShadowGeometry32.Count() != count32 ) m_RHShadowGeometry32.SetCount( count32 );
-    if ( m_RHShadowDistance32.Count() != count32 ) m_RHShadowDistance32.SetCount( count32 );
-    if ( m_RHShadowGeometry16.Count() != count16 ) m_RHShadowGeometry16.SetCount( count16 );
-    if ( m_RHShadowDistance16.Count() != count16 ) m_RHShadowDistance16.SetCount( count16 );
-
-    // Conservative reduction: occupancy uses MAX so thin blockers survive;
-    // distance uses MIN and remains encoded in base-64 shadow-cell units.
-    for ( int z = 0; z < RH_SHADOW_MIP1_SIZE; ++z )
-    for ( int y = 0; y < RH_SHADOW_MIP1_SIZE; ++y )
-    for ( int x = 0; x < RH_SHADOW_MIP1_SIZE; ++x )
-    {
-        unsigned char occupancy = 0;
-        unsigned char distance = 255;
-        for ( int dz = 0; dz < 2; ++dz )
-        for ( int dy = 0; dy < 2; ++dy )
-        for ( int dx = 0; dx < 2; ++dx )
-        {
-            const int source = RHShadowAtlasIndex( x * 2 + dx, y * 2 + dy, z * 2 + dz );
-            occupancy = MAX( occupancy, m_RHShadowCombinedGeometry[source] );
-            distance = MIN( distance, m_RHShadowCombinedDistance[source] );
-        }
-        const int target = RHAtlasIndexN( x, y, z, RH_SHADOW_MIP1_SIZE );
-        m_RHShadowGeometry32[target] = occupancy;
-        m_RHShadowDistance32[target] = distance;
-    }
-
-    for ( int z = 0; z < RH_SHADOW_MIP2_SIZE; ++z )
-    for ( int y = 0; y < RH_SHADOW_MIP2_SIZE; ++y )
-    for ( int x = 0; x < RH_SHADOW_MIP2_SIZE; ++x )
-    {
-        unsigned char occupancy = 0;
-        unsigned char distance = 255;
-        for ( int dz = 0; dz < 2; ++dz )
-        for ( int dy = 0; dy < 2; ++dy )
-        for ( int dx = 0; dx < 2; ++dx )
-        {
-            const int source = RHAtlasIndexN( x * 2 + dx, y * 2 + dy, z * 2 + dz, RH_SHADOW_MIP1_SIZE );
-            occupancy = MAX( occupancy, m_RHShadowGeometry32[source] );
-            distance = MIN( distance, m_RHShadowDistance32[source] );
-        }
-        const int target = RHAtlasIndexN( x, y, z, RH_SHADOW_MIP2_SIZE );
-        m_RHShadowGeometry16[target] = occupancy;
-        m_RHShadowDistance16[target] = distance;
-    }
-
-    UpdateDefRT_RHShadowGeometry32( m_RHShadowGeometry32.Base(), count32 );
-    UpdateDefRT_RHShadowDistance32( m_RHShadowDistance32.Base(), count32 );
-    UpdateDefRT_RHShadowGeometry16( m_RHShadowGeometry16.Base(), count16 );
-    UpdateDefRT_RHShadowDistance16( m_RHShadowDistance16.Base(), count16 );
+    memcpy( m_RHShadowCombinedGeometry[clip].Base(), m_RHShadowStaticGeometry[clip].Base(), count );
+    memcpy( m_RHShadowCombinedDistance[clip].Base(), m_RHShadowGeometryDistance[clip].Base(), count );
+    memcpy( m_RHShadowCombinedBlockerField[clip].Base(),
+        m_RHShadowStaticBlockerField[clip].Base(), blockerBytes );
+    StampRadiosityShadowDynamicModels( clip, m_vecRHShadowGeometryOrigin[clip], shadowCell );
+    UpdateDefRT_DaylightGIBlockerField( clip, m_RHShadowCombinedBlockerField[clip].Base(), blockerBytes );
 }
 
 unsigned char CDeferredViewRender::BuildRadiosityOpenSkyCell( const Vector &cellCenter ) const
 {
-    if ( !deferred_rh_sky_cache_enable.GetBool() )
-        return 255;
-
-    const float traceDistance = clamp( deferred_rh_sky_cache_trace_distance.GetFloat(), 256.0f, 16384.0f );
+    const float traceDistance = 4096.0f;
     const float h = 0.5f;
     const float z = 0.8660254038f;
     const Vector dirs[5] =
@@ -1966,46 +2049,36 @@ unsigned char CDeferredViewRender::BuildRadiosityOpenSkyCell( const Vector &cell
     return (unsigned char)clamp( (int)floor( open * ( 255.0f / 5.0f ) + 0.5f ), 0, 255 );
 }
 
-void CDeferredViewRender::UpdateRadiosityOpenSky()
+void CDeferredViewRender::UpdateRadiosityOpenSky( int clip )
 {
     const int size = RH_SKY_CACHE_SIZE;
     const int count = RH_SKY_CACHE_ATLAS_WIDTH * RH_SKY_CACHE_ATLAS_HEIGHT;
-    const float extent = MAX( m_flRadianceHintsCellSize, 1.0f ) * RH_VOLUME_SIZE;
+    const float extent = MAX( m_flRadianceHintsCellSize[clip], 1.0f ) * RH_VOLUME_SIZE;
     const float skyCell = extent / RH_SKY_CACHE_SIZE_F;
-    Vector desiredOrigin = m_vecRadiosityOrigin[0];
+    Vector desiredOrigin = m_vecRadiosityOrigin[clip];
     for ( int axis = 0; axis < 3; ++axis )
         desiredOrigin[axis] = floor( desiredOrigin[axis] / skyCell + 0.5f ) * skyCell;
 
-    if ( m_RHOpenSky.Count() != count ) m_RHOpenSky.SetCount( count );
-    if ( m_RHOpenSkyScratch.Count() != count ) m_RHOpenSkyScratch.SetCount( count );
+    if ( m_RHOpenSky[clip].Count() != count ) m_RHOpenSky[clip].SetCount( count );
+    if ( m_RHOpenSkyScratch[clip].Count() != count ) m_RHOpenSkyScratch[clip].SetCount( count );
 
-    if ( !deferred_rh_sky_cache_enable.GetBool() )
-    {
-        memset( m_RHOpenSky.Base(), 255, count );
-        m_vecRHOpenSkyOrigin = desiredOrigin;
-        m_flRHOpenSkyCellSize = skyCell;
-        m_bRHOpenSkyValid = false;
-        UpdateDefRT_RHOpenSky( m_RHOpenSky.Base(), count );
-        return;
-    }
-
-    const bool sameCell = m_bRHOpenSkyValid && fabs( m_flRHOpenSkyCellSize - skyCell ) <= 0.01f;
+    const bool sameCell = m_bRHOpenSkyValid[clip] && fabs( m_flRHOpenSkyCellSize[clip] - skyCell ) <= 0.01f;
     int shift[3] = { size, size, size };
     bool integerShift = sameCell;
     if ( sameCell )
     {
         for ( int axis = 0; axis < 3; ++axis )
         {
-            const float delta = ( desiredOrigin[axis] - m_vecRHOpenSkyOrigin[axis] ) / skyCell;
+            const float delta = ( desiredOrigin[axis] - m_vecRHOpenSkyOrigin[clip][axis] ) / skyCell;
             shift[axis] = (int)( delta >= 0.0f ? floor( delta + 0.5f ) : ceil( delta - 0.5f ) );
             if ( fabs( delta - shift[axis] ) > 0.01f ) integerShift = false;
         }
     }
 
-    const bool changed = !m_bRHOpenSkyValid || !sameCell || desiredOrigin.DistToSqr( m_vecRHOpenSkyOrigin ) > 0.01f;
+    const bool changed = !m_bRHOpenSkyValid[clip] || !sameCell || desiredOrigin.DistToSqr( m_vecRHOpenSkyOrigin[clip] ) > 0.01f;
     if ( changed )
     {
-        memcpy( m_RHOpenSkyScratch.Base(), m_RHOpenSky.Base(), count );
+        memcpy( m_RHOpenSkyScratch[clip].Base(), m_RHOpenSky[clip].Base(), count );
         const bool canReuse = integerShift &&
             shift[0] > -size && shift[0] < size &&
             shift[1] > -size && shift[1] < size &&
@@ -2020,75 +2093,80 @@ void CDeferredViewRender::UpdateRadiosityOpenSky()
             const bool reuse = canReuse && ox >= 0 && ox < size && oy >= 0 && oy < size && oz >= 0 && oz < size;
             if ( reuse )
             {
-                m_RHOpenSky[target] = m_RHOpenSkyScratch[ RHAtlasIndexN( ox, oy, oz, size ) ];
+                m_RHOpenSky[clip][target] = m_RHOpenSkyScratch[clip][ RHAtlasIndexN( ox, oy, oz, size ) ];
             }
             else
             {
+				++m_nGISkyCellsRebuilt[clip];
                 const Vector center = desiredOrigin + Vector(
                     ( x + 0.5f ) * skyCell, ( y + 0.5f ) * skyCell, ( z + 0.5f ) * skyCell );
-                m_RHOpenSky[target] = BuildRadiosityOpenSkyCell( center );
+                m_RHOpenSky[clip][target] = BuildRadiosityOpenSkyCell( center );
             }
         }
 
-        m_vecRHOpenSkyOrigin = desiredOrigin;
-        m_flRHOpenSkyCellSize = skyCell;
-        m_bRHOpenSkyValid = true;
+        m_vecRHOpenSkyOrigin[clip] = desiredOrigin;
+        m_flRHOpenSkyCellSize[clip] = skyCell;
+        m_bRHOpenSkyValid[clip] = true;
     }
 
-    UpdateDefRT_RHOpenSky( m_RHOpenSky.Base(), count );
+    UpdateDefRT_DaylightGIOpenSky( clip, m_RHOpenSky[clip].Base(), count );
+}
+
+namespace
+{
+	struct defData_setDaylightGIClip
+	{
+		int clip;
+		static void Fire( defData_setDaylightGIClip d )
+		{
+			GetDeferredExt()->CommitDaylightGIActiveClip( d.clip );
+		}
+	};
+
+	void SetDaylightGIActiveClip( int clip )
+	{
+		defData_setDaylightGIClip data;
+		data.clip = clip;
+		QUEUE_FIRE( defData_setDaylightGIClip, Fire, data );
+	}
 }
 
 void CDeferredViewRender::UpdateRadiosityPosition()
 {
 	struct defData_setupRadiosity
 	{
-		radiosityData_t data;
-		static void Fire( defData_setupRadiosity d ) { GetDeferredExt()->CommitRadiosityData( d.data ); }
+		daylightGIData_t data;
+		static void Fire( defData_setupRadiosity d ) { GetDeferredExt()->CommitDaylightGIData( d.data ); }
 	};
 
 	defData_setupRadiosity setup;
-	setup.data.vecOrigin[0] = m_vecRadiosityOrigin[0];
-	setup.data.vecOrigin[1] = m_vecRadiosityOrigin[1];
-	setup.data.vecRSMParams.w = MAX( deferred_rh_cell_size.GetFloat(), 1.0f );
+	for ( int clip = 0; clip < RH_CLIP_LEVEL_COUNT; ++clip )
+	{
+		daylightGIClipDesc_t &desc = setup.data.clips[clip];
+		desc.vecRadianceOrigin = m_vecRadiosityOrigin[clip];
+		desc.vecBlockerOrigin = m_vecRHShadowGeometryOrigin[clip];
+		desc.flRadianceCellSize = m_flRadianceHintsCellSize[clip];
+		desc.flBlockerCellSize = m_flRHShadowGeometryCellSize[clip];
+		desc.flExtent = m_flRadianceHintsCellSize[clip] * RH_VOLUME_SIZE;
+		desc.flBlockerExtent = m_flRHShadowGeometryCellSize[clip] * RH_SHADOW_VOLUME_SIZE;
+		if ( m_bRHGeometryValid[clip] && m_bRHShadowGeometryValid[clip] )
+			setup.data.nValidClipMask |= 1u << clip;
+	}
+	setup.data.iActiveClip = DAYLIGHT_GI_CLIP_NEAR;
+	setup.data.vecRSMParams.w = m_flRadianceHintsCellSize[RH_CLIP_NEAR];
 	QUEUE_FIRE( defData_setupRadiosity, Fire, setup );
 }
 
 void CDeferredViewRender::RenderRadianceHintsRSM( const CViewSetup &view )
 {
-	const float cellSize = MAX( deferred_rh_cell_size.GetFloat(), 1.0f );
+	const float cellSize = m_flRadianceHintsCellSize[RH_CLIP_FAR];
 	const float extent = cellSize * RH_VOLUME_SIZE;
-	const Vector volumeCenter = m_vecRadiosityOrigin[0] + Vector( extent, extent, extent ) * 0.5f;
+	const Vector volumeCenter = m_vecRadiosityOrigin[RH_CLIP_FAR] + Vector( extent, extent, extent ) * 0.5f;
 	const float visOffset = extent * 0.25f;
 
-	// Optional reverse-direction geometry capture. It is injected only into the
-	// blocker field, never into radiance. This captures the opposite outer layer
-	// of world/models and makes low-frequency blocking much more consistent in
-	// interiors while preserving a deterministic single-frame pipeline.
-	if ( deferred_rh_back_rsm_enable.GetBool() )
-	{
-		CRefPtr<CRadianceHintsRSMView> pBackRSM = new CRadianceHintsRSMView(
-			this, m_vecRadiosityOrigin[0], m_vecRadiosityOrigin[1], extent, cellSize, true );
-		pBackRSM->Setup( view, GetDefRT_RHRSMDepth(), GetDefRT_RHRSMColor() );
-		pBackRSM->SetupRadiosityTargets( GetDefRT_RHRSMFlux(), GetDefRT_RHRSMNormal(), GetDefRT_RHRSMAlbedo() );
-		pBackRSM->SetRadiosityOutputEnabled( true );
-		pBackRSM->AddVisibilityOrigin( view.origin );
-		for ( int sx = -1; sx <= 1; sx += 2 )
-		for ( int sy = -1; sy <= 1; sy += 2 )
-		for ( int sz = -1; sz <= 1; sz += 2 )
-			pBackRSM->AddVisibilityOrigin( volumeCenter + Vector( sx * visOffset, sy * visOffset, sz * visOffset ) );
-		AddViewToScene( pBackRSM );
-
-		CMatRenderContextPtr pRenderContext( materials );
-		pRenderContext->SetIntRenderingParameter( INT_RENDERPARM_DEFERRED_RADIOSITY_CASCADE, 1 );
-		PerformRadiosityVisibility();
-		PerformRadiositySurface();
-	}
-
-	// Sun-facing RSM supplies actual reflected flux and the other half of the
-	// directional blocker field. It is rendered last so the debug RSM targets
-	// continue to show the physically relevant sun-facing data.
+	// One stable sun-facing RSM covers the far clip and is reused by both levels.
 	CRefPtr<CRadianceHintsRSMView> pRSM = new CRadianceHintsRSMView(
-		this, m_vecRadiosityOrigin[0], m_vecRadiosityOrigin[1], extent, cellSize, false );
+		this, m_vecRadiosityOrigin[RH_CLIP_FAR], extent, cellSize );
 	pRSM->Setup( view, GetDefRT_RHRSMDepth(), GetDefRT_RHRSMColor() );
 	pRSM->SetupRadiosityTargets( GetDefRT_RHRSMFlux(), GetDefRT_RHRSMNormal(), GetDefRT_RHRSMAlbedo() );
 	pRSM->SetRadiosityOutputEnabled( true );
@@ -2099,56 +2177,60 @@ void CDeferredViewRender::RenderRadianceHintsRSM( const CViewSetup &view )
 		pRSM->AddVisibilityOrigin( volumeCenter + Vector( sx * visOffset, sy * visOffset, sz * visOffset ) );
 	AddViewToScene( pRSM );
 
-	PerformRadiosityGlobal();
-	if ( deferred_rh_sky_enable.GetBool() )
-		PerformRadiositySky();
+	const bool bSecondBounce = deferred_gi_quality.GetInt() > 0 &&
+		deferred_gi_bounce_intensity.GetFloat() > 0.0f;
+	for ( int clip = 0; clip < RH_CLIP_LEVEL_COUNT; ++clip )
 	{
-		CMatRenderContextPtr pRenderContext( materials );
-		pRenderContext->SetIntRenderingParameter( INT_RENDERPARM_DEFERRED_RADIOSITY_CASCADE, 0 );
+		SetDaylightGIActiveClip( clip );
+		PerformRadiosityGlobal( clip );
+		PerformRadiositySky( clip );
+		if ( bSecondBounce )
+			PerformRadiositySurface( clip );
+		PerformRadiosityFilter( clip );
 	}
-	PerformRadiosityVisibility();
-	PerformRadiositySurface();
-	PerformRadiosityFilter();
-	// Build a first-bounce hierarchy before propagation so RH11 diffusion can
-	// use broad directional energy without feeding the new bounce back into itself.
-	PerformRadiosityHierarchy( false );
 	m_bRadianceHintsInjected = true;
 }
 
-void CDeferredViewRender::PerformRadiosityGlobal()
+void CDeferredViewRender::PerformRadiosityGlobal( int clip )
 {
 	CMatRenderContextPtr pRenderContext( materials );
 	pRenderContext->SetIntRenderingParameter( INT_RENDERPARM_DEFERRED_RADIOSITY_CASCADE, 0 );
-	pRenderContext->PushRenderTargetAndViewport( GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_R ), NULL,
+	pRenderContext->PushRenderTargetAndViewport( GetDefRT_DaylightGIRadiance( clip, 0, RH_CHANNEL_SH_R ), NULL,
 		0, 0, RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT );
-	pRenderContext->SetRenderTargetEx( 1, GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_G ) );
-	pRenderContext->SetRenderTargetEx( 2, GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_B ) );
-	pRenderContext->SetRenderTargetEx( 3, GetDefRT_RadianceHints( 0, RH_CHANNEL_META ) );
-	// RH7 High uses sixteen stable stratified RSM samples per cell, split into
+	pRenderContext->SetRenderTargetEx( 1, GetDefRT_DaylightGIRadiance( clip, 0, RH_CHANNEL_SH_G ) );
+	pRenderContext->SetRenderTargetEx( 2, GetDefRT_DaylightGIRadiance( clip, 0, RH_CHANNEL_SH_B ) );
+	pRenderContext->SetRenderTargetEx( 3, GetDefRT_DaylightGIRadiance( clip, 0, RH_CHANNEL_META ) );
+	// High quality uses sixteen stable stratified RSM samples per cell, split into
 	// four four-sample additive draws so legacy FXC never sees a wide sampler kernel.
 	pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_GLOBAL ) );
 	GetRadianceHintsVolumeMesh()->Draw();
 #if RH_RADIANCE_SAMPLE_COUNT >= 8
-	pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_GLOBAL_1 ) );
-	GetRadianceHintsVolumeMesh()->Draw();
+	if ( deferred_gi_quality.GetInt() >= 1 )
+	{
+		pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_GLOBAL_1 ) );
+		GetRadianceHintsVolumeMesh()->Draw();
+	}
 #endif
 #if RH_RADIANCE_SAMPLE_COUNT >= 16
-	pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_GLOBAL_2 ) );
-	GetRadianceHintsVolumeMesh()->Draw();
-	pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_GLOBAL_3 ) );
-	GetRadianceHintsVolumeMesh()->Draw();
+	if ( deferred_gi_quality.GetInt() >= 2 )
+	{
+		pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_GLOBAL_2 ) );
+		GetRadianceHintsVolumeMesh()->Draw();
+		pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_GLOBAL_3 ) );
+		GetRadianceHintsVolumeMesh()->Draw();
+	}
 #endif
 	pRenderContext->PopRenderTargetAndViewport();
 }
 
-void CDeferredViewRender::PerformRadiositySky()
+void CDeferredViewRender::PerformRadiositySky( int clip )
 {
 	CMatRenderContextPtr pRenderContext( materials );
-	pRenderContext->PushRenderTargetAndViewport( GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_R ), NULL,
+	pRenderContext->PushRenderTargetAndViewport( GetDefRT_DaylightGIRadiance( clip, 0, RH_CHANNEL_SH_R ), NULL,
 		0, 0, RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT );
-	pRenderContext->SetRenderTargetEx( 1, GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_G ) );
-	pRenderContext->SetRenderTargetEx( 2, GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_B ) );
-	pRenderContext->SetRenderTargetEx( 3, GetDefRT_RadianceHints( 0, RH_CHANNEL_META ) );
+	pRenderContext->SetRenderTargetEx( 1, GetDefRT_DaylightGIRadiance( clip, 0, RH_CHANNEL_SH_G ) );
+	pRenderContext->SetRenderTargetEx( 2, GetDefRT_DaylightGIRadiance( clip, 0, RH_CHANNEL_SH_B ) );
+	pRenderContext->SetRenderTargetEx( 3, GetDefRT_DaylightGIRadiance( clip, 0, RH_CHANNEL_META ) );
 	pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_SKY ) );
 	GetRadianceHintsVolumeMesh()->Draw();
 	pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_SKY_1 ) );
@@ -2156,12 +2238,12 @@ void CDeferredViewRender::PerformRadiositySky()
 	pRenderContext->PopRenderTargetAndViewport();
 }
 
-void CDeferredViewRender::PerformRadiositySurface()
+void CDeferredViewRender::PerformRadiositySurface( int clip )
 {
 	CMatRenderContextPtr pRenderContext( materials );
-	pRenderContext->PushRenderTargetAndViewport( GetDefRT_RHSurfaceAlbedo(), NULL,
+	pRenderContext->PushRenderTargetAndViewport( GetDefRT_DaylightGISurfaceAlbedo( clip ), NULL,
 		0, 0, RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT );
-	pRenderContext->SetRenderTargetEx( 1, GetDefRT_RHSurfaceNormal() );
+	pRenderContext->SetRenderTargetEx( 1, GetDefRT_DaylightGISurfaceNormal( clip ) );
 	pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_SURFACE ) );
 	GetRadianceHintsVolumeMesh()->Draw();
 	pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_SURFACE_1 ) );
@@ -2169,115 +2251,68 @@ void CDeferredViewRender::PerformRadiositySurface()
 	pRenderContext->PopRenderTargetAndViewport();
 }
 
-void CDeferredViewRender::PerformRadiosityVisibility()
-{
-	CMatRenderContextPtr pRenderContext( materials );
-	pRenderContext->PushRenderTargetAndViewport( GetDefRT_RHVisibility(), NULL,
-		0, 0, RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT );
-	pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_VISIBILITY ) );
-	GetRadianceHintsVolumeMesh()->Draw();
-	pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_VISIBILITY_1 ) );
-	GetRadianceHintsVolumeMesh()->Draw();
-	pRenderContext->PopRenderTargetAndViewport();
-}
-
-void CDeferredViewRender::PerformRadiosityFilter()
+void CDeferredViewRender::PerformRadiosityFilter( int clip )
 {
 	CMatRenderContextPtr pRenderContext( materials );
 
 	// Separable X/Y/Z reconstruction is exactly reflection invariant and keeps
 	// each ps_3_0 permutation small enough for the legacy Source FXC compiler.
 	// Pass X: raw set 0 -> set 1.
-	pRenderContext->PushRenderTargetAndViewport( GetDefRT_RadianceHints( 1, RH_CHANNEL_SH_R ), NULL,
+	pRenderContext->PushRenderTargetAndViewport( GetDefRT_DaylightGIRadiance( clip, 1, RH_CHANNEL_SH_R ), NULL,
 		0, 0, RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT );
-	pRenderContext->SetRenderTargetEx( 1, GetDefRT_RadianceHints( 1, RH_CHANNEL_SH_G ) );
-	pRenderContext->SetRenderTargetEx( 2, GetDefRT_RadianceHints( 1, RH_CHANNEL_SH_B ) );
-	pRenderContext->SetRenderTargetEx( 3, GetDefRT_RadianceHints( 1, RH_CHANNEL_META ) );
+	pRenderContext->SetRenderTargetEx( 1, GetDefRT_DaylightGIRadiance( clip, 1, RH_CHANNEL_SH_G ) );
+	pRenderContext->SetRenderTargetEx( 2, GetDefRT_DaylightGIRadiance( clip, 1, RH_CHANNEL_SH_B ) );
+	pRenderContext->SetRenderTargetEx( 3, GetDefRT_DaylightGIRadiance( clip, 1, RH_CHANNEL_META ) );
 	pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_FILTER ) );
 	GetRadianceHintsVolumeMesh()->Draw();
 	pRenderContext->PopRenderTargetAndViewport();
 
 	// Pass Y: set 1 -> set 2.
-	pRenderContext->PushRenderTargetAndViewport( GetDefRT_RadianceHints( 2, RH_CHANNEL_SH_R ), NULL,
+	pRenderContext->PushRenderTargetAndViewport( GetDefRT_DaylightGIRadiance( clip, 2, RH_CHANNEL_SH_R ), NULL,
 		0, 0, RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT );
-	pRenderContext->SetRenderTargetEx( 1, GetDefRT_RadianceHints( 2, RH_CHANNEL_SH_G ) );
-	pRenderContext->SetRenderTargetEx( 2, GetDefRT_RadianceHints( 2, RH_CHANNEL_SH_B ) );
-	pRenderContext->SetRenderTargetEx( 3, GetDefRT_RadianceHints( 2, RH_CHANNEL_META ) );
+	pRenderContext->SetRenderTargetEx( 1, GetDefRT_DaylightGIRadiance( clip, 2, RH_CHANNEL_SH_G ) );
+	pRenderContext->SetRenderTargetEx( 2, GetDefRT_DaylightGIRadiance( clip, 2, RH_CHANNEL_SH_B ) );
+	pRenderContext->SetRenderTargetEx( 3, GetDefRT_DaylightGIRadiance( clip, 2, RH_CHANNEL_META ) );
 	pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_FILTER_1 ) );
 	GetRadianceHintsVolumeMesh()->Draw();
 	pRenderContext->PopRenderTargetAndViewport();
 
 	// Pass Z: set 2 -> set 0. Set 0 is the final first-bounce field.
-	pRenderContext->PushRenderTargetAndViewport( GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_R ), NULL,
+	pRenderContext->PushRenderTargetAndViewport( GetDefRT_DaylightGIRadiance( clip, 0, RH_CHANNEL_SH_R ), NULL,
 		0, 0, RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT );
-	pRenderContext->SetRenderTargetEx( 1, GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_G ) );
-	pRenderContext->SetRenderTargetEx( 2, GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_B ) );
-	pRenderContext->SetRenderTargetEx( 3, GetDefRT_RadianceHints( 0, RH_CHANNEL_META ) );
+	pRenderContext->SetRenderTargetEx( 1, GetDefRT_DaylightGIRadiance( clip, 0, RH_CHANNEL_SH_G ) );
+	pRenderContext->SetRenderTargetEx( 2, GetDefRT_DaylightGIRadiance( clip, 0, RH_CHANNEL_SH_B ) );
+	pRenderContext->SetRenderTargetEx( 3, GetDefRT_DaylightGIRadiance( clip, 0, RH_CHANNEL_META ) );
 	pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_FILTER_2 ) );
 	GetRadianceHintsVolumeMesh()->Draw();
 	pRenderContext->PopRenderTargetAndViewport();
 }
 
-void CDeferredViewRender::PerformRadiosityHierarchy( bool bCombined )
-{
-	if ( !deferred_rh_hierarchy_enable.GetBool() )
-		return;
-
-	CMatRenderContextPtr pRenderContext( materials );
-	for ( int level = 0; level < 3; ++level )
-	{
-		int width = RH_HIERARCHY_20_ATLAS_WIDTH;
-		int height = RH_HIERARCHY_20_ATLAS_HEIGHT;
-		DEF_MATERIALS materialIndex = bCombined ? DEF_MAT_LIGHT_RADIOSITY_HIERARCHY_COMBINED : DEF_MAT_LIGHT_RADIOSITY_HIERARCHY_FIRST;
-		if ( level == 1 )
-		{
-			width = RH_HIERARCHY_10_ATLAS_WIDTH;
-			height = RH_HIERARCHY_10_ATLAS_HEIGHT;
-			materialIndex = DEF_MAT_LIGHT_RADIOSITY_HIERARCHY_10;
-		}
-		else if ( level == 2 )
-		{
-			width = RH_HIERARCHY_5_ATLAS_WIDTH;
-			height = RH_HIERARCHY_5_ATLAS_HEIGHT;
-			materialIndex = DEF_MAT_LIGHT_RADIOSITY_HIERARCHY_5;
-		}
-
-		pRenderContext->PushRenderTargetAndViewport( GetDefRT_RHHierarchy( level, 0 ), NULL, 0, 0, width, height );
-		pRenderContext->SetRenderTargetEx( 1, GetDefRT_RHHierarchy( level, 1 ) );
-		pRenderContext->SetRenderTargetEx( 2, GetDefRT_RHHierarchy( level, 2 ) );
-		// H10/H5 additionally write a compact RGB average-radiance target.
-		// H20 keeps the fourth MRT unattached; COLOR3 is safely discarded.
-		if ( level > 0 )
-			pRenderContext->SetRenderTargetEx( 3, GetDefRT_RHHierarchyEnergy( level - 1 ) );
-		pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( materialIndex ) );
-		GetRadianceHintsHierarchyMesh( level )->Draw();
-		pRenderContext->PopRenderTargetAndViewport();
-	}
-}
-
 void CDeferredViewRender::EndRadiosity( const CViewSetup &view )
 {
-	const int bounceCount = clamp( deferred_rh_bounce_count.GetInt(), 0, 1 );
-	if ( bounceCount > 0 )
+	const bool bSecondBounce = deferred_gi_quality.GetInt() > 0 &&
+		deferred_gi_bounce_intensity.GetFloat() > 0.0f;
+	for ( int clip = 0; clip < RH_CLIP_LEVEL_COUNT && bSecondBounce; ++clip )
 	{
+		SetDaylightGIActiveClip( clip );
 		CMatRenderContextPtr pRenderContext( materials );
 
 		// Stage 1: convert incoming first-bounce/hemisphere irradiance at RSM
 		// surfaces into an outward Lambertian radiance hemisphere.
-		pRenderContext->PushRenderTargetAndViewport( GetDefRT_RadianceHints( 1, RH_CHANNEL_SH_R ), NULL,
+		pRenderContext->PushRenderTargetAndViewport( GetDefRT_DaylightGIRadiance( clip, 1, RH_CHANNEL_SH_R ), NULL,
 			0, 0, RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT );
-		pRenderContext->SetRenderTargetEx( 1, GetDefRT_RadianceHints( 1, RH_CHANNEL_SH_G ) );
-		pRenderContext->SetRenderTargetEx( 2, GetDefRT_RadianceHints( 1, RH_CHANNEL_SH_B ) );
+		pRenderContext->SetRenderTargetEx( 1, GetDefRT_DaylightGIRadiance( clip, 1, RH_CHANNEL_SH_G ) );
+		pRenderContext->SetRenderTargetEx( 2, GetDefRT_DaylightGIRadiance( clip, 1, RH_CHANNEL_SH_B ) );
 		pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_0 ) );
 		GetRadianceHintsVolumeMesh()->Draw();
 		pRenderContext->PopRenderTargetAndViewport();
 
 		// Stage 2: X/Y/Z transport is split into three small additive passes.
 		// This avoids the legacy FXC crash from one six-direction sampler-heavy shader.
-		pRenderContext->PushRenderTargetAndViewport( GetDefRT_RadianceHints( 2, RH_CHANNEL_SH_R ), NULL,
+		pRenderContext->PushRenderTargetAndViewport( GetDefRT_DaylightGIRadiance( clip, 2, RH_CHANNEL_SH_R ), NULL,
 			0, 0, RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT );
-		pRenderContext->SetRenderTargetEx( 1, GetDefRT_RadianceHints( 2, RH_CHANNEL_SH_G ) );
-		pRenderContext->SetRenderTargetEx( 2, GetDefRT_RadianceHints( 2, RH_CHANNEL_SH_B ) );
+		pRenderContext->SetRenderTargetEx( 1, GetDefRT_DaylightGIRadiance( clip, 2, RH_CHANNEL_SH_G ) );
+		pRenderContext->SetRenderTargetEx( 2, GetDefRT_DaylightGIRadiance( clip, 2, RH_CHANNEL_SH_B ) );
 		pRenderContext->ClearColor4ub( 0, 0, 0, 0 );
 		pRenderContext->ClearBuffers( true, false );
 		pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_1 ) );
@@ -2287,51 +2322,28 @@ void CDeferredViewRender::EndRadiosity( const CViewSetup &view )
 		pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_3 ) );
 		GetRadianceHintsVolumeMesh()->Draw();
 
-		// Hybrid secondary layer: keep the physically generated surface bounce as
-		// the dominant result, then add a small Jason-style RH diffusion term from
-		// the first-bounce field. It uses the same visibility/distance field, so it
-		// fills sparse regions without freely crossing walls.
-		if ( deferred_rh_diffusion_gain.GetFloat() > 0.0001f )
-		{
-			pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_4 ) );
-			GetRadianceHintsVolumeMesh()->Draw();
-			pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_5 ) );
-			GetRadianceHintsVolumeMesh()->Draw();
-			pRenderContext->Bind( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_PROPAGATE_6 ) );
-			GetRadianceHintsVolumeMesh()->Draw();
-		}
 		pRenderContext->PopRenderTargetAndViewport();
 	}
 
-	// Rebuild the hierarchy from the completed field. The receiver can then use
-	// H20 directional SH plus H10/H5 broad energy as a conservative fill layer.
-	PerformRadiosityHierarchy( bounceCount > 0 );
-
 	CMatRenderContextPtr pRenderContext( materials );
-
-	// RH10/11: evaluate the 64^3 dual-bounce SDF visibility directly at the
-	// same half resolution as the GI receiver. This removes the old quarter->half
-	// shadow reconstruction pass: first bounce uses up to 6 SDF steps, while the
-	// broader second bounce uses up to 3 steps. The complete GI is upsampled once.
-	ITexture *pShadowHalf = GetDefRT_RHShadowHalf();
-	const int shadowHalfWidth = MAX( pShadowHalf->GetActualWidth(), 1 );
-	const int shadowHalfHeight = MAX( pShadowHalf->GetActualHeight(), 1 );
-	pRenderContext->PushRenderTargetAndViewport( pShadowHalf, NULL, 0, 0, shadowHalfWidth, shadowHalfHeight );
-	pRenderContext->ClearColor4ub( 255, 255, 255, 255 );
-	pRenderContext->ClearBuffers( true, false );
-	DrawLightPassFullscreen( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_SHADOW ),
-		shadowHalfWidth, shadowHalfHeight );
-	pRenderContext->PopRenderTargetAndViewport();
-
-	ITexture *pHalf = GetDefRT_RHIndirectHalf();
+	ITexture *pHalf = GetDefRT_DaylightGIIndirectHalf();
 	const int halfWidth = MAX( pHalf->GetActualWidth(), 1 );
 	const int halfHeight = MAX( pHalf->GetActualHeight(), 1 );
 	pRenderContext->PushRenderTargetAndViewport( pHalf, NULL, 0, 0, halfWidth, halfHeight );
 	pRenderContext->ClearColor4ub( 0, 0, 0, 0 );
 	pRenderContext->ClearBuffers( true, false );
-	DrawLightPassFullscreen( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_BLEND ),
-		halfWidth, halfHeight );
 	pRenderContext->PopRenderTargetAndViewport();
+
+	for ( int clip = 0; clip < RH_CLIP_LEVEL_COUNT; ++clip )
+	{
+		SetDaylightGIActiveClip( clip );
+		pRenderContext->PushRenderTargetAndViewport( pHalf, NULL, 0, 0, halfWidth, halfHeight );
+		const DEF_MATERIALS receiverMaterial = clip == RH_CLIP_NEAR
+			? DEF_MAT_LIGHT_RADIOSITY_BLEND : DEF_MAT_LIGHT_RADIOSITY_BLEND_FAR;
+		DrawLightPassFullscreen( GetDeferredManager()->GetDeferredMaterial( receiverMaterial ),
+			halfWidth, halfHeight );
+		pRenderContext->PopRenderTargetAndViewport();
+	}
 
 	// The caller's _rt_LightAccum target is restored by the pop above.
 	DrawLightPassFullscreen( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_UPSAMPLE ),
@@ -2341,16 +2353,54 @@ void CDeferredViewRender::EndRadiosity( const CViewSetup &view )
 void CDeferredViewRender::DebugRadiosity( const CViewSetup &view )
 {
 	(void)view;
-	const float cellSize = MAX( deferred_rh_cell_size.GetFloat(), 1.0f );
-	const float extent = cellSize * RH_VOLUME_SIZE;
-	const Vector &origin = m_vecRadiosityOrigin[0];
-	const Vector maximum = origin + Vector( extent, extent, extent );
-	DebugDrawCross( origin, cellSize * 0.4f, -1.0f );
-	DebugDrawCross( maximum, cellSize * 0.4f, -1.0f );
-	engine->Con_NPrintf( 20, "RH9 HIGH-HALF %s | radiance %i^3 | shadow %i^3 | RSM %i | samples %i | injected %i",
-		RH_QUALITY_PRESET == RH_PRESET_HIGH ? "HIGH" : "BALANCED",
-		RH_VOLUME_SIZE, RH_SHADOW_VOLUME_SIZE, RH_RSM_RESOLUTION, RH_RADIANCE_SAMPLE_COUNT,
+	uint64 giVideoMemoryBytes = 0;
+	for ( int clip = 0; clip < RH_CLIP_LEVEL_COUNT; ++clip )
+	{
+		for ( int setIndex = 0; setIndex < RH_SET_COUNT; ++setIndex )
+		for ( int channel = 0; channel < RH_CHANNEL_COUNT; ++channel )
+			giVideoMemoryBytes += GetDefRT_DaylightGIRadiance( clip, setIndex, channel )->GetApproximateVidMemBytes();
+		giVideoMemoryBytes += GetDefRT_DaylightGISurfaceAlbedo( clip )->GetApproximateVidMemBytes();
+		giVideoMemoryBytes += GetDefRT_DaylightGISurfaceNormal( clip )->GetApproximateVidMemBytes();
+		giVideoMemoryBytes += GetDefRT_DaylightGIGeometry( clip )->GetApproximateVidMemBytes();
+		giVideoMemoryBytes += GetDefRT_DaylightGIBlockerField( clip )->GetApproximateVidMemBytes();
+		giVideoMemoryBytes += GetDefRT_DaylightGISurfaceGuide( clip )->GetApproximateVidMemBytes();
+		giVideoMemoryBytes += GetDefRT_DaylightGISurfaceCache( clip )->GetApproximateVidMemBytes();
+		giVideoMemoryBytes += GetDefRT_DaylightGIOpenSky( clip )->GetApproximateVidMemBytes();
+	}
+	giVideoMemoryBytes += GetDefRT_RHRSMDepth()->GetApproximateVidMemBytes();
+	giVideoMemoryBytes += GetDefRT_RHRSMColor()->GetApproximateVidMemBytes();
+	giVideoMemoryBytes += GetDefRT_RHRSMFlux()->GetApproximateVidMemBytes();
+	giVideoMemoryBytes += GetDefRT_RHRSMNormal()->GetApproximateVidMemBytes();
+	giVideoMemoryBytes += GetDefRT_RHRSMAlbedo()->GetApproximateVidMemBytes();
+	giVideoMemoryBytes += GetDefRT_DaylightGIIndirectHalf()->GetApproximateVidMemBytes();
+
+	for ( int clip = 0; clip < RH_CLIP_LEVEL_COUNT; ++clip )
+	{
+		const float cellSize = m_flRadianceHintsCellSize[clip];
+		const float extent = cellSize * RH_VOLUME_SIZE;
+		const Vector &origin = m_vecRadiosityOrigin[clip];
+		const Vector maximum = origin + Vector( extent, extent, extent );
+		DebugDrawCross( origin, cellSize * 0.4f, -1.0f );
+		DebugDrawCross( maximum, cellSize * 0.4f, -1.0f );
+	}
+	engine->Con_NPrintf( 20,
+		"Daylight GI | near %g/%g | far %g/%g | SH %i^3 | SDF %i^3 | RSM %i | valid %i",
+		m_flRadianceHintsCellSize[RH_CLIP_NEAR], RH_CLIP_NEAR_EXTENT,
+		m_flRadianceHintsCellSize[RH_CLIP_FAR], RH_CLIP_FAR_EXTENT,
+		RH_VOLUME_SIZE, RH_SHADOW_VOLUME_SIZE, RH_RSM_RESOLUTION,
 		m_bRadianceHintsInjected ? 1 : 0 );
+	engine->Con_NPrintf( 21,
+		"GI cache %.2f ms | rebuilt C/F/T/S near %i/%i/%i/%i far %i/%i/%i/%i | dynamic %i/%i",
+		m_flGICacheUpdateMilliseconds,
+		m_nGICoarseCellsRebuilt[RH_CLIP_NEAR], m_nGIFineCellsRebuilt[RH_CLIP_NEAR],
+		m_nGIFineCellsTraced[RH_CLIP_NEAR], m_nGISkyCellsRebuilt[RH_CLIP_NEAR],
+		m_nGICoarseCellsRebuilt[RH_CLIP_FAR], m_nGIFineCellsRebuilt[RH_CLIP_FAR],
+		m_nGIFineCellsTraced[RH_CLIP_FAR], m_nGISkyCellsRebuilt[RH_CLIP_FAR],
+		m_nGIDynamicBlockers[RH_CLIP_NEAR], m_nGIDynamicBlockers[RH_CLIP_FAR] );
+	engine->Con_NPrintf( 22, "GI render-target memory %.2f MiB | quality %i | second bounce %i",
+		(double)giVideoMemoryBytes / ( 1024.0 * 1024.0 ),
+		deferred_gi_quality.GetInt(),
+		deferred_gi_quality.GetInt() > 0 && deferred_gi_bounce_intensity.GetFloat() > 0.0f ? 1 : 0 );
 }
 
 void CDeferredViewRender::RenderCascadedShadows( const CViewSetup &view )
@@ -4568,9 +4618,7 @@ void CRadianceHintsRSMView::CalcShadowView()
 {
 	lightData_Global_t state = GetActiveGlobalLightState();
 	QAngle lightAngles;
-	Vector rsmDirection = m_bReverseDirection
-		? state.vecLight.AsVector3D()
-		: -state.vecLight.AsVector3D();
+	Vector rsmDirection = -state.vecLight.AsVector3D();
 	VectorAngles( rsmDirection, lightAngles );
 
 	Vector forward, right, up;
@@ -4583,7 +4631,7 @@ void CRadianceHintsRSMView::CalcShadowView()
 		( fabs( up.x ) + fabs( up.y ) + fabs( up.z ) );
 	const float projectedHalfDepth = 0.5f * m_flExtent *
 		( fabs( forward.x ) + fabs( forward.y ) + fabs( forward.z ) );
-	const float padding = MAX( deferred_rh_rsm_padding.GetFloat(), 0.0f ) * m_flCellSize;
+	const float padding = 2.0f * m_flCellSize;
 	const float halfSide = MAX( projectedHalfWidth, projectedHalfHeight ) + padding;
 	const float halfDepth = projectedHalfDepth + padding;
 
@@ -4625,12 +4673,14 @@ void CRadianceHintsRSMView::CommitData()
 	struct sendRHData
 	{
 		shadowData_ortho_t shadow;
-		radiosityData_t radiosity;
+		VMatrix matRSMToWorld;
+		Vector4D vecRSMParams;
 		static void Fire( sendRHData d )
 		{
 			IDeferredExtension *pDef = GetDeferredExt();
 			pDef->CommitShadowData_Ortho( 0, d.shadow );
-			pDef->CommitRadiosityData( d.radiosity );
+			pDef->CommitDaylightGIRSMData( d.shadow.matWorldToTexture,
+				d.matRSMToWorld, d.vecRSMParams );
 		}
 	};
 
@@ -4658,11 +4708,8 @@ void CRadianceHintsRSMView::CommitData()
 
 	VMatrix textureToWorld;
 	MatrixInverseGeneral( packet.shadow.matWorldToTexture, textureToWorld );
-	packet.radiosity.vecOrigin[0] = m_vecRHOrigin;
-	packet.radiosity.vecOrigin[1] = m_vecRHShadowOrigin;
-	packet.radiosity.matWorldToRSM = packet.shadow.matWorldToTexture;
-	packet.radiosity.matRSMToWorld = textureToWorld;
-	packet.radiosity.vecRSMParams.Init(
+	packet.matRSMToWorld = textureToWorld;
+	packet.vecRSMParams.Init(
 		(float)RH_RSM_RESOLUTION,
 		1.0f / (float)RH_RSM_RESOLUTION,
 		m_flRSMWorldSide,
@@ -4878,4 +4925,3 @@ void CSpotLightShadowView::CommitData()
 	CMatRenderContextPtr pRenderContext( materials );
 	pRenderContext->SetIntRenderingParameter( INT_RENDERPARM_DEFERRED_SHADOW_INDEX, m_iIndex );
 }
-

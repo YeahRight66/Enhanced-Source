@@ -2,7 +2,7 @@
 #include "screenspace_vs30.inc"
 #include "radiosity_upsample_ps30.inc"
 
-BEGIN_VS_SHADER( RADIOSITY_UPSAMPLE, "RH 9 High final half-resolution GI bilateral reconstruction" )
+BEGIN_VS_SHADER( RADIOSITY_UPSAMPLE, "Daylight-GI half-resolution bilateral reconstruction" )
     BEGIN_SHADER_PARAMS
         SHADER_PARAM( BASETEXTURE, SHADER_PARAM_TYPE_TEXTURE, "", "Half-resolution RH indirect buffer" )
     END_SHADER_PARAMS
@@ -37,14 +37,12 @@ BEGIN_VS_SHADER( RADIOSITY_UPSAMPLE, "RH 9 High final half-resolution GI bilater
             BindTexture( SHADER_SAMPLER0, BASETEXTURE );
             BindTexture( SHADER_SAMPLER1, GetDeferredExt()->GetTexture_Depth() );
             BindTexture( SHADER_SAMPLER2, GetDeferredExt()->GetTexture_Normals() );
-            ConVarRef depthScale( "deferred_rh_upsample_depth_scale" );
-            ConVarRef normalPower( "deferred_rh_upsample_normal_power" );
             ITexture *pBase = params[ BASETEXTURE ]->GetTextureValue();
             const float w = (float)MAX( pBase ? pBase->GetActualWidth() : 1, 1 );
             const float h = (float)MAX( pBase ? pBase->GetActualHeight() : 1, 1 );
             float c0[4] = { w, h, 1.0f / w, 1.0f / h };
             pShaderAPI->SetPixelShaderConstant( 0, c0 );
-            float c1[4] = { MAX( depthScale.GetFloat(), 0.0f ), MAX( normalPower.GetFloat(), 1.0f ), 1.0f, 0.0f };
+            float c1[4] = { 0.035f, 16.0f, 1.0f, 0.0f };
             pShaderAPI->SetPixelShaderConstant( 1, c1 );
         }
         Draw();

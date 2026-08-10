@@ -51,7 +51,8 @@ BEGIN_VS_SHADER( DEBUG_RADIOSITY_GRID, "" )
 			DECLARE_DYNAMIC_PIXEL_SHADER( debug_radiosity_grid_ps30 );
 			SET_DYNAMIC_PIXEL_SHADER( debug_radiosity_grid_ps30 );
 
-			BindTexture( SHADER_SAMPLER0, GetDeferredExt()->GetTexture_RadBuffer( 0 ) );
+			BindTexture( SHADER_SAMPLER0, GetDeferredExt()->GetTexture_DaylightGIRadiance(
+				DAYLIGHT_GI_CLIP_NEAR, 0, 0 ) );
 		}
 
 		Draw();

@@ -4,43 +4,20 @@
 #include "radiosity_propagate_ps30.inc"
 #include "radiosity_propagate_vs30.inc"
 
-BEGIN_VS_SHADER( RADIOSITY_PROPAGATE, "RH 9.0 SDF-guided physical surface bounce plus adaptive RH diffusion" )
+BEGIN_VS_SHADER( RADIOSITY_PROPAGATE, "Packed-SDF physical secondary diffuse bounce" )
     BEGIN_SHADER_PARAMS
-        SHADER_PARAM( SHR, SHADER_PARAM_TYPE_TEXTURE, "", "Source red SH volume" )
-        SHADER_PARAM( SHG, SHADER_PARAM_TYPE_TEXTURE, "", "Source green SH volume" )
-        SHADER_PARAM( SHB, SHADER_PARAM_TYPE_TEXTURE, "", "Source blue SH volume" )
-        SHADER_PARAM( VIS, SHADER_PARAM_TYPE_TEXTURE, "", "Directional visibility volume" )
-        SHADER_PARAM( META, SHADER_PARAM_TYPE_TEXTURE, "", "First-bounce metadata" )
-        SHADER_PARAM( GEOMETRY, SHADER_PARAM_TYPE_TEXTURE, "", "Conservative geometry occupancy" )
-        SHADER_PARAM( DISTANCE, SHADER_PARAM_TYPE_TEXTURE, "", "Geometry distance field" )
-        SHADER_PARAM( SURFACEALBEDO, SHADER_PARAM_TYPE_TEXTURE, "", "Accumulated RSM surface albedo" )
-        SHADER_PARAM( SURFACENORMAL, SHADER_PARAM_TYPE_TEXTURE, "", "Accumulated RSM surface normal" )
-        SHADER_PARAM( SHADOWDISTANCE, SHADER_PARAM_TYPE_TEXTURE, "", "RH8 64^3 Euclidean distance field" )
-        SHADER_PARAM( SURFACEGUIDE, SHADER_PARAM_TYPE_TEXTURE, "", "RH9 independent surface normal/coverage guide" )
-        SHADER_PARAM( SHADOWGEOMETRY, SHADER_PARAM_TYPE_TEXTURE, "", "RH8 64^3 static+dynamic blocker occupancy" )
-        SHADER_PARAM( SURFACECACHE, SHADER_PARAM_TYPE_TEXTURE, "", "RH10 static Source material albedo cache" )
-        SHADER_PARAM( HIER20R, SHADER_PARAM_TYPE_TEXTURE, "", "RH11 20^3 red SH hierarchy" )
-        SHADER_PARAM( HIER20G, SHADER_PARAM_TYPE_TEXTURE, "", "RH11 20^3 green SH hierarchy" )
-        SHADER_PARAM( HIER20B, SHADER_PARAM_TYPE_TEXTURE, "", "RH11 20^3 blue SH hierarchy" )
-        SHADER_PARAM( BOUNCEMODE, SHADER_PARAM_TYPE_INTEGER, "0", "0=surface; 1..3=physical XYZ; 4..6=diffusion XYZ" )
+        SHADER_PARAM( BOUNCEMODE, SHADER_PARAM_TYPE_INTEGER, "0", "0=surface; 1..3=physical XYZ transport" )
     END_SHADER_PARAMS
 
     SHADER_INIT_PARAMS() {}
 
-    SHADER_INIT
-    {
-        LoadTexture( SHR ); LoadTexture( SHG ); LoadTexture( SHB );
-        LoadTexture( VIS ); LoadTexture( META ); LoadTexture( GEOMETRY );
-        LoadTexture( DISTANCE ); LoadTexture( SURFACEALBEDO ); LoadTexture( SURFACENORMAL );
-        LoadTexture( SHADOWDISTANCE ); LoadTexture( SURFACEGUIDE ); LoadTexture( SHADOWGEOMETRY );
-        LoadTexture( SURFACECACHE ); LoadTexture( HIER20R ); LoadTexture( HIER20G ); LoadTexture( HIER20B );
-    }
+    SHADER_INIT {}
 
     SHADER_FALLBACK { return 0; }
 
     SHADER_DRAW
     {
-        const int nBounceMode = clamp( params[ BOUNCEMODE ]->GetIntValue(), 0, 6 );
+        const int nBounceMode = clamp( params[ BOUNCEMODE ]->GetIntValue(), 0, 3 );
         const bool bAdditiveTransport = nBounceMode != 0;
         SHADOW_STATE
         {
@@ -60,12 +37,6 @@ BEGIN_VS_SHADER( RADIOSITY_PROPAGATE, "RH 9.0 SDF-guided physical surface bounce
             pShaderShadow->EnableTexture( SHADER_SAMPLER7, true );
             pShaderShadow->EnableTexture( SHADER_SAMPLER8, true );
             pShaderShadow->EnableTexture( SHADER_SAMPLER9, true );
-            pShaderShadow->EnableTexture( SHADER_SAMPLER10, true );
-            pShaderShadow->EnableTexture( SHADER_SAMPLER11, true );
-            pShaderShadow->EnableTexture( SHADER_SAMPLER12, true );
-            pShaderShadow->EnableTexture( SHADER_SAMPLER13, true );
-            pShaderShadow->EnableTexture( SHADER_SAMPLER14, true );
-            pShaderShadow->EnableTexture( SHADER_SAMPLER15, true );
 
             int texCoordDimensions[] = { 2 };
             pShaderShadow->VertexShaderVertexFormat(
@@ -85,108 +56,61 @@ BEGIN_VS_SHADER( RADIOSITY_PROPAGATE, "RH 9.0 SDF-guided physical surface bounce
             DECLARE_DYNAMIC_PIXEL_SHADER( radiosity_propagate_ps30 );
             SET_DYNAMIC_PIXEL_SHADER( radiosity_propagate_ps30 );
 
-            BindTexture( SHADER_SAMPLER0, SHR );
-            BindTexture( SHADER_SAMPLER1, SHG );
-            BindTexture( SHADER_SAMPLER2, SHB );
-            BindTexture( SHADER_SAMPLER3, VIS );
-            BindTexture( SHADER_SAMPLER4, META );
-            BindTexture( SHADER_SAMPLER5, GEOMETRY );
-            BindTexture( SHADER_SAMPLER6, DISTANCE );
-            BindTexture( SHADER_SAMPLER7, SURFACEALBEDO );
-            BindTexture( SHADER_SAMPLER8, SURFACENORMAL );
-            BindTexture( SHADER_SAMPLER9, SHADOWDISTANCE );
-            BindTexture( SHADER_SAMPLER10, SURFACEGUIDE );
-            BindTexture( SHADER_SAMPLER11, SHADOWGEOMETRY );
-            BindTexture( SHADER_SAMPLER12, SURFACECACHE );
-            BindTexture( SHADER_SAMPLER13, HIER20R );
-            BindTexture( SHADER_SAMPLER14, HIER20G );
-            BindTexture( SHADER_SAMPLER15, HIER20B );
+            const daylightGIData_t &giData = GetDeferredExt()->GetDaylightGIData();
+            const int activeClip = clamp( giData.iActiveClip, 0, DAYLIGHT_GI_CLIP_COUNT - 1 );
+            const int sourceSet = nBounceMode >= 1 && nBounceMode <= 3 ? 1 : 0;
+            BindTexture( SHADER_SAMPLER0, GetDeferredExt()->GetTexture_DaylightGIRadiance( activeClip, sourceSet, 0 ) );
+            BindTexture( SHADER_SAMPLER1, GetDeferredExt()->GetTexture_DaylightGIRadiance( activeClip, sourceSet, 1 ) );
+            BindTexture( SHADER_SAMPLER2, GetDeferredExt()->GetTexture_DaylightGIRadiance( activeClip, sourceSet, 2 ) );
+            BindTexture( SHADER_SAMPLER3, GetDeferredExt()->GetTexture_DaylightGIRadiance( activeClip, 0, 3 ) );
+            BindTexture( SHADER_SAMPLER4, GetDeferredExt()->GetTexture_DaylightGIGeometry( activeClip ) );
+            BindTexture( SHADER_SAMPLER5, GetDeferredExt()->GetTexture_DaylightGISurfaceAlbedo( activeClip ) );
+            BindTexture( SHADER_SAMPLER6, GetDeferredExt()->GetTexture_DaylightGISurfaceNormal( activeClip ) );
+            BindTexture( SHADER_SAMPLER7, GetDeferredExt()->GetTexture_DaylightGIBlockerField( activeClip ) );
+            BindTexture( SHADER_SAMPLER8, GetDeferredExt()->GetTexture_DaylightGISurfaceGuide( activeClip ) );
+            BindTexture( SHADER_SAMPLER9, GetDeferredExt()->GetTexture_DaylightGISurfaceCache( activeClip ) );
 
-            ConVarRef bounceGain( "deferred_rh_bounce_gain" );
-            ConVarRef surfaceBounceGain( "deferred_rh_surface_bounce_gain" );
-            ConVarRef surfaceMinCoverage( "deferred_rh_surface_min_coverage" );
-            ConVarRef maxRadiance( "deferred_rh_max_radiance" );
-            ConVarRef geometryEnable( "deferred_rh_geometry_enable" );
-            ConVarRef geometryStrength( "deferred_rh_geometry_strength" );
-            ConVarRef minTransmittance( "deferred_rh_geometry_min_transmittance" );
-            ConVarRef geometryBias( "deferred_rh_geometry_bias" );
-            ConVarRef cellSize( "deferred_rh_cell_size" );
-            ConVarRef traceWidth( "deferred_rh_bounce_trace_width" );
-            ConVarRef minConfidence( "deferred_rh_bounce_min_confidence" );
-            ConVarRef diffusionGain( "deferred_rh_diffusion_gain" );
-            ConVarRef diffusionRadius( "deferred_rh_diffusion_radius" );
-            ConVarRef diffusionMinConfidence( "deferred_rh_diffusion_min_confidence" );
-            ConVarRef surfaceCacheEnable( "deferred_rh_surface_cache_enable" );
-            ConVarRef surfaceCacheBlend( "deferred_rh_surface_cache_blend" );
-            ConVarRef surfaceFallbackAlbedo( "deferred_rh_surface_fallback_albedo" );
-            ConVarRef adaptiveDiffusion( "deferred_rh_adaptive_diffusion" );
-            ConVarRef adaptiveDiffusionNear( "deferred_rh_adaptive_diffusion_near" );
-            ConVarRef adaptiveDiffusionFar( "deferred_rh_adaptive_diffusion_far" );
-            ConVarRef materialCache( "deferred_rh_surface_material_cache" );
-            ConVarRef materialScale( "deferred_rh_surface_material_scale" );
-            ConVarRef classification( "deferred_rh_cell_classification" );
-            ConVarRef hierarchyEnable( "deferred_rh_hierarchy_enable" );
-            ConVarRef hierarchyDiffusion( "deferred_rh_hierarchy_diffusion_blend" );
+            ConVarRef bounceIntensity( "deferred_gi_bounce_intensity" );
 
             const float radiusCells = 2.25f;
             float settings[4] = {
                 radiusCells / RH_VOLUME_SIZE_F,
-                MAX( bounceGain.GetFloat(), 0.0f ),
-                MAX( maxRadiance.GetFloat(), 0.25f ),
+                clamp( bounceIntensity.GetFloat(), 0.0f, 1.0f ),
+                20.0f,
                 radiusCells
             };
             pShaderAPI->SetPixelShaderConstant( 0, settings );
 
-            float geometry[4] = {
-                geometryEnable.GetBool() ? 1.0f : 0.0f,
-                clamp( geometryStrength.GetFloat(), 0.0f, 4.0f ),
-                clamp( minTransmittance.GetFloat(), 0.0f, 1.0f ),
-                clamp( geometryBias.GetFloat(), 0.0f, 0.95f )
-            };
+            float geometry[4] = { 1.0f, 1.20f, 0.08f, 0.05f };
             pShaderAPI->SetPixelShaderConstant( 1, geometry );
 
-            const Vector &origin = GetDeferredExt()->GetRadiosityData().vecOrigin[0];
+            const daylightGIClipDesc_t &clip = giData.clips[ clamp( giData.iActiveClip, 0, DAYLIGHT_GI_CLIP_COUNT - 1 ) ];
+            const Vector &origin = clip.vecRadianceOrigin;
             float worldGrid[4] = {
                 origin.x, origin.y, origin.z,
-                MAX( cellSize.GetFloat(), 1.0f )
+                MAX( clip.flRadianceCellSize, 1.0f )
             };
             pShaderAPI->SetPixelShaderConstant( 2, worldGrid );
 
             float trace[4] = {
-                clamp( traceWidth.GetFloat(), 0.0f, 1.5f ),
-                clamp( minConfidence.GetFloat(), 0.0f, 1.0f ),
+                0.35f,
+                0.015f,
                 (float)nBounceMode,
-                MAX( surfaceBounceGain.GetFloat(), 0.0f )
+                1.0f
             };
             pShaderAPI->SetPixelShaderConstant( 3, trace );
 
             float surface[4] = {
-                clamp( surfaceMinCoverage.GetFloat(), 0.0f, 4.0f ),
+                0.04f,
                 0.0f, 0.0f, 0.0f
             };
             pShaderAPI->SetPixelShaderConstant( 4, surface );
 
-            const float diffusionRadiusCells = clamp( diffusionRadius.GetFloat(), 0.75f, 4.0f );
-            float diffusion[4] = {
-                clamp( diffusionGain.GetFloat(), 0.0f, 0.35f ),
-                diffusionRadiusCells / RH_VOLUME_SIZE_F,
-                diffusionRadiusCells,
-                clamp( diffusionMinConfidence.GetFloat(), 0.0f, 1.0f )
-            };
-            pShaderAPI->SetPixelShaderConstant( 5, diffusion );
-
-            float surfaceGuide[4] = { surfaceCacheEnable.GetBool() ? 1.0f : 0.0f,
-                clamp( surfaceCacheBlend.GetFloat(), 0.0f, 1.0f ),
-                clamp( surfaceFallbackAlbedo.GetFloat(), 0.0f, 1.0f ), clamp( materialScale.GetFloat(), 0.0f, 2.0f ) };
+            float surfaceGuide[4] = { 1.0f, 0.70f, 0.52f, 1.0f };
             pShaderAPI->SetPixelShaderConstant( 6, surfaceGuide );
-            float adaptiveDiff[4] = { adaptiveDiffusion.GetBool() ? 1.0f : 0.0f,
-                clamp( adaptiveDiffusionNear.GetFloat(), 0.5f, 4.0f ),
-                clamp( adaptiveDiffusionFar.GetFloat(), 0.5f, 5.0f ), 0.0f };
-            pShaderAPI->SetPixelShaderConstant( 7, adaptiveDiff );
 
-            const radiosityData_t &rhData = GetDeferredExt()->GetRadiosityData();
-            const Vector &shadowOrigin = rhData.vecOrigin[1];
-            const float extent = MAX( cellSize.GetFloat(), 1.0f ) * RH_VOLUME_SIZE;
+            const Vector &shadowOrigin = clip.vecBlockerOrigin;
+            const float extent = clip.flExtent;
             const float invExtent = 1.0f / MAX( extent, 1.0f );
             float shadowOffset[4] = {
                 ( origin.x - shadowOrigin.x ) * invExtent,
@@ -195,10 +119,8 @@ BEGIN_VS_SHADER( RADIOSITY_PROPAGATE, "RH 9.0 SDF-guided physical surface bounce
                 0.0f
             };
             pShaderAPI->SetPixelShaderConstant( 8, shadowOffset );
-            float stage10_11[4] = { materialCache.GetBool() ? 1.0f : 0.0f,
-                classification.GetBool() ? 1.0f : 0.0f, hierarchyEnable.GetBool() ? 1.0f : 0.0f,
-                clamp( hierarchyDiffusion.GetFloat(), 0.0f, 1.0f ) };
-            pShaderAPI->SetPixelShaderConstant( 9, stage10_11 );
+            float cacheSettings[4] = { 1.0f, 1.0f, 0.0f, 0.0f };
+            pShaderAPI->SetPixelShaderConstant( 9, cacheSettings );
         }
 
         Draw();

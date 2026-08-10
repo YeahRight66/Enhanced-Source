@@ -47,8 +47,7 @@ float4 RH_LimitSH( float4 sh, float directionalRatio )
 
 float4 RH_LimitRadianceSH( float4 sh )
 {
-    // A purely directional L1 projection reaches |L1|/DC = sqrt(3).  RH9's
-    // 1.45 hard clamp unnecessarily flattened directional sunlight.  Keep a
+    // A purely directional L1 projection reaches |L1|/DC = sqrt(3). Keep a
     // small FP16 safety margin but preserve essentially the full legal L1 range.
     return RH_LimitSH( sh, 1.70f );
 }
@@ -123,13 +122,16 @@ float RH_RadianceEnergy( float4 shR, float4 shG, float4 shB )
 
 float RH_MetaConfidence( float4 meta )
 {
-    return saturate( meta.x ) * saturate( meta.w );
+    // Meta.x is already measured after injection visibility. Meta.w is kept as
+    // an independent diagnostic ratio; multiplying them would shadow confidence
+    // a second time and cause unnecessary receiver holes.
+    return saturate( meta.x );
 }
 
 float RH_MetaSurfaceProximity( float4 meta )
 {
-    // RH10: additive, all-phase near-surface moment. 0=open/far, 1=near a
-    // well-supported injected surface. This replaces RH9's phase-0-only min.
+    // Additive, all-phase near-surface moment. 0=open/far, 1=near a
+    // well-supported injected surface.
     return saturate( meta.y );
 }
 
@@ -167,9 +169,18 @@ float RH_BoundaryFade( float3 uvw )
 
 // Hardware bilinear filtering inside XY slices plus manual interpolation in Z.
 // Explicit LOD avoids gradient/branch restrictions in legacy ps_3_0 FXC.
+float3 RH_BoundaryToLatticeUVW( float3 boundaryUVW, float volumeSize )
+{
+    // Clip origins describe the outer volume boundary, while atlas texels store
+    // samples at cell centres. Keep that half-cell convention explicit so every
+    // CPU voxel centre maps back to its exact GPU texel.
+    float3 voxel = boundaryUVW * volumeSize - 0.5f;
+    return clamp( voxel, 0.0f, volumeSize - 1.0f ) / max( volumeSize - 1.0f, 1.0f );
+}
+
 float4 RH_SampleAtlas( sampler volumeSampler, float3 uvw )
 {
-    uvw = saturate( uvw );
+    uvw = RH_BoundaryToLatticeUVW( uvw, RH_VOLUME_SIZE_F );
 
     const float sliceWidth = 1.0f / RH_VOLUME_SIZE_F;
     const float atlasTexel = 1.0f / RH_ATLAS_WIDTH_F;
@@ -194,11 +205,11 @@ float4 RH_SampleAtlas( sampler volumeSampler, float3 uvw )
 }
 
 
-// Generic flattened-atlas sampler for RH11 hierarchy levels. The caller
-// supplies compile-time size constants; legacy FXC folds the arithmetic.
+// Generic flattened-atlas sampler retained only by the compile-disabled legacy
+// hierarchy source. Production daylight GI uses the fixed 32^3 sampler above.
 float4 RH_SampleAtlasN( sampler volumeSampler, float3 uvw, float volumeSize, float atlasWidth )
 {
-    uvw = saturate( uvw );
+    uvw = RH_BoundaryToLatticeUVW( uvw, volumeSize );
     float sliceWidth = 1.0f / volumeSize;
     float atlasTexel = 1.0f / atlasWidth;
     float volumeTexel = 1.0f / volumeSize;
@@ -242,11 +253,11 @@ float4 RH_SampleShadowMip16( sampler s, float3 uvw )
     return RH_SampleAtlasN( s, uvw, RH_SHADOW_MIP2_SIZE_F, RH_SHADOW_MIP2_ATLAS_WIDTH_F );
 }
 
-// Dedicated RH8 64^3 visibility field. It shares RH world-normalized UVW with
-// the 40^3 radiance grid but uses a different flattened atlas layout.
+// Dedicated 64^3 blocker/SDF field. It shares world-normalized UVW with the
+// 32^3 radiance grid but uses a different flattened atlas layout.
 float4 RH_SampleShadowAtlas( sampler volumeSampler, float3 uvw )
 {
-    uvw = saturate( uvw );
+    uvw = RH_BoundaryToLatticeUVW( uvw, RH_SHADOW_VOLUME_SIZE_F );
 
     const float sliceWidth = 1.0f / RH_SHADOW_VOLUME_SIZE_F;
     const float atlasTexel = 1.0f / RH_SHADOW_ATLAS_WIDTH_F;
@@ -267,9 +278,37 @@ float4 RH_SampleShadowAtlas( sampler volumeSampler, float3 uvw )
     return lerp( sample0, sample1, zBlend );
 }
 
-float RH_ShadowDistanceCells( sampler distanceSampler, float3 uvw )
+float4 RH_SampleAtlasCell( sampler volumeSampler, float3 cell )
 {
-    return RH_SampleShadowAtlas( distanceSampler, uvw ).r * RH_SHADOW_DISTANCE_MAX_CELLS;
+    cell = clamp( floor( cell + 0.5f ), 0.0f, RH_VOLUME_SIZE_F - 1.0f );
+    float2 atlasUV = float2(
+        ( cell.z * RH_VOLUME_SIZE_F + cell.x + 0.5f ) / RH_ATLAS_WIDTH_F,
+        ( cell.y + 0.5f ) / RH_ATLAS_HEIGHT_F );
+    return tex2Dlod( volumeSampler, float4( atlasUV, 0.0f, 0.0f ) );
+}
+
+float3 RH_DecodeBlockerNormal( float2 encoded )
+{
+    float2 oct = encoded * 2.0f - 1.0f;
+    float3 normal = float3( oct, 1.0f - abs( oct.x ) - abs( oct.y ) );
+    float fold = saturate( -normal.z );
+    normal.xy += ( 1.0f - 2.0f * step( 0.0f, normal.xy ) ) * fold;
+    return RH_SafeNormalize( normal, float3( 0.0f, 0.0f, 1.0f ) );
+}
+
+float RH_BlockerDistanceCells( float4 blockerField )
+{
+    return blockerField.r * RH_SHADOW_DISTANCE_MAX_CELLS;
+}
+
+float RH_BlockerOpacity( float4 blockerField )
+{
+    return saturate( blockerField.g );
+}
+
+float RH_ShadowDistanceCells( sampler blockerSampler, float3 uvw )
+{
+    return RH_BlockerDistanceCells( RH_SampleShadowAtlas( blockerSampler, uvw ) );
 }
 
 float3 RH_DecodeSurfaceGuideNormal( float4 guide )

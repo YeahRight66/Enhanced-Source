@@ -45,7 +45,8 @@ BEGIN_VS_SHADER( RADIOSITY_VISIBILITY, "RH 6.0 symmetric directional blocker inj
         }
         DYNAMIC_STATE
         {
-            const radiosityData_t &data = GetDeferredExt()->GetRadiosityData();
+            const daylightGIData_t &data = GetDeferredExt()->GetDaylightGIData();
+            const daylightGIClipDesc_t &clip = data.clips[ clamp( data.iActiveClip, 0, DAYLIGHT_GI_CLIP_COUNT - 1 ) ];
             pShaderAPI->SetDefaultState();
 
             DECLARE_DYNAMIC_VERTEX_SHADER( radiosity_gen_vs30 );
@@ -60,7 +61,7 @@ BEGIN_VS_SHADER( RADIOSITY_VISIBILITY, "RH 6.0 symmetric directional blocker inj
             pShaderAPI->SetPixelShaderConstant( 0, data.matWorldToRSM.Base(), 4 );
             pShaderAPI->SetPixelShaderConstant( 4, data.matRSMToWorld.Base(), 4 );
 
-            const Vector &origin = data.vecOrigin[0];
+            const Vector &origin = clip.vecRadianceOrigin;
             float originConstant[4] = { origin.x, origin.y, origin.z, 0.0f };
             pShaderAPI->SetPixelShaderConstant( 8, originConstant );
 
@@ -74,9 +75,9 @@ BEGIN_VS_SHADER( RADIOSITY_VISIBILITY, "RH 6.0 symmetric directional blocker inj
             ConVarRef visibilityDilation( "deferred_rh_visibility_dilation" );
             ConVarRef visibilityNormalWeight( "deferred_rh_visibility_normal_weight" );
 
-            const float cell = MAX( cellSize.GetFloat(), 1.0f );
+            const float cell = MAX( clip.flRadianceCellSize, 1.0f );
             float settings[4] = {
-                cell * RH_VOLUME_SIZE,
+                clip.flExtent,
                 cell,
                 clamp( edgeFade.GetFloat(), 0.001f, 0.20f ),
                 MAX( data.vecRSMParams.z, 1.0f )

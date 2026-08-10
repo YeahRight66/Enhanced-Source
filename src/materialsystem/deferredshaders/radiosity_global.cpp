@@ -4,14 +4,9 @@
 #include "radiosity_gen_global_ps30.inc"
 #include "radiosity_gen_vs30.inc"
 
-BEGIN_VS_SHADER( RADIOSITY_GLOBAL, "RH 10/11 adaptive sun/sky injection with relocation and open-sky cache" )
+BEGIN_VS_SHADER( RADIOSITY_GLOBAL, "Two-level daylight-GI sun/sky injection and surface cache" )
     BEGIN_SHADER_PARAMS
         SHADER_PARAM( RSMALBEDO, SHADER_PARAM_TYPE_TEXTURE, "", "Raw RSM material albedo" )
-        SHADER_PARAM( GEOMETRY, SHADER_PARAM_TYPE_TEXTURE, "", "RH geometry occupancy" )
-        SHADER_PARAM( DISTANCE, SHADER_PARAM_TYPE_TEXTURE, "", "RH geometry distance field" )
-        SHADER_PARAM( SHADOWDISTANCE, SHADER_PARAM_TYPE_TEXTURE, "", "RH8 64^3 Euclidean distance field" )
-        SHADER_PARAM( SURFACEGUIDE, SHADER_PARAM_TYPE_TEXTURE, "", "RH9 SDF-derived surface normal/coverage guide" )
-        SHADER_PARAM( OPENSKY, SHADER_PARAM_TYPE_TEXTURE, "", "RH10 cached Source SURF_SKY visibility" )
         SHADER_PARAM( SURFACEMODE, SHADER_PARAM_TYPE_INTEGER, "0", "0=sun radiance, 1=surface attributes, 2=hemisphere sky" )
         SHADER_PARAM( SAMPLEPHASE, SHADER_PARAM_TYPE_INTEGER, "0", "0..3=four-sample stratified sun phases; sky/surface use 0..1" )
     END_SHADER_PARAMS
@@ -26,11 +21,6 @@ BEGIN_VS_SHADER( RADIOSITY_GLOBAL, "RH 10/11 adaptive sun/sky injection with rel
     SHADER_INIT
     {
         LoadTexture( RSMALBEDO );
-        LoadTexture( GEOMETRY );
-        LoadTexture( DISTANCE );
-        LoadTexture( SHADOWDISTANCE );
-        LoadTexture( SURFACEGUIDE );
-        LoadTexture( OPENSKY );
     }
     SHADER_FALLBACK { return 0; }
 
@@ -54,9 +44,6 @@ BEGIN_VS_SHADER( RADIOSITY_GLOBAL, "RH 10/11 adaptive sun/sky injection with rel
             pShaderShadow->EnableTexture( SHADER_SAMPLER3, true );
             pShaderShadow->EnableTexture( SHADER_SAMPLER4, true );
             pShaderShadow->EnableTexture( SHADER_SAMPLER5, true );
-            pShaderShadow->EnableTexture( SHADER_SAMPLER6, true );
-            pShaderShadow->EnableTexture( SHADER_SAMPLER7, true );
-            pShaderShadow->EnableTexture( SHADER_SAMPLER8, true );
 
             int texCoordDimensions[] = { 2 };
             pShaderShadow->VertexShaderVertexFormat(
@@ -72,7 +59,8 @@ BEGIN_VS_SHADER( RADIOSITY_GLOBAL, "RH 10/11 adaptive sun/sky injection with rel
         }
         DYNAMIC_STATE
         {
-            const radiosityData_t &data = GetDeferredExt()->GetRadiosityData();
+            const daylightGIData_t &data = GetDeferredExt()->GetDaylightGIData();
+            const daylightGIClipDesc_t &clip = data.clips[ clamp( data.iActiveClip, 0, DAYLIGHT_GI_CLIP_COUNT - 1 ) ];
             const lightData_Global_t &globalLight = GetDeferredExt()->GetLightData_Global();
             pShaderAPI->SetDefaultState();
 
@@ -86,97 +74,69 @@ BEGIN_VS_SHADER( RADIOSITY_GLOBAL, "RH 10/11 adaptive sun/sky injection with rel
             BindTexture( SHADER_SAMPLER1, GetDeferredExt()->GetTexture_RadianceHintsRSMNormal() );
             BindTexture( SHADER_SAMPLER2, GetDeferredExt()->GetTexture_RadianceHintsRSMDepth() );
             BindTexture( SHADER_SAMPLER3, RSMALBEDO );
-            BindTexture( SHADER_SAMPLER4, GEOMETRY );
-            BindTexture( SHADER_SAMPLER5, DISTANCE );
-            BindTexture( SHADER_SAMPLER6, SHADOWDISTANCE );
-            BindTexture( SHADER_SAMPLER7, SURFACEGUIDE );
-            BindTexture( SHADER_SAMPLER8, OPENSKY );
+            BindTexture( SHADER_SAMPLER4, GetDeferredExt()->GetTexture_DaylightGIBlockerField( data.iActiveClip ) );
+            BindTexture( SHADER_SAMPLER5, GetDeferredExt()->GetTexture_DaylightGIOpenSky( data.iActiveClip ) );
 
             pShaderAPI->SetPixelShaderConstant( 0, data.matWorldToRSM.Base(), 4 );
             pShaderAPI->SetPixelShaderConstant( 4, data.matRSMToWorld.Base(), 4 );
 
-            const Vector &origin = data.vecOrigin[0];
+            const Vector &origin = clip.vecRadianceOrigin;
             float originConstant[4] = { origin.x, origin.y, origin.z, 0.0f };
             pShaderAPI->SetPixelShaderConstant( 8, originConstant );
 
-            ConVarRef cellSize( "deferred_rh_cell_size" );
-            ConVarRef gatherRadiusCells( "deferred_rh_gather_radius_cells" );
-            ConVarRef worldSpread( "deferred_rh_world_spread" );
-            ConVarRef injectionGain( "deferred_rh_injection_gain" );
-            ConVarRef edgeFade( "deferred_rh_rsm_edge_fade" );
-            ConVarRef maxRadiance( "deferred_rh_max_radiance" );
-            ConVarRef skyEnable( "deferred_rh_sky_enable" );
-            ConVarRef skyIntensity( "deferred_rh_sky_intensity" );
-            ConVarRef skyUpperScale( "deferred_rh_sky_upper_scale" );
-            ConVarRef skyLowerScale( "deferred_rh_sky_lower_scale" );
-            ConVarRef skyOcclusion( "deferred_rh_sky_occlusion" );
-            ConVarRef skyTraceDistance( "deferred_rh_sky_trace_distance" );
-            ConVarRef surfaceRadius( "deferred_rh_surface_radius" );
-            ConVarRef adaptiveGather( "deferred_rh_adaptive_gather" );
-            ConVarRef adaptiveGatherNear( "deferred_rh_adaptive_gather_near" );
-            ConVarRef adaptiveGatherFar( "deferred_rh_adaptive_gather_far" );
-            ConVarRef relocation( "deferred_rh_cell_relocation" );
-            ConVarRef surfaceCacheEnable( "deferred_rh_surface_cache_enable" );
-            ConVarRef relocationClearance( "deferred_rh_relocation_clearance" );
-            ConVarRef kernelEnergy( "deferred_rh_rsm_kernel_energy" );
-            ConVarRef skyCacheEnable( "deferred_rh_sky_cache_enable" );
-            ConVarRef skyCacheBlend( "deferred_rh_sky_cache_blend" );
-
-            const float cell = MAX( cellSize.GetFloat(), 1.0f );
-            const float legacyWorldRadius = worldSpread.GetFloat();
-            const float gatherWorldRadius = legacyWorldRadius > 0.0f
-                ? legacyWorldRadius
-                : cell * clamp( gatherRadiusCells.GetFloat(), 1.5f, 10.0f );
+            ConVarRef giQuality( "deferred_gi_quality" );
+            const int qualityLevel = clamp( giQuality.GetInt(), 0, 2 );
+            const float cell = MAX( clip.flRadianceCellSize, 1.0f );
+            const float gatherWorldRadius = cell * ( qualityLevel == 0 ? 4.0f :
+                ( qualityLevel == 1 ? 5.0f : 5.5f ) );
             float settings[4] = {
-                cell * RH_VOLUME_SIZE,
+                clip.flExtent,
                 cell,
                 gatherWorldRadius,
-                MAX( injectionGain.GetFloat(), 0.0f )
+                1.0f
             };
             pShaderAPI->SetPixelShaderConstant( 9, settings );
 
             float quality[4] = {
-                clamp( edgeFade.GetFloat(), 0.001f, 0.20f ),
-                MAX( maxRadiance.GetFloat(), 0.25f ),
+                0.02f,
+                20.0f,
                 data.vecRSMParams.y,
                 MAX( data.vecRSMParams.z, 1.0f )
             };
             pShaderAPI->SetPixelShaderConstant( 10, quality );
 
-            const float upperScale = MAX( skyUpperScale.GetFloat(), 0.0f );
-            const float lowerScale = MAX( skyLowerScale.GetFloat(), 0.0f );
             float upper[4] = {
-                globalLight.ambh.x * upperScale,
-                globalLight.ambh.y * upperScale,
-                globalLight.ambh.z * upperScale,
-                skyEnable.GetBool() ? 1.0f : 0.0f
+                globalLight.ambh.x,
+                globalLight.ambh.y,
+                globalLight.ambh.z,
+                1.0f
             };
             float lower[4] = {
-                globalLight.ambl.x * lowerScale,
-                globalLight.ambl.y * lowerScale,
-                globalLight.ambl.z * lowerScale,
-                MAX( skyIntensity.GetFloat(), 0.0f )
+                globalLight.ambl.x * 0.30f,
+                globalLight.ambl.y * 0.30f,
+                globalLight.ambl.z * 0.30f,
+                0.55f
             };
             float skySurface[4] = {
-                MAX( skyOcclusion.GetFloat(), 0.0f ),
-                clamp( skyTraceDistance.GetFloat(), 1.0f, 16.0f ),
-                clamp( surfaceRadius.GetFloat(), 0.5f, 3.0f ),
+                1.25f,
+                8.0f,
+                1.35f,
                 0.0f
             };
             pShaderAPI->SetPixelShaderConstant( 11, upper );
             pShaderAPI->SetPixelShaderConstant( 12, lower );
             pShaderAPI->SetPixelShaderConstant( 13, skySurface );
 
-            float adaptive[4] = { adaptiveGather.GetBool() ? 1.0f : 0.0f,
-                clamp( adaptiveGatherNear.GetFloat(), 1.0f, 8.0f ),
-                clamp( adaptiveGatherFar.GetFloat(), 1.0f, 10.0f ),
-                clamp( relocation.GetFloat(), 0.0f, 0.45f ) };
+            float adaptive[4] = { 1.0f,
+                qualityLevel == 0 ? 3.0f : 3.5f,
+                qualityLevel == 0 ? 4.0f : 5.5f,
+                0.32f };
             pShaderAPI->SetPixelShaderConstant( 14, adaptive );
-            float surfaceGuide[4] = { surfaceCacheEnable.GetBool() ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f };
+            float surfaceGuide[4] = { 1.0f, 0.0f, 0.0f, 0.0f };
             pShaderAPI->SetPixelShaderConstant( 15, surfaceGuide );
 
-            const Vector &shadowOrigin = data.vecOrigin[1];
-            const float invExtent = 1.0f / MAX( cell * RH_VOLUME_SIZE, 1.0f );
+            const Vector &shadowOrigin = clip.vecBlockerOrigin;
+            const float invExtent = 1.0f / MAX( clip.flExtent, 1.0f );
             float shadowOffset[4] = {
                 ( origin.x - shadowOrigin.x ) * invExtent,
                 ( origin.y - shadowOrigin.y ) * invExtent,
@@ -184,10 +144,16 @@ BEGIN_VS_SHADER( RADIOSITY_GLOBAL, "RH 10/11 adaptive sun/sky injection with rel
                 0.0f
             };
             pShaderAPI->SetPixelShaderConstant( 16, shadowOffset );
-            float stage10[4] = { clamp( relocationClearance.GetFloat(), 0.0f, 1.5f ),
-                clamp( kernelEnergy.GetFloat(), 0.0f, 2.0f ), skyCacheEnable.GetBool() ? 1.0f : 0.0f,
-                clamp( skyCacheBlend.GetFloat(), 0.0f, 1.0f ) };
-            pShaderAPI->SetPixelShaderConstant( 17, stage10 );
+            float injectionSettings[4] = { 0.55f, 1.0f, 1.0f, 0.85f };
+            pShaderAPI->SetPixelShaderConstant( 17, injectionSettings );
+
+            const float activeSampleCount = (float)MIN( RH_RADIANCE_SAMPLE_COUNT,
+                qualityLevel == 0 ? 4 : ( qualityLevel == 1 ? 8 : 16 ) );
+            float runtimeQuality[4] = {
+                activeSampleCount,
+                (float)qualityLevel, 0.0f, 0.0f
+            };
+            pShaderAPI->SetPixelShaderConstant( 18, runtimeQuality );
         }
 
         Draw();

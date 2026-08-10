@@ -1391,10 +1391,10 @@ jobs:
               "decalmodulate_ps20b.inc",
               "decalmodulate_vs30.inc",
               "decalmodulate_ps30.inc",
+              "lightingpass_global_ps30.inc",
               "radiosity_blend_ps30.inc",
               "radiosity_filter_ps30.inc",
               "radiosity_gen_global_ps30.inc",
-              "radiosity_gen_visibility_ps30.inc",
               "radiosity_propagate_ps30.inc",
               "radiosity_upsample_ps30.inc",
               "screenspace_combine_ps30.inc",
@@ -1433,6 +1433,19 @@ jobs:
               throw "Obsolete CASCADE combo remains in radiosity_gen_global_ps30.inc"
           }
 
+          if ($global -notmatch '\bSetSURFACE_MODE\s*\(' -or
+              $global -notmatch '\bSetSAMPLE_PHASE\s*\(') {
+              throw "Daylight-GI injection permutations are missing from radiosity_gen_global_ps30.inc"
+          }
+
+          $filter = Get-Content `
+              (Join-Path $root "radiosity_filter_ps30.inc") `
+              -Raw
+
+          if ($filter -notmatch '\bSetFILTER_PHASE\s*\(') {
+              throw "Daylight-GI filter permutations are missing from radiosity_filter_ps30.inc"
+          }
+
           $propagate = Get-Content `
               (Join-Path $root "radiosity_propagate_ps30.inc") `
               -Raw
@@ -1441,12 +1454,28 @@ jobs:
               throw "Obsolete BLUR combo remains in radiosity_propagate_ps30.inc"
           }
 
+          if ($propagate -notmatch '\bSetBOUNCE_MODE\s*\(') {
+              throw "Daylight-GI transport permutations are missing from radiosity_propagate_ps30.inc"
+          }
+
           $screenspace = Get-Content `
               (Join-Path $root "screenspace_shading_ps30.inc") `
               -Raw
 
           if ($screenspace -match 'forgot_to_set_dynamic_RADIOSITY') {
               throw "Obsolete RADIOSITY combo remains in screenspace_shading_ps30.inc"
+          }
+
+          $directSunSource = Get-Content `
+              "src\materialsystem\deferredshaders\lightingpass_global_ps30.fxc" `
+              -Raw
+
+          if ($directSunSource -notmatch 'lightAmount\s*=\s*saturate\(\s*viewFwdDot\s*\)') {
+              throw "Global sunlight must retain a linear max(N.L, 0) diffuse ramp"
+          }
+
+          if ($directSunSource -match 'lerp\(\s*1\s*,\s*dot\([^\r\n]+\)\s*\*\s*flNormal') {
+              throw "Global sunlight reintroduced the obsolete effective N.L-squared normal scaling"
           }
 
           Write-Host "All required SM2 and SM3 C++ shader headers are present."

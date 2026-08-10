@@ -27,17 +27,16 @@ const float4   g_vecRHSurfaceGuideSettings : register( c15 );
 const float3   g_vecRHShadowUVWOffset : register( c16 );
 // x relocation clearance (radiance cells), y RSM kernel-energy scale,
 // z open-sky cache enable, w open-sky cache blend.
-const float4   g_vecRHStage10 : register( c17 );
+const float4   g_vecRHInjectionSettings : register( c17 );
+// x active sun-RSM samples (4/8/16), y runtime quality.
+const float4   g_vecRHRuntimeQuality : register( c18 );
 
 sampler sRSMFlux       : register( s0 );
 sampler sRSMNormal     : register( s1 );
 sampler sRSMDepth      : register( s2 );
 sampler sRSMAlbedo     : register( s3 );
-sampler sGeometry      : register( s4 );
-sampler sGeometryDist  : register( s5 );
-sampler sShadowDist    : register( s6 );
-sampler sSurfaceGuide  : register( s7 );
-sampler sOpenSky       : register( s8 );
+sampler sBlockerField  : register( s4 );
+sampler sOpenSky       : register( s5 );
 
 struct PS_INPUT
 {
@@ -87,9 +86,9 @@ float3 RH_ReconstructRSMPosition( float2 uv, float depth )
     weightSum += rhWeight; \
 }
 #elif SURFACE_MODE == 0
-// RH7: each compile-time sample evaluates a different stable point inside the
-// RH cell as well as a stratified RSM location. The 16-sample set has zero
-// centroid and paired reflections, so it keeps the RH6 mirror-stability fix while
+// Each compile-time sample evaluates a different stable point inside the GI
+// cell as well as a stratified RSM location. The 16-sample set has zero
+// centroid and paired reflections, preserving mirror stability while
 // removing the cell-centre correlation that made sparse injection look blocky.
 #define RH_ACCUMULATE_RADIANCE_SAMPLE( OX, OY, SX, SY, SZ ) \
 { \
@@ -104,7 +103,8 @@ float3 RH_ReconstructRSMPosition( float2 uv, float depth )
     rhEdge = rhEdge * rhEdge * ( 3.0f - 2.0f * rhEdge ); \
     float rhDepth = tex2Dlod( sRSMDepth, float4( rhUV, 0.0f, 0.0f ) ).r; \
     float rhValidDepth = rhInside * rhEdge * step( rhDepth, 0.9999f ); \
-    float3 rhRay = rhCellSampleWS - RH_ReconstructRSMPosition( rhUV, rhDepth ); \
+    float3 rhEmitterWS = RH_ReconstructRSMPosition( rhUV, rhDepth ); \
+    float3 rhRay = rhCellSampleWS - rhEmitterWS; \
     float rhDistanceSquared = dot( rhRay, rhRay ); \
     float rhValidDistance = step( 1.0e-4f, rhDistanceSquared ); \
     float rhInverseDistance = rsqrt( max( rhDistanceSquared, 1.0e-4f ) ); \
@@ -120,13 +120,31 @@ float3 RH_ReconstructRSMPosition( float2 uv, float depth )
     float rhEmitterCosine = saturate( dot( rhNormal, rhTravelDirection ) ); \
     float rhSoftening = g_vecRHSettings.y * g_vecRHSettings.y * 0.1225f; \
     float rhGeometryTerm = rhEmitterCosine * sampleProjectedArea / max( rhDistanceSquared + rhSoftening, 1.0f ); \
-    float rhSampleWeight = rhValidDepth * rhValidDistance * rhFluxValid * rhRadial; \
+    float3 rhEmitterShadowUVW = ( rhEmitterWS - g_vecGridOrigin ) / max( g_vecRHSettings.x, 1.0f ) + g_vecRHShadowUVWOffset; \
+    float3 rhCellShadowUVW = ( rhCellSampleWS - g_vecGridOrigin ) / max( g_vecRHSettings.x, 1.0f ) + g_vecRHShadowUVWOffset; \
+    float3 rhVisibilityUVW0 = lerp( rhEmitterShadowUVW, rhCellShadowUVW, 0.20f ); \
+    float3 rhVisibilityUVW1 = lerp( rhEmitterShadowUVW, rhCellShadowUVW, 0.40f ); \
+    float3 rhVisibilityUVW2 = lerp( rhEmitterShadowUVW, rhCellShadowUVW, 0.60f ); \
+    float3 rhVisibilityUVW3 = lerp( rhEmitterShadowUVW, rhCellShadowUVW, 0.80f ); \
+    float4 rhField0 = RH_SampleShadowAtlas( sBlockerField, rhVisibilityUVW0 ); \
+    float4 rhField1 = RH_SampleShadowAtlas( sBlockerField, rhVisibilityUVW1 ); \
+    float4 rhField2 = RH_SampleShadowAtlas( sBlockerField, rhVisibilityUVW2 ); \
+    float4 rhField3 = RH_SampleShadowAtlas( sBlockerField, rhVisibilityUVW3 ); \
+    float rhVisibilityRadius = clamp( rhDistanceCells * 0.20f, 0.24f, 1.25f ); \
+    float rhHit0 = RH_BlockerOpacity( rhField0 ) * step( RH_BlockerDistanceCells( rhField0 ), rhVisibilityRadius ) * RH_InsideVolume( rhVisibilityUVW0 ); \
+    float rhHit1 = RH_BlockerOpacity( rhField1 ) * step( RH_BlockerDistanceCells( rhField1 ), rhVisibilityRadius ) * RH_InsideVolume( rhVisibilityUVW1 ); \
+    float rhHit2 = RH_BlockerOpacity( rhField2 ) * step( RH_BlockerDistanceCells( rhField2 ), rhVisibilityRadius ) * RH_InsideVolume( rhVisibilityUVW2 ); \
+    float rhHit3 = RH_BlockerOpacity( rhField3 ) * step( RH_BlockerDistanceCells( rhField3 ), rhVisibilityRadius ) * RH_InsideVolume( rhVisibilityUVW3 ); \
+    float rhShortVisibility = ( 1.0f - rhHit0 ) * ( 1.0f - rhHit1 ) * ( 1.0f - rhHit2 ) * ( 1.0f - rhHit3 ); \
+    float rhCandidateWeight = rhValidDepth * rhValidDistance * rhFluxValid * rhRadial; \
+    float rhSampleWeight = rhCandidateWeight * rhShortVisibility; \
     float3 rhTransported = RH_ClampRadiance( rhFlux.rgb * ( rhGeometryTerm * rhSampleWeight * g_vecRHSettings.w ), max( g_vecRHQuality.y, 0.25f ) ); \
     float4 rhBasis = RH_ProjectDirection( rhTravelDirection ); \
     shR += rhBasis * rhTransported.r; \
     shG += rhBasis * rhTransported.g; \
     shB += rhBasis * rhTransported.b; \
     confidenceSum += rhSampleWeight; \
+    visibilityCandidateSum += rhCandidateWeight; \
     proximitySum += rhSampleWeight * saturate( 1.0f - rhDistanceCells / max( gatherCellsLocal, 1.0f ) ); \
 }
 #else
@@ -137,13 +155,15 @@ float3 RH_ReconstructRSMPosition( float2 uv, float depth )
     float3 rhSkyDirection = float3( DX, DY, DZ ); \
     float rhTraceCells = clamp( g_vecRHSkySurface.y, 1.0f, 16.0f ); \
     float rhSampleCells = clamp( rhTraceCells * 0.45f, 0.80f, 5.0f ); \
-    float3 rhSampleUVW = In.vVolumeUVW + rhSkyDirection * ( rhSampleCells / RH_VOLUME_SIZE_F ); \
-    float rhInside = RH_InsideVolume( rhSampleUVW ); \
-    float rhBlocker = RH_SampleAtlas( sGeometry, rhSampleUVW ).r; \
-    float rhDistanceCells = RH_SampleAtlas( sGeometryDist, rhSampleUVW ).r * 255.0f; \
-    float rhProximity = saturate( 1.0f - rhDistanceCells / max( rhTraceCells, 1.0f ) ); \
-    float rhOpticalDepth = max( rhBlocker, rhProximity * 0.35f ) * rhSampleCells * rhInside; \
-    float rhVisibility = exp2( -max( g_vecRHSkySurface.x, 0.0f ) * rhOpticalDepth ) * openSkyVisibility; \
+    float3 rhSampleUVW0 = In.vVolumeUVW + rhSkyDirection * ( rhSampleCells * 0.3333333f / RH_VOLUME_SIZE_F ); \
+    float3 rhSampleUVW1 = In.vVolumeUVW + rhSkyDirection * ( rhSampleCells * 0.6666667f / RH_VOLUME_SIZE_F ); \
+    float4 rhField0 = RH_SampleShadowAtlas( sBlockerField, rhSampleUVW0 + g_vecRHShadowUVWOffset ); \
+    float4 rhField1 = RH_SampleShadowAtlas( sBlockerField, rhSampleUVW1 + g_vecRHShadowUVWOffset ); \
+    float rhTraceRadius = clamp( rhSampleCells / 3.0f, 0.30f, 1.25f ); \
+    float rhHit0 = RH_BlockerOpacity( rhField0 ) * step( RH_BlockerDistanceCells( rhField0 ), rhTraceRadius ) * RH_InsideVolume( rhSampleUVW0 ); \
+    float rhHit1 = RH_BlockerOpacity( rhField1 ) * step( RH_BlockerDistanceCells( rhField1 ), rhTraceRadius ) * RH_InsideVolume( rhSampleUVW1 ); \
+    float rhShortVisibility = ( 1.0f - rhHit0 ) * ( 1.0f - rhHit1 ); \
+    float rhVisibility = rhShortVisibility * openSkyVisibility; \
     skyBasis += RH_ProjectDirection( -rhSkyDirection ) * ( WEIGHT * rhVisibility ); \
 }
 
@@ -152,9 +172,14 @@ float3 RH_ReconstructRSMPosition( float2 uv, float depth )
     float3 rhSkyDirection = float3( DX, DY, DZ ); \
     float rhTraceCells = clamp( g_vecRHSkySurface.y, 1.0f, 16.0f ); \
     float rhSampleCells = clamp( rhTraceCells * 0.30f, 0.70f, 3.5f ); \
-    float3 rhSampleUVW = In.vVolumeUVW + rhSkyDirection * ( rhSampleCells / RH_VOLUME_SIZE_F ); \
-    float rhBlocker = RH_SampleAtlas( sGeometry, rhSampleUVW ).r * RH_InsideVolume( rhSampleUVW ); \
-    float rhVisibility = exp2( -max( g_vecRHSkySurface.x, 0.0f ) * rhBlocker * rhSampleCells ); \
+    float3 rhSampleUVW0 = In.vVolumeUVW + rhSkyDirection * ( rhSampleCells * 0.3333333f / RH_VOLUME_SIZE_F ); \
+    float3 rhSampleUVW1 = In.vVolumeUVW + rhSkyDirection * ( rhSampleCells * 0.6666667f / RH_VOLUME_SIZE_F ); \
+    float4 rhField0 = RH_SampleShadowAtlas( sBlockerField, rhSampleUVW0 + g_vecRHShadowUVWOffset ); \
+    float4 rhField1 = RH_SampleShadowAtlas( sBlockerField, rhSampleUVW1 + g_vecRHShadowUVWOffset ); \
+    float rhTraceRadius = clamp( rhSampleCells / 3.0f, 0.30f, 1.25f ); \
+    float rhHit0 = RH_BlockerOpacity( rhField0 ) * step( RH_BlockerDistanceCells( rhField0 ), rhTraceRadius ) * RH_InsideVolume( rhSampleUVW0 ); \
+    float rhHit1 = RH_BlockerOpacity( rhField1 ) * step( RH_BlockerDistanceCells( rhField1 ), rhTraceRadius ) * RH_InsideVolume( rhSampleUVW1 ); \
+    float rhVisibility = ( 1.0f - rhHit0 ) * ( 1.0f - rhHit1 ); \
     skyBasis += RH_ProjectDirection( -rhSkyDirection ) * ( WEIGHT * rhVisibility ); \
 }
 #endif
@@ -164,14 +189,13 @@ PS_OUTPUT main( const PS_INPUT In )
     PS_OUTPUT Out;
 
 #if SURFACE_MODE == 1
-    float4 surfaceGuide = RH_SampleAtlas( sSurfaceGuide, In.vVolumeUVW );
-    float guideAmount = saturate( surfaceGuide.a ) * saturate( g_vecRHSurfaceGuideSettings.x );
-    float3 guideNormal = RH_DecodeSurfaceGuideNormal( surfaceGuide );
-    float shadowDistanceBase = RH_ShadowDistanceCells( sShadowDist, In.vVolumeUVW + g_vecRHShadowUVWOffset );
+    float4 blockerField = RH_SampleShadowAtlas( sBlockerField, In.vVolumeUVW + g_vecRHShadowUVWOffset );
+    float3 relocationNormal = RH_DecodeBlockerNormal( blockerField.ba );
+    float shadowDistanceBase = RH_BlockerDistanceCells( blockerField );
     float distanceRadiance = shadowDistanceBase * ( RH_VOLUME_SIZE_F / RH_SHADOW_VOLUME_SIZE_F );
-    float desiredClearance = max( g_vecRHStage10.x, 0.0f );
+    float desiredClearance = max( g_vecRHInjectionSettings.x, 0.0f );
     float relocationCells = min( clamp( g_vecRHAdaptive.w, 0.0f, 0.45f ), max( desiredClearance - distanceRadiance, 0.0f ) );
-    float3 relocatedUVW = In.vVolumeUVW + guideNormal * ( guideAmount * relocationCells / RH_VOLUME_SIZE_F );
+    float3 relocatedUVW = In.vVolumeUVW + relocationNormal * ( relocationCells / RH_VOLUME_SIZE_F );
     float3 cellCenterWS = g_vecGridOrigin + relocatedUVW * g_vecRHSettings.x;
     float4 projected = mul( float4( cellCenterWS, 1.0f ), g_matWorldToRSM );
     float2 centerUV = projected.xy / max( abs( projected.w ), 1.0e-6f );
@@ -196,19 +220,19 @@ PS_OUTPUT main( const PS_INPUT In )
     Out.vSH_B = 0.0f;
     Out.vMeta = 0.0f;
 #elif SURFACE_MODE == 0
-    float4 surfaceGuide = RH_SampleAtlas( sSurfaceGuide, In.vVolumeUVW );
-    float guideAmount = saturate( surfaceGuide.a ) * saturate( g_vecRHSurfaceGuideSettings.x );
-    float3 guideNormal = RH_DecodeSurfaceGuideNormal( surfaceGuide );
-    float shadowDistanceCells = RH_ShadowDistanceCells( sShadowDist, In.vVolumeUVW + g_vecRHShadowUVWOffset );
+    float4 blockerField = RH_SampleShadowAtlas( sBlockerField, In.vVolumeUVW + g_vecRHShadowUVWOffset );
+    float3 relocationNormal = RH_DecodeBlockerNormal( blockerField.ba );
+    float shadowDistanceCells = RH_BlockerDistanceCells( blockerField );
     float distanceRadianceCells = shadowDistanceCells * ( RH_VOLUME_SIZE_F / RH_SHADOW_VOLUME_SIZE_F );
-    float desiredClearance = max( g_vecRHStage10.x, 0.0f );
+    float desiredClearance = max( g_vecRHInjectionSettings.x, 0.0f );
     float relocationCells = min( clamp( g_vecRHAdaptive.w, 0.0f, 0.45f ), max( desiredClearance - distanceRadianceCells, 0.0f ) );
-    float3 relocatedUVW = In.vVolumeUVW + guideNormal * ( guideAmount * relocationCells / RH_VOLUME_SIZE_F );
+    float3 relocatedUVW = In.vVolumeUVW + relocationNormal * ( relocationCells / RH_VOLUME_SIZE_F );
     float3 cellCenterWS = g_vecGridOrigin + relocatedUVW * g_vecRHSettings.x;
     float4 shR = 0.0f;
     float4 shG = 0.0f;
     float4 shB = 0.0f;
     float confidenceSum = 0.0f;
+    float visibilityCandidateSum = 0.0f;
     float proximitySum = 0.0f;
     float adaptiveT = saturate( distanceRadianceCells / 4.0f );
     float adaptiveGatherCells = lerp( max( g_vecRHAdaptive.y, 1.0f ), max( g_vecRHAdaptive.z, 1.0f ), adaptiveT );
@@ -217,11 +241,11 @@ PS_OUTPUT main( const PS_INPUT In )
     float gatherWorldRadius = gatherCellsLocal * max( g_vecRHSettings.y, 1.0f );
     // The fixed 16-point kernel's radial window has mean 0.6784. Normalize
     // against that actual stencil instead of assuming the 0.5 mean of an ideal
-    // continuous disk. deferred_rh_rsm_kernel_energy remains an explicit final
-    // calibration scalar for RSM discretization/material conventions.
+    // continuous disk. The bounded injection calibration remains separate from
+    // sample-count normalization.
     const float RH_KERNEL_RADIAL_MEAN = 0.6784f;
     float sampleProjectedArea = RH_PI * gatherWorldRadius * gatherWorldRadius
-        * max( g_vecRHStage10.y, 0.0f ) / ( RH_RADIANCE_SAMPLE_COUNT * RH_KERNEL_RADIAL_MEAN );
+        * max( g_vecRHInjectionSettings.y, 0.0f ) / ( max( g_vecRHRuntimeQuality.x, 4.0f ) * RH_KERNEL_RADIAL_MEAN );
 
 #if SAMPLE_PHASE == 0
     // Cardinal stratum above the cell centre. Phase 1 is its exact Z reflection.
@@ -258,7 +282,6 @@ PS_OUTPUT main( const PS_INPUT In )
     Out.vSH_R = RH_LimitRadianceSH( shR );
     Out.vSH_G = RH_LimitRadianceSH( shG );
     Out.vSH_B = RH_LimitRadianceSH( shB );
-    float valid = step( 1.0e-5f, confidenceSum );
     float gatherCells = max( gatherCellsLocal, 1.0f );
     float normalizedEnergy = saturate(
         RH_RadianceEnergy( Out.vSH_R, Out.vSH_G, Out.vSH_B )
@@ -266,10 +289,11 @@ PS_OUTPUT main( const PS_INPUT In )
     // All four phases contribute to metadata additively. Meta.y is now a stable
     // near-surface proximity moment instead of a phase-0-only minimum distance.
     Out.vMeta = float4(
-        saturate( confidenceSum / RH_RADIANCE_SAMPLE_COUNT ),
-        saturate( proximitySum / RH_RADIANCE_SAMPLE_COUNT ),
+        saturate( confidenceSum / max( g_vecRHRuntimeQuality.x, 4.0f ) ),
+        saturate( proximitySum / max( g_vecRHRuntimeQuality.x, 4.0f ) ),
         normalizedEnergy,
-        valid );
+        saturate( confidenceSum / max( visibilityCandidateSum, 1.0e-5f ) ) *
+            saturate( 4.0f / max( g_vecRHRuntimeQuality.x, 4.0f ) ) );
 #else
     const float horizontal = 0.9682458366f;
     float skyEnabled = saturate( g_vecRHSkyUpper.w );
@@ -282,7 +306,8 @@ PS_OUTPUT main( const PS_INPUT In )
     float3 skyCellWS = g_vecGridOrigin + In.vVolumeUVW * g_vecRHSettings.x;
     float3 skyUVW = ( skyCellWS - skyOriginWS ) / max( g_vecRHSettings.x, 1.0f );
     float openSky = RH_SampleAtlasN( sOpenSky, skyUVW, RH_SKY_CACHE_SIZE_F, RH_SKY_CACHE_ATLAS_WIDTH_F ).r;
-    float openSkyVisibility = lerp( 1.0f, openSky, saturate( g_vecRHStage10.z ) * saturate( g_vecRHStage10.w ) );
+    float openSkyVisibility = lerp( 1.0f, openSky,
+        saturate( g_vecRHInjectionSettings.z ) * saturate( g_vecRHInjectionSettings.w ) );
 
     float4 skyBasis = 0.0f;
     float3 skyColour = 0.0f;
@@ -306,7 +331,6 @@ PS_OUTPUT main( const PS_INPUT In )
     Out.vSH_G = RH_LimitRadianceSH( skyBasis * skyColour.g );
     Out.vSH_B = RH_LimitRadianceSH( skyBasis * skyColour.b );
     float skyEnergy = RH_RadianceEnergy( Out.vSH_R, Out.vSH_G, Out.vSH_B );
-    float valid = step( 1.0e-5f, skyEnergy );
     Out.vMeta = float4(
         saturate( skyEnergy / max( g_vecRHQuality.y, 0.25f ) ),
         // Meta.y belongs to the sun-RSM nearest-surface estimate.  Sky passes
@@ -314,7 +338,10 @@ PS_OUTPUT main( const PS_INPUT In )
         // 1.0 every frame and destroyed that semantic.
         0.0f,
         saturate( skyEnergy / max( g_vecRHQuality.y, 0.25f ) ),
-        valid * 0.5f );
+        // Meta.w is reserved for normalized sun-RSM injection visibility.  Sky
+        // visibility already shapes sky energy and must not saturate that debug
+        // channel when the sun path is blocked.
+        0.0f );
 #endif
     return Out;
 }

@@ -42,7 +42,6 @@
 void GetTexcoordSettings( const bool bDecal, const bool bMultiBlend,
 	int &iNumTexcoords, int **iTexcoordDim );
 
-extern ConVar deferred_radiosity_multiplier;
 
 #include "defpass_gbuffer.h"
 

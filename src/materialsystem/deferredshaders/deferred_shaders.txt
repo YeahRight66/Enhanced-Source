@@ -27,12 +27,10 @@ volumpass_point_ps30.fxc
 volumpass_spot_ps30.fxc
 
 radiosity_gen_global_ps30.fxc
-radiosity_gen_visibility_ps30.fxc
 radiosity_filter_ps30.fxc
 radiosity_gen_vs30.fxc
 radiosity_propagate_ps30.fxc
 radiosity_propagate_vs30.fxc
-radiosity_hierarchy_ps30.fxc
 radiosity_blend_ps30.fxc
 radiosity_upsample_ps30.fxc
 

@@ -23,8 +23,6 @@ static CTextureReference g_tex_VolumetricsBuffer[ 2 ];
 
 static CTextureReference g_tex_ShadowColor_Ortho[ MAX_SHADOW_ORTHO ];
 static CTextureReference g_tex_ShadowDepth_Ortho[ MAX_SHADOW_ORTHO ];
-static CTextureReference g_tex_ShadowRad_Albedo_Ortho[ MAX_SHADOW_ORTHO ];
-static CTextureReference g_tex_ShadowRad_Normal_Ortho[ MAX_SHADOW_ORTHO ];
 
 static CTextureReference g_tex_RHRSMDepth;
 static CTextureReference g_tex_RHRSMColor;
@@ -42,37 +40,21 @@ static CTextureReference g_tex_ShadowDepth_Proj_LOD2[ MAX_SHADOW_PROJ ];
 static CTextureReference g_tex_ShadowColor_DP[ MAX_SHADOW_DP ];
 static CTextureReference g_tex_ShadowDepth_DP[ MAX_SHADOW_DP ];
 
-static CTextureReference g_tex_RadianceHints[ RH_SET_COUNT ][ RH_CHANNEL_COUNT ];
-static CTextureReference g_tex_RHVisibility;
+static CTextureReference g_tex_RadianceHints[ RH_CLIP_LEVEL_COUNT ][ RH_SET_COUNT ][ RH_CHANNEL_COUNT ];
 static CTextureReference g_tex_RHIndirectHalf;
-static CTextureReference g_tex_RHGeometry;
-static CTextureReference g_tex_RHGeometryDistance;
-static CTextureReference g_tex_RHSurfaceAlbedo;
-static CTextureReference g_tex_RHSurfaceNormal;
-static CTextureReference g_tex_RHShadowGeometry;
-static CTextureReference g_tex_RHShadowDistance;
-static CTextureReference g_tex_RHSurfaceGuide;
-static CTextureReference g_tex_RHShadowHalf;
-static CTextureReference g_tex_RHSurfaceCache;
-static CTextureReference g_tex_RHOpenSky;
-static CTextureReference g_tex_RHShadowGeometry32;
-static CTextureReference g_tex_RHShadowDistance32;
-static CTextureReference g_tex_RHShadowGeometry16;
-static CTextureReference g_tex_RHShadowDistance16;
-static CTextureReference g_tex_RHHierarchy[ 3 ][ 3 ];
-static CTextureReference g_tex_RHHierarchyEnergy[ 2 ]; // 10^3 and 5^3 broad isotropic energy.
+static CTextureReference g_tex_RHGeometry[ RH_CLIP_LEVEL_COUNT ];
+static CTextureReference g_tex_RHSurfaceAlbedo[ RH_CLIP_LEVEL_COUNT ];
+static CTextureReference g_tex_RHSurfaceNormal[ RH_CLIP_LEVEL_COUNT ];
+static CTextureReference g_tex_GIBlockerField[ RH_CLIP_LEVEL_COUNT ];
+static CTextureReference g_tex_RHSurfaceGuide[ RH_CLIP_LEVEL_COUNT ];
+static CTextureReference g_tex_RHSurfaceCache[ RH_CLIP_LEVEL_COUNT ];
+static CTextureReference g_tex_RHOpenSky[ RH_CLIP_LEVEL_COUNT ];
 
-static unsigned char g_RHGeometryData[ RH_ATLAS_WIDTH * RH_ATLAS_HEIGHT ];
-static unsigned char g_RHGeometryDistanceData[ RH_ATLAS_WIDTH * RH_ATLAS_HEIGHT ];
-static unsigned char g_RHShadowGeometryData[ RH_SHADOW_ATLAS_WIDTH * RH_SHADOW_ATLAS_HEIGHT ];
-static unsigned char g_RHShadowDistanceData[ RH_SHADOW_ATLAS_WIDTH * RH_SHADOW_ATLAS_HEIGHT ];
-static unsigned char g_RHSurfaceGuideData[ RH_ATLAS_WIDTH * RH_ATLAS_HEIGHT * 4 ];
-static unsigned char g_RHSurfaceCacheData[ RH_ATLAS_WIDTH * RH_ATLAS_HEIGHT * 4 ];
-static unsigned char g_RHOpenSkyData[ RH_SKY_CACHE_ATLAS_WIDTH * RH_SKY_CACHE_ATLAS_HEIGHT ];
-static unsigned char g_RHShadowGeometry32Data[ RH_SHADOW_MIP1_ATLAS_WIDTH * RH_SHADOW_MIP1_ATLAS_HEIGHT ];
-static unsigned char g_RHShadowDistance32Data[ RH_SHADOW_MIP1_ATLAS_WIDTH * RH_SHADOW_MIP1_ATLAS_HEIGHT ];
-static unsigned char g_RHShadowGeometry16Data[ RH_SHADOW_MIP2_ATLAS_WIDTH * RH_SHADOW_MIP2_ATLAS_HEIGHT ];
-static unsigned char g_RHShadowDistance16Data[ RH_SHADOW_MIP2_ATLAS_WIDTH * RH_SHADOW_MIP2_ATLAS_HEIGHT ];
+static unsigned char g_RHGeometryData[ RH_CLIP_LEVEL_COUNT ][ RH_ATLAS_WIDTH * RH_ATLAS_HEIGHT ];
+static unsigned char g_GIBlockerFieldData[ RH_CLIP_LEVEL_COUNT ][ RH_SHADOW_ATLAS_WIDTH * RH_SHADOW_ATLAS_HEIGHT * 4 ];
+static unsigned char g_RHSurfaceGuideData[ RH_CLIP_LEVEL_COUNT ][ RH_ATLAS_WIDTH * RH_ATLAS_HEIGHT * 4 ];
+static unsigned char g_RHSurfaceCacheData[ RH_CLIP_LEVEL_COUNT ][ RH_ATLAS_WIDTH * RH_ATLAS_HEIGHT * 4 ];
+static unsigned char g_RHOpenSkyData[ RH_CLIP_LEVEL_COUNT ][ RH_SKY_CACHE_ATLAS_WIDTH * RH_SKY_CACHE_ATLAS_HEIGHT ];
 
 class CRHByteTextureRegenerator : public ITextureRegenerator
 {
@@ -144,28 +126,31 @@ private:
     int m_nHeight;
 };
 
-static CRHByteTextureRegenerator g_RHGeometryTextureRegenerator(
-    g_RHGeometryData, RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT );
-static CRHByteTextureRegenerator g_RHGeometryDistanceTextureRegenerator(
-    g_RHGeometryDistanceData, RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT );
-static CRHByteTextureRegenerator g_RHShadowGeometryTextureRegenerator(
-    g_RHShadowGeometryData, RH_SHADOW_ATLAS_WIDTH, RH_SHADOW_ATLAS_HEIGHT );
-static CRHByteTextureRegenerator g_RHShadowDistanceTextureRegenerator(
-    g_RHShadowDistanceData, RH_SHADOW_ATLAS_WIDTH, RH_SHADOW_ATLAS_HEIGHT );
-static CRHRGBAByteTextureRegenerator g_RHSurfaceGuideTextureRegenerator(
-    g_RHSurfaceGuideData, RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT );
-static CRHRGBAByteTextureRegenerator g_RHSurfaceCacheTextureRegenerator(
-    g_RHSurfaceCacheData, RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT );
-static CRHByteTextureRegenerator g_RHOpenSkyTextureRegenerator(
-    g_RHOpenSkyData, RH_SKY_CACHE_ATLAS_WIDTH, RH_SKY_CACHE_ATLAS_HEIGHT );
-static CRHByteTextureRegenerator g_RHShadowGeometry32TextureRegenerator(
-    g_RHShadowGeometry32Data, RH_SHADOW_MIP1_ATLAS_WIDTH, RH_SHADOW_MIP1_ATLAS_HEIGHT );
-static CRHByteTextureRegenerator g_RHShadowDistance32TextureRegenerator(
-    g_RHShadowDistance32Data, RH_SHADOW_MIP1_ATLAS_WIDTH, RH_SHADOW_MIP1_ATLAS_HEIGHT );
-static CRHByteTextureRegenerator g_RHShadowGeometry16TextureRegenerator(
-    g_RHShadowGeometry16Data, RH_SHADOW_MIP2_ATLAS_WIDTH, RH_SHADOW_MIP2_ATLAS_HEIGHT );
-static CRHByteTextureRegenerator g_RHShadowDistance16TextureRegenerator(
-    g_RHShadowDistance16Data, RH_SHADOW_MIP2_ATLAS_WIDTH, RH_SHADOW_MIP2_ATLAS_HEIGHT );
+static CRHByteTextureRegenerator g_RHGeometryTextureRegenerator[ RH_CLIP_LEVEL_COUNT ] =
+{
+    CRHByteTextureRegenerator( g_RHGeometryData[0], RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT ),
+    CRHByteTextureRegenerator( g_RHGeometryData[1], RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT )
+};
+static CRHRGBAByteTextureRegenerator g_GIBlockerFieldTextureRegenerator[ RH_CLIP_LEVEL_COUNT ] =
+{
+    CRHRGBAByteTextureRegenerator( g_GIBlockerFieldData[0], RH_SHADOW_ATLAS_WIDTH, RH_SHADOW_ATLAS_HEIGHT ),
+    CRHRGBAByteTextureRegenerator( g_GIBlockerFieldData[1], RH_SHADOW_ATLAS_WIDTH, RH_SHADOW_ATLAS_HEIGHT )
+};
+static CRHRGBAByteTextureRegenerator g_RHSurfaceGuideTextureRegenerator[ RH_CLIP_LEVEL_COUNT ] =
+{
+    CRHRGBAByteTextureRegenerator( g_RHSurfaceGuideData[0], RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT ),
+    CRHRGBAByteTextureRegenerator( g_RHSurfaceGuideData[1], RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT )
+};
+static CRHRGBAByteTextureRegenerator g_RHSurfaceCacheTextureRegenerator[ RH_CLIP_LEVEL_COUNT ] =
+{
+    CRHRGBAByteTextureRegenerator( g_RHSurfaceCacheData[0], RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT ),
+    CRHRGBAByteTextureRegenerator( g_RHSurfaceCacheData[1], RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT )
+};
+static CRHByteTextureRegenerator g_RHOpenSkyTextureRegenerator[ RH_CLIP_LEVEL_COUNT ] =
+{
+    CRHByteTextureRegenerator( g_RHOpenSkyData[0], RH_SKY_CACHE_ATLAS_WIDTH, RH_SKY_CACHE_ATLAS_HEIGHT ),
+    CRHByteTextureRegenerator( g_RHOpenSkyData[1], RH_SKY_CACHE_ATLAS_WIDTH, RH_SKY_CACHE_ATLAS_HEIGHT )
+};
 
 static CTextureReference g_tex_ProjectableVGUI[ NUM_PROJECTABLE_VGUI ];
 
@@ -231,7 +216,6 @@ const ImageFormat fmt_gbuffer0 =
 	const ImageFormat fmt_depth = GetDeferredManager()->GetShadowDepthFormat();
 	const ImageFormat fmt_depthColor = bShadowUseColor ? IMAGE_FORMAT_R32F
 		: g_pMaterialSystemHardwareConfig->GetNullTextureFormat();
-	const ImageFormat fmt_radAlbedo = IMAGE_FORMAT_RGBA8888;
     const ImageFormat fmt_radNormal = IMAGE_FORMAT_RGBA8888;
     const ImageFormat fmt_radBuffer = IMAGE_FORMAT_RGBA16161616F;
     const ImageFormat fmt_rhRSMFlux = IMAGE_FORMAT_RGBA16161616F;
@@ -251,12 +235,12 @@ const ImageFormat fmt_gbuffer0 =
 	unsigned int depthFlags =			TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT | TEXTUREFLAGS_RENDERTARGET;
 	unsigned int shadowColorFlags =		TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT | TEXTUREFLAGS_RENDERTARGET | TEXTUREFLAGS_POINTSAMPLE;
 	unsigned int projVGUIFlags =		TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT | TEXTUREFLAGS_RENDERTARGET;
-	unsigned int radAlbedoNormalFlags =	TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT | TEXTUREFLAGS_RENDERTARGET;
 	unsigned int radBufferFlags =       TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT | TEXTUREFLAGS_RENDERTARGET;
     // RSM attributes must describe the same texel/surfel. Bilinear flux with
     // point-sampled depth/normal blends unrelated emitters at geometry edges and
-    // then reconstructs that mixed energy at one surface. RH7+ already has dense
-    // 16-sample injection and volume reconstruction, so keep flux texel-coherent.
+    // then reconstructs that mixed energy at one surface. Daylight GI already
+    // performs stratified injection and volume reconstruction, so keep every
+    // RSM attribute texel-coherent.
     unsigned int rhRSMFluxFlags =      TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT | TEXTUREFLAGS_RENDERTARGET | TEXTUREFLAGS_POINTSAMPLE;
     unsigned int rhRSMNormalFlags =    TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT | TEXTUREFLAGS_RENDERTARGET | TEXTUREFLAGS_POINTSAMPLE;
     unsigned int rhRSMAlbedoFlags =    TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT | TEXTUREFLAGS_RENDERTARGET | TEXTUREFLAGS_POINTSAMPLE;
@@ -406,24 +390,6 @@ const ImageFormat fmt_gbuffer0 =
 				MATERIAL_RT_DEPTH_NONE,
 				shadowColorFlags, 0 ) );
 
-#if DEFCFG_ENABLE_RADIOSITY
-			g_tex_ShadowRad_Albedo_Ortho[i].Init( materials->CreateNamedRenderTargetTextureEx2(
-				VarArgs( "%s%02i", DEFRTNAME_SHADOWRAD_ALBEDO_ORTHO, i ),
-				iResolution_x, iResolution_y,
-				RT_SIZE_NO_CHANGE,
-				fmt_radAlbedo,
-				MATERIAL_RT_DEPTH_NONE,
-				radAlbedoNormalFlags, 0 ) );
-
-			g_tex_ShadowRad_Normal_Ortho[i].Init( materials->CreateNamedRenderTargetTextureEx2(
-				VarArgs( "%s%02i", DEFRTNAME_SHADOWRAD_NORMAL_ORTHO, i ),
-				iResolution_x, iResolution_y,
-				RT_SIZE_NO_CHANGE,
-				fmt_radNormal,
-				MATERIAL_RT_DEPTH_NONE,
-				radAlbedoNormalFlags, 0 ) );
-#endif
-
 			Assert( iResolution_y == g_tex_ShadowDepth_Ortho[i]->GetActualHeight() );
 			Assert( iResolution_y == g_tex_ShadowColor_Ortho[i]->GetActualHeight() );
 			Assert( iResolution_x == g_tex_ShadowDepth_Ortho[i]->GetActualWidth() );
@@ -450,69 +416,27 @@ const ImageFormat fmt_gbuffer0 =
             DEFRTNAME_RH_META
         };
 
-		for ( int setIndex = 0; setIndex < RH_SET_COUNT; ++setIndex )
+		for ( int clip = 0; clip < RH_CLIP_LEVEL_COUNT; ++clip )
 		{
-			for ( int channelIndex = 0; channelIndex < RH_CHANNEL_COUNT; ++channelIndex )
+			for ( int setIndex = 0; setIndex < RH_SET_COUNT; ++setIndex )
 			{
-				g_tex_RadianceHints[ setIndex ][ channelIndex ].Init(
-					materials->CreateNamedRenderTargetTextureEx2(
-						VarArgs( "%s%02i", s_RHNames[ channelIndex ], setIndex ),
-						RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT,
-						RT_SIZE_NO_CHANGE,
-						fmt_radBuffer,
-						MATERIAL_RT_DEPTH_NONE,
-						radBufferFlags, 0 ) );
+				for ( int channelIndex = 0; channelIndex < RH_CHANNEL_COUNT; ++channelIndex )
+				{
+					g_tex_RadianceHints[ clip ][ setIndex ][ channelIndex ].Init(
+						materials->CreateNamedRenderTargetTextureEx2(
+							VarArgs( "%sL%i_%02i", s_RHNames[ channelIndex ], clip, setIndex ),
+							RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT, RT_SIZE_NO_CHANGE, fmt_radBuffer,
+							MATERIAL_RT_DEPTH_NONE, radBufferFlags, 0 ) );
+				}
 			}
+
+			g_tex_RHSurfaceAlbedo[clip].Init( materials->CreateNamedRenderTargetTextureEx2(
+				VarArgs( "%s_L%i", DEFRTNAME_RH_SURFACE_ALBEDO, clip ), RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT,
+				RT_SIZE_NO_CHANGE, fmt_radBuffer, MATERIAL_RT_DEPTH_NONE, radBufferFlags, 0 ) );
+			g_tex_RHSurfaceNormal[clip].Init( materials->CreateNamedRenderTargetTextureEx2(
+				VarArgs( "%s_L%i", DEFRTNAME_RH_SURFACE_NORMAL, clip ), RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT,
+				RT_SIZE_NO_CHANGE, fmt_radBuffer, MATERIAL_RT_DEPTH_NONE, radBufferFlags, 0 ) );
 		}
-
-        g_tex_RHVisibility.Init( materials->CreateNamedRenderTargetTextureEx2(
-            DEFRTNAME_RH_VISIBILITY,
-            RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT,
-            RT_SIZE_NO_CHANGE,
-            fmt_radBuffer,
-            MATERIAL_RT_DEPTH_NONE,
-            radBufferFlags, 0 ) );
-
-        g_tex_RHSurfaceAlbedo.Init( materials->CreateNamedRenderTargetTextureEx2(
-            DEFRTNAME_RH_SURFACE_ALBEDO,
-            RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT,
-            RT_SIZE_NO_CHANGE,
-            fmt_radBuffer,
-            MATERIAL_RT_DEPTH_NONE,
-            radBufferFlags, 0 ) );
-
-        g_tex_RHSurfaceNormal.Init( materials->CreateNamedRenderTargetTextureEx2(
-            DEFRTNAME_RH_SURFACE_NORMAL,
-            RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT,
-            RT_SIZE_NO_CHANGE,
-            fmt_radBuffer,
-            MATERIAL_RT_DEPTH_NONE,
-            radBufferFlags, 0 ) );
-
-        static const char *s_RHHierarchyNames[3][3] =
-        {
-            { DEFRTNAME_RH_HIERARCHY20_R, DEFRTNAME_RH_HIERARCHY20_G, DEFRTNAME_RH_HIERARCHY20_B },
-            { DEFRTNAME_RH_HIERARCHY10_R, DEFRTNAME_RH_HIERARCHY10_G, DEFRTNAME_RH_HIERARCHY10_B },
-            { DEFRTNAME_RH_HIERARCHY5_R,  DEFRTNAME_RH_HIERARCHY5_G,  DEFRTNAME_RH_HIERARCHY5_B  }
-        };
-        const int rhHierarchyWidths[3] = { RH_HIERARCHY_20_ATLAS_WIDTH, RH_HIERARCHY_10_ATLAS_WIDTH, RH_HIERARCHY_5_ATLAS_WIDTH };
-        const int rhHierarchyHeights[3] = { RH_HIERARCHY_20_ATLAS_HEIGHT, RH_HIERARCHY_10_ATLAS_HEIGHT, RH_HIERARCHY_5_ATLAS_HEIGHT };
-        for ( int level = 0; level < 3; ++level )
-        {
-            for ( int channel = 0; channel < 3; ++channel )
-            {
-                g_tex_RHHierarchy[level][channel].Init( materials->CreateNamedRenderTargetTextureEx2(
-                    s_RHHierarchyNames[level][channel],
-                    rhHierarchyWidths[level], rhHierarchyHeights[level],
-                    RT_SIZE_NO_CHANGE, fmt_radBuffer, MATERIAL_RT_DEPTH_NONE, radBufferFlags, 0 ) );
-            }
-        }
-        g_tex_RHHierarchyEnergy[0].Init( materials->CreateNamedRenderTargetTextureEx2(
-            DEFRTNAME_RH_HIERARCHY10_ENERGY, RH_HIERARCHY_10_ATLAS_WIDTH, RH_HIERARCHY_10_ATLAS_HEIGHT,
-            RT_SIZE_NO_CHANGE, fmt_radBuffer, MATERIAL_RT_DEPTH_NONE, radBufferFlags, 0 ) );
-        g_tex_RHHierarchyEnergy[1].Init( materials->CreateNamedRenderTargetTextureEx2(
-            DEFRTNAME_RH_HIERARCHY5_ENERGY, RH_HIERARCHY_5_ATLAS_WIDTH, RH_HIERARCHY_5_ATLAS_HEIGHT,
-            RT_SIZE_NO_CHANGE, fmt_radBuffer, MATERIAL_RT_DEPTH_NONE, radBufferFlags, 0 ) );
 #endif
 	}
 
@@ -525,14 +449,6 @@ const ImageFormat fmt_gbuffer0 =
 		fmt_rhHalf,
 		MATERIAL_RT_DEPTH_NONE,
 		rhHalfFlags, 0 ) );
-
-    g_tex_RHShadowHalf.Init( materials->CreateNamedRenderTargetTextureEx2(
-        DEFRTNAME_RH_SHADOW_HALF,
-        rhHalfWidth, rhHalfHeight,
-        RT_SIZE_DEFAULT,
-        IMAGE_FORMAT_RGBA8888,
-        MATERIAL_RT_DEPTH_NONE,
-        rhHalfFlags, 0 ) );
 #endif
 
 	for ( int i = 0; i < MAX_SHADOW_PROJ; i++ )
@@ -675,131 +591,51 @@ const ImageFormat fmt_gbuffer0 =
 
 
 #if DEFCFG_ENABLE_RADIOSITY
-    if ( bInitial && !g_tex_RHGeometry.IsValid() )
+    for ( int clip = 0; clip < RH_CLIP_LEVEL_COUNT; ++clip )
     {
-        memset( g_RHGeometryData, 0, sizeof( g_RHGeometryData ) );
-        g_tex_RHGeometry.Init( materials->CreateProceduralTexture(
-            DEFRTNAME_RH_GEOMETRY,
-            TEXTURE_GROUP_OTHER,
-            RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT,
-            IMAGE_FORMAT_RGBA8888,
-            TEXTUREFLAGS_PROCEDURAL | TEXTUREFLAGS_NOMIP |
-            TEXTUREFLAGS_POINTSAMPLE | TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT ) );
-
-        Assert( g_tex_RHGeometry.IsValid() );
-        if ( g_tex_RHGeometry.IsValid() )
-        {
-            g_tex_RHGeometry->SetTextureRegenerator( &g_RHGeometryTextureRegenerator );
-            g_tex_RHGeometry->Download();
+#define RH_CREATE_CLIP_BYTE_TEX( REF, NAME, DATA, REGEN, W, H, INITIAL, EXTRAFLAGS ) \
+        if ( bInitial && !(REF)[clip].IsValid() ) \
+        { \
+            memset( (DATA)[clip], INITIAL, sizeof( (DATA)[clip] ) ); \
+            (REF)[clip].Init( materials->CreateProceduralTexture( VarArgs( "%s_L%i", NAME, clip ), \
+                TEXTURE_GROUP_OTHER, W, H, IMAGE_FORMAT_RGBA8888, TEXTUREFLAGS_PROCEDURAL | \
+                TEXTUREFLAGS_NOMIP | TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT | EXTRAFLAGS ) ); \
+            if ( (REF)[clip].IsValid() ) \
+            { \
+                (REF)[clip]->SetTextureRegenerator( &(REGEN)[clip] ); \
+                (REF)[clip]->Download(); \
+            } \
         }
-    }
 
-    if ( bInitial && !g_tex_RHGeometryDistance.IsValid() )
-    {
-        memset( g_RHGeometryDistanceData, 255, sizeof( g_RHGeometryDistanceData ) );
-        g_tex_RHGeometryDistance.Init( materials->CreateProceduralTexture(
-            DEFRTNAME_RH_GEOMETRY_DISTANCE,
-            TEXTURE_GROUP_OTHER,
-            RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT,
-            IMAGE_FORMAT_RGBA8888,
-            TEXTUREFLAGS_PROCEDURAL | TEXTUREFLAGS_NOMIP |
-            TEXTUREFLAGS_POINTSAMPLE | TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT ) );
-        Assert( g_tex_RHGeometryDistance.IsValid() );
-        if ( g_tex_RHGeometryDistance.IsValid() )
+        RH_CREATE_CLIP_BYTE_TEX( g_tex_RHGeometry, DEFRTNAME_RH_GEOMETRY,
+            g_RHGeometryData, g_RHGeometryTextureRegenerator,
+            RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT, 0, TEXTUREFLAGS_POINTSAMPLE );
+        const bool initializeBlockerField = bInitial && !g_tex_GIBlockerField[clip].IsValid();
+        RH_CREATE_CLIP_BYTE_TEX( g_tex_GIBlockerField, DEFRTNAME_GI_BLOCKER_FIELD,
+            g_GIBlockerFieldData, g_GIBlockerFieldTextureRegenerator,
+            RH_SHADOW_ATLAS_WIDTH, RH_SHADOW_ATLAS_HEIGHT, 0, 0 );
+        if ( initializeBlockerField && g_tex_GIBlockerField[clip].IsValid() )
         {
-            g_tex_RHGeometryDistance->SetTextureRegenerator( &g_RHGeometryDistanceTextureRegenerator );
-            g_tex_RHGeometryDistance->Download();
+            const int blockerCellCount = RH_SHADOW_ATLAS_WIDTH * RH_SHADOW_ATLAS_HEIGHT;
+            for ( int blockerCell = 0; blockerCell < blockerCellCount; ++blockerCell )
+            {
+                unsigned char *pField = g_GIBlockerFieldData[clip] + blockerCell * 4;
+                pField[0] = 255; pField[1] = 0; pField[2] = 128; pField[3] = 128;
+            }
+            g_tex_GIBlockerField[clip]->Download();
         }
+        RH_CREATE_CLIP_BYTE_TEX( g_tex_RHSurfaceGuide, DEFRTNAME_RH_SURFACE_GUIDE,
+            g_RHSurfaceGuideData, g_RHSurfaceGuideTextureRegenerator,
+            RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT, 0, 0 );
+        RH_CREATE_CLIP_BYTE_TEX( g_tex_RHSurfaceCache, DEFRTNAME_RH_SURFACE_CACHE,
+            g_RHSurfaceCacheData, g_RHSurfaceCacheTextureRegenerator,
+            RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT, 0, TEXTUREFLAGS_POINTSAMPLE );
+        RH_CREATE_CLIP_BYTE_TEX( g_tex_RHOpenSky, DEFRTNAME_RH_OPEN_SKY,
+            g_RHOpenSkyData, g_RHOpenSkyTextureRegenerator,
+            RH_SKY_CACHE_ATLAS_WIDTH, RH_SKY_CACHE_ATLAS_HEIGHT, 255, 0 );
+#undef RH_CREATE_CLIP_BYTE_TEX
     }
 
-    if ( bInitial && !g_tex_RHShadowGeometry.IsValid() )
-    {
-        memset( g_RHShadowGeometryData, 0, sizeof( g_RHShadowGeometryData ) );
-        g_tex_RHShadowGeometry.Init( materials->CreateProceduralTexture(
-            DEFRTNAME_RH_SHADOW_GEOMETRY, TEXTURE_GROUP_OTHER,
-            RH_SHADOW_ATLAS_WIDTH, RH_SHADOW_ATLAS_HEIGHT, IMAGE_FORMAT_RGBA8888,
-            TEXTUREFLAGS_PROCEDURAL | TEXTUREFLAGS_NOMIP | TEXTUREFLAGS_POINTSAMPLE |
-            TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT ) );
-        if ( g_tex_RHShadowGeometry.IsValid() )
-        {
-            g_tex_RHShadowGeometry->SetTextureRegenerator( &g_RHShadowGeometryTextureRegenerator );
-            g_tex_RHShadowGeometry->Download();
-        }
-    }
-
-    if ( bInitial && !g_tex_RHShadowDistance.IsValid() )
-    {
-        memset( g_RHShadowDistanceData, 255, sizeof( g_RHShadowDistanceData ) );
-        g_tex_RHShadowDistance.Init( materials->CreateProceduralTexture(
-            DEFRTNAME_RH_SHADOW_DISTANCE, TEXTURE_GROUP_OTHER,
-            RH_SHADOW_ATLAS_WIDTH, RH_SHADOW_ATLAS_HEIGHT, IMAGE_FORMAT_RGBA8888,
-            TEXTUREFLAGS_PROCEDURAL | TEXTUREFLAGS_NOMIP |
-            TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT ) );
-        if ( g_tex_RHShadowDistance.IsValid() )
-        {
-            g_tex_RHShadowDistance->SetTextureRegenerator( &g_RHShadowDistanceTextureRegenerator );
-            g_tex_RHShadowDistance->Download();
-        }
-    }
-
-    if ( bInitial && !g_tex_RHSurfaceGuide.IsValid() )
-    {
-        memset( g_RHSurfaceGuideData, 0, sizeof( g_RHSurfaceGuideData ) );
-        g_tex_RHSurfaceGuide.Init( materials->CreateProceduralTexture(
-            DEFRTNAME_RH_SURFACE_GUIDE, TEXTURE_GROUP_OTHER,
-            RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT, IMAGE_FORMAT_RGBA8888,
-            TEXTUREFLAGS_PROCEDURAL | TEXTUREFLAGS_NOMIP |
-            TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT ) );
-        if ( g_tex_RHSurfaceGuide.IsValid() )
-        {
-            g_tex_RHSurfaceGuide->SetTextureRegenerator( &g_RHSurfaceGuideTextureRegenerator );
-            g_tex_RHSurfaceGuide->Download();
-        }
-    }
-
-    if ( bInitial && !g_tex_RHSurfaceCache.IsValid() )
-    {
-        memset( g_RHSurfaceCacheData, 0, sizeof( g_RHSurfaceCacheData ) );
-        g_tex_RHSurfaceCache.Init( materials->CreateProceduralTexture(
-            DEFRTNAME_RH_SURFACE_CACHE, TEXTURE_GROUP_OTHER,
-            RH_ATLAS_WIDTH, RH_ATLAS_HEIGHT, IMAGE_FORMAT_RGBA8888,
-            TEXTUREFLAGS_PROCEDURAL | TEXTUREFLAGS_NOMIP | TEXTUREFLAGS_POINTSAMPLE |
-            TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT ) );
-        if ( g_tex_RHSurfaceCache.IsValid() )
-        {
-            g_tex_RHSurfaceCache->SetTextureRegenerator( &g_RHSurfaceCacheTextureRegenerator );
-            g_tex_RHSurfaceCache->Download();
-        }
-    }
-
-    if ( bInitial && !g_tex_RHOpenSky.IsValid() )
-    {
-        memset( g_RHOpenSkyData, 255, sizeof( g_RHOpenSkyData ) );
-        g_tex_RHOpenSky.Init( materials->CreateProceduralTexture(
-            DEFRTNAME_RH_OPEN_SKY, TEXTURE_GROUP_OTHER,
-            RH_SKY_CACHE_ATLAS_WIDTH, RH_SKY_CACHE_ATLAS_HEIGHT, IMAGE_FORMAT_RGBA8888,
-            TEXTUREFLAGS_PROCEDURAL | TEXTUREFLAGS_NOMIP |
-            TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT ) );
-        if ( g_tex_RHOpenSky.IsValid() )
-        {
-            g_tex_RHOpenSky->SetTextureRegenerator( &g_RHOpenSkyTextureRegenerator );
-            g_tex_RHOpenSky->Download();
-        }
-    }
-
-#define RH_CREATE_BYTE_TEX( REF, NAME, DATA, REGEN, W, H, INITIAL ) \
-    if ( bInitial && !(REF).IsValid() ) \
-    { \
-        memset( DATA, INITIAL, sizeof( DATA ) ); \
-        (REF).Init( materials->CreateProceduralTexture( NAME, TEXTURE_GROUP_OTHER, W, H, IMAGE_FORMAT_RGBA8888, \
-            TEXTUREFLAGS_PROCEDURAL | TEXTUREFLAGS_NOMIP | TEXTUREFLAGS_POINTSAMPLE | TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT ) ); \
-        if ( (REF).IsValid() ) { (REF)->SetTextureRegenerator( &(REGEN) ); (REF)->Download(); } \
-    }
-    RH_CREATE_BYTE_TEX( g_tex_RHShadowGeometry32, DEFRTNAME_RH_SHADOW_GEOMETRY_32, g_RHShadowGeometry32Data, g_RHShadowGeometry32TextureRegenerator, RH_SHADOW_MIP1_ATLAS_WIDTH, RH_SHADOW_MIP1_ATLAS_HEIGHT, 0 );
-    RH_CREATE_BYTE_TEX( g_tex_RHShadowDistance32, DEFRTNAME_RH_SHADOW_DISTANCE_32, g_RHShadowDistance32Data, g_RHShadowDistance32TextureRegenerator, RH_SHADOW_MIP1_ATLAS_WIDTH, RH_SHADOW_MIP1_ATLAS_HEIGHT, 255 );
-    RH_CREATE_BYTE_TEX( g_tex_RHShadowGeometry16, DEFRTNAME_RH_SHADOW_GEOMETRY_16, g_RHShadowGeometry16Data, g_RHShadowGeometry16TextureRegenerator, RH_SHADOW_MIP2_ATLAS_WIDTH, RH_SHADOW_MIP2_ATLAS_HEIGHT, 0 );
-    RH_CREATE_BYTE_TEX( g_tex_RHShadowDistance16, DEFRTNAME_RH_SHADOW_DISTANCE_16, g_RHShadowDistance16Data, g_RHShadowDistance16TextureRegenerator, RH_SHADOW_MIP2_ATLAS_WIDTH, RH_SHADOW_MIP2_ATLAS_HEIGHT, 255 );
-#undef RH_CREATE_BYTE_TEX
 #endif
 	
 	if (!bInitial)
@@ -835,16 +671,25 @@ const ImageFormat fmt_gbuffer0 =
 	GetDeferredExt()->CommitShadowData_General( generalShadowData );
 
 #if DEFCFG_ENABLE_RADIOSITY
-	GetDeferredExt()->CommitTexture_ShadowRadOutput_Ortho( g_tex_ShadowRad_Albedo_Ortho[0],
-		g_tex_ShadowRad_Normal_Ortho[0] );
     GetDeferredExt()->CommitTexture_RadianceHintsRSM(
         g_tex_RHRSMFlux,
         g_tex_RHRSMNormal,
         bShadowUseColor ? g_tex_RHRSMColor : g_tex_RHRSMDepth );
-	// Preserve the existing extension ABI: expose the first RH set through its four legacy slots.
-    GetDeferredExt()->CommitTexture_Radiosity(
-        g_tex_RadianceHints[0][RH_CHANNEL_SH_R], g_tex_RadianceHints[0][RH_CHANNEL_SH_G],
-        g_tex_RadianceHints[0][RH_CHANNEL_SH_B], g_tex_RHVisibility );
+	for ( int clip = 0; clip < RH_CLIP_LEVEL_COUNT; ++clip )
+	{
+		for ( int setIndex = 0; setIndex < RH_SET_COUNT; ++setIndex )
+		{
+			GetDeferredExt()->CommitTexture_DaylightGIRadiance( clip, setIndex,
+				g_tex_RadianceHints[clip][setIndex][RH_CHANNEL_SH_R],
+				g_tex_RadianceHints[clip][setIndex][RH_CHANNEL_SH_G],
+				g_tex_RadianceHints[clip][setIndex][RH_CHANNEL_SH_B],
+				g_tex_RadianceHints[clip][setIndex][RH_CHANNEL_META] );
+		}
+		GetDeferredExt()->CommitTexture_DaylightGICache( clip,
+			g_tex_RHSurfaceAlbedo[clip], g_tex_RHSurfaceNormal[clip],
+			g_tex_RHGeometry[clip], g_tex_GIBlockerField[clip],
+			g_tex_RHSurfaceGuide[clip], g_tex_RHSurfaceCache[clip], g_tex_RHOpenSky[clip] );
+	}
 #endif
 }
 
@@ -961,183 +806,55 @@ ITexture *GetDefRT_RHRSMAlbedo()
     return g_tex_RHRSMAlbedo;
 }
 
-ITexture *GetDefRT_RHSurfaceAlbedo()
-{
-    Assert( g_tex_RHSurfaceAlbedo.IsValid() );
-    return g_tex_RHSurfaceAlbedo;
-}
-
-ITexture *GetDefRT_RHSurfaceNormal()
-{
-    Assert( g_tex_RHSurfaceNormal.IsValid() );
-    return g_tex_RHSurfaceNormal;
-}
-
-ITexture *GetDefRT_RHVisibility()
-{
-    Assert( g_tex_RHVisibility.IsValid() );
-    return g_tex_RHVisibility;
-}
-
-ITexture *GetDefRT_RHIndirectHalf()
+ITexture *GetDefRT_DaylightGIIndirectHalf()
 {
     Assert( g_tex_RHIndirectHalf.IsValid() );
     return g_tex_RHIndirectHalf;
 }
 
-
-ITexture *GetDefRT_RHGeometry()
+ITexture *GetDefRT_DaylightGIRadiance( int clip, int setIndex, int channelIndex )
 {
-    Assert( g_tex_RHGeometry.IsValid() );
-    return g_tex_RHGeometry;
+    Assert( clip >= 0 && clip < RH_CLIP_LEVEL_COUNT );
+    Assert( setIndex >= 0 && setIndex < RH_SET_COUNT );
+    Assert( channelIndex >= 0 && channelIndex < RH_CHANNEL_COUNT );
+    Assert( g_tex_RadianceHints[clip][setIndex][channelIndex].IsValid() );
+    return g_tex_RadianceHints[clip][setIndex][channelIndex];
 }
 
-ITexture *GetDefRT_RHGeometryDistance()
-{
-    Assert( g_tex_RHGeometryDistance.IsValid() );
-    return g_tex_RHGeometryDistance;
+#define RH_GI_CLIP_GETTER( FUNC, TEX ) \
+ITexture *FUNC( int clip ) \
+{ \
+    Assert( clip >= 0 && clip < RH_CLIP_LEVEL_COUNT ); \
+    Assert( (TEX)[clip].IsValid() ); \
+    return (TEX)[clip]; \
 }
+RH_GI_CLIP_GETTER( GetDefRT_DaylightGISurfaceAlbedo, g_tex_RHSurfaceAlbedo )
+RH_GI_CLIP_GETTER( GetDefRT_DaylightGISurfaceNormal, g_tex_RHSurfaceNormal )
+RH_GI_CLIP_GETTER( GetDefRT_DaylightGIGeometry, g_tex_RHGeometry )
+RH_GI_CLIP_GETTER( GetDefRT_DaylightGIBlockerField, g_tex_GIBlockerField )
+RH_GI_CLIP_GETTER( GetDefRT_DaylightGISurfaceGuide, g_tex_RHSurfaceGuide )
+RH_GI_CLIP_GETTER( GetDefRT_DaylightGISurfaceCache, g_tex_RHSurfaceCache )
+RH_GI_CLIP_GETTER( GetDefRT_DaylightGIOpenSky, g_tex_RHOpenSky )
+#undef RH_GI_CLIP_GETTER
 
-void UpdateDefRT_RHGeometry( const unsigned char *pData, int nDataSize )
-{
-    const int expectedSize = RH_ATLAS_WIDTH * RH_ATLAS_HEIGHT;
-    Assert( pData != NULL );
-    Assert( nDataSize == expectedSize );
-    if ( pData == NULL || nDataSize != expectedSize || !g_tex_RHGeometry.IsValid() )
-        return;
-
-    if ( memcmp( g_RHGeometryData, pData, expectedSize ) == 0 )
-        return;
-    memcpy( g_RHGeometryData, pData, expectedSize );
-    g_tex_RHGeometry->Download();
-}
-
-void UpdateDefRT_RHGeometryDistance( const unsigned char *pData, int nDataSize )
-{
-    const int expectedSize = RH_ATLAS_WIDTH * RH_ATLAS_HEIGHT;
-    Assert( pData != NULL );
-    Assert( nDataSize == expectedSize );
-    if ( pData == NULL || nDataSize != expectedSize || !g_tex_RHGeometryDistance.IsValid() )
-        return;
-
-    if ( memcmp( g_RHGeometryDistanceData, pData, expectedSize ) == 0 )
-        return;
-    memcpy( g_RHGeometryDistanceData, pData, expectedSize );
-    g_tex_RHGeometryDistance->Download();
-}
-
-ITexture *GetDefRT_RHShadowGeometry()
-{
-    Assert( g_tex_RHShadowGeometry.IsValid() );
-    return g_tex_RHShadowGeometry;
-}
-
-ITexture *GetDefRT_RHShadowDistance()
-{
-    Assert( g_tex_RHShadowDistance.IsValid() );
-    return g_tex_RHShadowDistance;
-}
-
-ITexture *GetDefRT_RHSurfaceGuide()
-{
-    Assert( g_tex_RHSurfaceGuide.IsValid() );
-    return g_tex_RHSurfaceGuide;
-}
-
-
-ITexture *GetDefRT_RHShadowHalf()
-{
-    Assert( g_tex_RHShadowHalf.IsValid() );
-    return g_tex_RHShadowHalf;
-}
-
-void UpdateDefRT_RHShadowGeometry( const unsigned char *pData, int nDataSize )
-{
-    const int expectedSize = RH_SHADOW_ATLAS_WIDTH * RH_SHADOW_ATLAS_HEIGHT;
-    Assert( pData != NULL ); Assert( nDataSize == expectedSize );
-    if ( pData == NULL || nDataSize != expectedSize || !g_tex_RHShadowGeometry.IsValid() ) return;
-    if ( memcmp( g_RHShadowGeometryData, pData, expectedSize ) == 0 )
-        return;
-    memcpy( g_RHShadowGeometryData, pData, expectedSize );
-    g_tex_RHShadowGeometry->Download();
-}
-
-void UpdateDefRT_RHShadowDistance( const unsigned char *pData, int nDataSize )
-{
-    const int expectedSize = RH_SHADOW_ATLAS_WIDTH * RH_SHADOW_ATLAS_HEIGHT;
-    Assert( pData != NULL ); Assert( nDataSize == expectedSize );
-    if ( pData == NULL || nDataSize != expectedSize || !g_tex_RHShadowDistance.IsValid() ) return;
-    if ( memcmp( g_RHShadowDistanceData, pData, expectedSize ) == 0 )
-        return;
-    memcpy( g_RHShadowDistanceData, pData, expectedSize );
-    g_tex_RHShadowDistance->Download();
-}
-
-void UpdateDefRT_RHSurfaceGuide( const unsigned char *pData, int nDataSize )
-{
-    const int expectedSize = RH_ATLAS_WIDTH * RH_ATLAS_HEIGHT * 4;
-    Assert( pData != NULL ); Assert( nDataSize == expectedSize );
-    if ( pData == NULL || nDataSize != expectedSize || !g_tex_RHSurfaceGuide.IsValid() ) return;
-    if ( memcmp( g_RHSurfaceGuideData, pData, expectedSize ) == 0 )
-        return;
-    memcpy( g_RHSurfaceGuideData, pData, expectedSize );
-    g_tex_RHSurfaceGuide->Download();
-}
-
-ITexture *GetDefRT_RHSurfaceCache() { Assert( g_tex_RHSurfaceCache.IsValid() ); return g_tex_RHSurfaceCache; }
-ITexture *GetDefRT_RHOpenSky() { Assert( g_tex_RHOpenSky.IsValid() ); return g_tex_RHOpenSky; }
-ITexture *GetDefRT_RHShadowGeometry32() { Assert( g_tex_RHShadowGeometry32.IsValid() ); return g_tex_RHShadowGeometry32; }
-ITexture *GetDefRT_RHShadowDistance32() { Assert( g_tex_RHShadowDistance32.IsValid() ); return g_tex_RHShadowDistance32; }
-ITexture *GetDefRT_RHShadowGeometry16() { Assert( g_tex_RHShadowGeometry16.IsValid() ); return g_tex_RHShadowGeometry16; }
-ITexture *GetDefRT_RHShadowDistance16() { Assert( g_tex_RHShadowDistance16.IsValid() ); return g_tex_RHShadowDistance16; }
-ITexture *GetDefRT_RHHierarchy( int level, int channel )
-{
-    Assert( level >= 0 && level < 3 ); Assert( channel >= 0 && channel < 3 );
-    Assert( g_tex_RHHierarchy[level][channel].IsValid() ); return g_tex_RHHierarchy[level][channel];
-}
-ITexture *GetDefRT_RHHierarchyEnergy( int level )
-{
-    Assert( level >= 0 && level < 2 );
-    Assert( g_tex_RHHierarchyEnergy[level].IsValid() );
-    return g_tex_RHHierarchyEnergy[level];
-}
-
-#define RH_UPDATE_BYTES( FUNC, TEX, DATA, SIZEEXPR ) \
-void FUNC( const unsigned char *pData, int nDataSize ) \
+#define RH_GI_CLIP_UPDATE( FUNC, TEX, DATA, SIZEEXPR ) \
+void FUNC( int clip, const unsigned char *pData, int nDataSize ) \
 { \
     const int expectedSize = (SIZEEXPR); \
+    Assert( clip >= 0 && clip < RH_CLIP_LEVEL_COUNT ); \
     Assert( pData != NULL ); Assert( nDataSize == expectedSize ); \
-    if ( pData == NULL || nDataSize != expectedSize || !(TEX).IsValid() ) return; \
-    if ( memcmp( DATA, pData, expectedSize ) == 0 ) return; \
-    memcpy( DATA, pData, expectedSize ); (TEX)->Download(); \
+    if ( clip < 0 || clip >= RH_CLIP_LEVEL_COUNT || pData == NULL || \
+         nDataSize != expectedSize || !(TEX)[clip].IsValid() ) return; \
+    if ( memcmp( (DATA)[clip], pData, expectedSize ) == 0 ) return; \
+    memcpy( (DATA)[clip], pData, expectedSize ); \
+    (TEX)[clip]->Download(); \
 }
-RH_UPDATE_BYTES( UpdateDefRT_RHSurfaceCache, g_tex_RHSurfaceCache, g_RHSurfaceCacheData, RH_ATLAS_WIDTH * RH_ATLAS_HEIGHT * 4 )
-RH_UPDATE_BYTES( UpdateDefRT_RHOpenSky, g_tex_RHOpenSky, g_RHOpenSkyData, RH_SKY_CACHE_ATLAS_WIDTH * RH_SKY_CACHE_ATLAS_HEIGHT )
-RH_UPDATE_BYTES( UpdateDefRT_RHShadowGeometry32, g_tex_RHShadowGeometry32, g_RHShadowGeometry32Data, RH_SHADOW_MIP1_ATLAS_WIDTH * RH_SHADOW_MIP1_ATLAS_HEIGHT )
-RH_UPDATE_BYTES( UpdateDefRT_RHShadowDistance32, g_tex_RHShadowDistance32, g_RHShadowDistance32Data, RH_SHADOW_MIP1_ATLAS_WIDTH * RH_SHADOW_MIP1_ATLAS_HEIGHT )
-RH_UPDATE_BYTES( UpdateDefRT_RHShadowGeometry16, g_tex_RHShadowGeometry16, g_RHShadowGeometry16Data, RH_SHADOW_MIP2_ATLAS_WIDTH * RH_SHADOW_MIP2_ATLAS_HEIGHT )
-RH_UPDATE_BYTES( UpdateDefRT_RHShadowDistance16, g_tex_RHShadowDistance16, g_RHShadowDistance16Data, RH_SHADOW_MIP2_ATLAS_WIDTH * RH_SHADOW_MIP2_ATLAS_HEIGHT )
-#undef RH_UPDATE_BYTES
-
-ITexture *GetDefRT_RadianceHints( int setIndex, int channelIndex )
-{
-	Assert( setIndex >= 0 && setIndex < RH_SET_COUNT );
-	Assert( channelIndex >= 0 && channelIndex < RH_CHANNEL_COUNT );
-	Assert( g_tex_RadianceHints[ setIndex ][ channelIndex ].IsValid() );
-	return g_tex_RadianceHints[ setIndex ][ channelIndex ];
-}
-
-ITexture *GetDefRT_RadiosityBuffer( int index )
-{
-	Assert( index >= 0 && index < 2 );
-	return GetDefRT_RadianceHints( 0, index == 0 ? RH_CHANNEL_SH_R : RH_CHANNEL_SH_G );
-}
-
-ITexture *GetDefRT_RadiosityNormal( int index )
-{
-	Assert( index >= 0 && index < 2 );
-	return index == 0 ? GetDefRT_RadianceHints( 0, RH_CHANNEL_SH_B ) : GetDefRT_RHVisibility();
-}
+RH_GI_CLIP_UPDATE( UpdateDefRT_DaylightGIGeometry, g_tex_RHGeometry, g_RHGeometryData, RH_ATLAS_WIDTH * RH_ATLAS_HEIGHT )
+RH_GI_CLIP_UPDATE( UpdateDefRT_DaylightGIBlockerField, g_tex_GIBlockerField, g_GIBlockerFieldData, RH_SHADOW_ATLAS_WIDTH * RH_SHADOW_ATLAS_HEIGHT * 4 )
+RH_GI_CLIP_UPDATE( UpdateDefRT_DaylightGISurfaceGuide, g_tex_RHSurfaceGuide, g_RHSurfaceGuideData, RH_ATLAS_WIDTH * RH_ATLAS_HEIGHT * 4 )
+RH_GI_CLIP_UPDATE( UpdateDefRT_DaylightGISurfaceCache, g_tex_RHSurfaceCache, g_RHSurfaceCacheData, RH_ATLAS_WIDTH * RH_ATLAS_HEIGHT * 4 )
+RH_GI_CLIP_UPDATE( UpdateDefRT_DaylightGIOpenSky, g_tex_RHOpenSky, g_RHOpenSkyData, RH_SKY_CACHE_ATLAS_WIDTH * RH_SKY_CACHE_ATLAS_HEIGHT )
+#undef RH_GI_CLIP_UPDATE
 
 ITexture *GetShadowColorRT_Ortho( int index )
 {
@@ -1182,17 +899,4 @@ ITexture *GetProjectableVguiRT( int index )
 	Assert( index >= 0 && index < NUM_PROJECTABLE_VGUI );
 	Assert( g_tex_ProjectableVGUI[ index ].IsValid() );
 	return g_tex_ProjectableVGUI[ index ];
-}
-
-ITexture *GetRadiosityAlbedoRT_Ortho( int index )
-{
-	Assert( index >= 0 && index < MAX_SHADOW_ORTHO );
-	Assert( g_tex_ShadowRad_Albedo_Ortho[ index ].IsValid() );
-	return g_tex_ShadowRad_Albedo_Ortho[ index ];
-}
-ITexture *GetRadiosityNormalRT_Ortho( int index )
-{
-	Assert( index >= 0 && index < MAX_SHADOW_ORTHO );
-	Assert( g_tex_ShadowRad_Normal_Ortho[ index ].IsValid() );
-	return g_tex_ShadowRad_Normal_Ortho[ index ];
 }

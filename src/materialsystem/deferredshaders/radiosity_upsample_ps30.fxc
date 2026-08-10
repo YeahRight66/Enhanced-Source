@@ -1,4 +1,4 @@
-// RH9 High: half-resolution complete GI -> full-resolution additive lighting.
+// Half-resolution complete GI -> full-resolution additive lighting.
 // SDF shadows are already evaluated at the same half resolution as the GI.
 
 #include "common_ps_fxc.h"
