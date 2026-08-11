@@ -1,11 +1,11 @@
 // STATIC:  "DEPTHBLEND"     "0..1"
-// DYNAMIC: "PIXELFOGTYPE"   "0..1"
 // DYNAMIC: "GI_ENABLED"     "0..1"
 // DYNAMIC: "SECOND_BOUNCE"  "0..1"
 // DYNAMIC: "HAS_SHADOW"     "0..1"
 // SKIP: !$GI_ENABLED && $SECOND_BOUNCE
 
 #include "common_fog_ps_fxc.h"
+#include "common_ps_fxc.h"
 #include "common_deferred_fxc.h"
 #include "radiance_hints_common_fxc.h"
 
