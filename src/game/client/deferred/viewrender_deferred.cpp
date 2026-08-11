@@ -1339,7 +1339,7 @@ void CDeferredViewRender::StampRadiosityDynamicModels( int clip, const Vector &o
         const model_t *pModel = pRenderable->GetModel();
         if ( pModel == NULL )
             continue;
-        const modtype_t modelType = modelinfo->GetModelType( pModel );
+        const int modelType = modelinfo->GetModelType( pModel );
         if ( modelType != mod_studio && modelType != mod_brush )
             continue;
 
@@ -1547,7 +1547,7 @@ void CDeferredViewRender::StampRadiosityShadowDynamicModels( int clip, const Vec
         const model_t *pModel = pRenderable->GetModel();
         if ( pModel == NULL )
             continue;
-        const modtype_t modelType = modelinfo->GetModelType( pModel );
+        const int modelType = modelinfo->GetModelType( pModel );
         if ( modelType != mod_studio && modelType != mod_brush )
             continue;
 
