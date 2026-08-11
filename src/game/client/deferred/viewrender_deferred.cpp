@@ -2340,10 +2340,18 @@ void CDeferredViewRender::EndRadiosity( const CViewSetup &view )
 		pRenderContext->PushRenderTargetAndViewport( pHalf, NULL, 0, 0, halfWidth, halfHeight );
 		const DEF_MATERIALS receiverMaterial = clip == RH_CLIP_NEAR
 			? DEF_MAT_LIGHT_RADIOSITY_BLEND : DEF_MAT_LIGHT_RADIOSITY_BLEND_FAR;
-		DrawLightPassFullscreen( GetDeferredManager()->GetDeferredMaterial( receiverMaterial ),
-			halfWidth, halfHeight );
+		// Four compact additive permutations reconstruct the same tetrahedral
+		// receiver while remaining reliable with Source's d3dx9_33 compiler.
+		for ( int probe = 0; probe < 4; ++probe )
+		{
+			pRenderContext->SetIntRenderingParameter(
+				INT_RENDERPARM_DEFERRED_RADIOSITY_CASCADE, probe );
+			DrawLightPassFullscreen( GetDeferredManager()->GetDeferredMaterial( receiverMaterial ),
+				halfWidth, halfHeight );
+		}
 		pRenderContext->PopRenderTargetAndViewport();
 	}
+	pRenderContext->SetIntRenderingParameter( INT_RENDERPARM_DEFERRED_RADIOSITY_CASCADE, 0 );
 
 	// The caller's _rt_LightAccum target is restored by the pop above.
 	DrawLightPassFullscreen( GetDeferredManager()->GetDeferredMaterial( DEF_MAT_LIGHT_RADIOSITY_UPSAMPLE ),

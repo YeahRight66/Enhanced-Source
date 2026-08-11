@@ -1425,6 +1425,14 @@ jobs:
               throw "SetSECOND_BOUNCE is missing from radiosity_blend_ps30.inc"
           }
 
+          if ($blend -notmatch '\bSetPROBE_INDEX\s*\(') {
+              throw "SetPROBE_INDEX is missing from radiosity_blend_ps30.inc"
+          }
+
+          if ($blend -notmatch '\bSetDEBUG_MODE\s*\(') {
+              throw "SetDEBUG_MODE is missing from radiosity_blend_ps30.inc"
+          }
+
           $global = Get-Content `
               (Join-Path $root "radiosity_gen_global_ps30.inc") `
               -Raw

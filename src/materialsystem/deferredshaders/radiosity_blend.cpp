@@ -6,7 +6,7 @@
 
 BEGIN_VS_SHADER( RADIOSITY_BLEND, "Two-level visibility-aware tetrahedral daylight GI receiver" )
     BEGIN_SHADER_PARAMS
-        SHADER_PARAM( CLIPLEVEL, SHADER_PARAM_TYPE_INTEGER, "0", "0=near overwrite/depth, 1=far additive RGB" )
+        SHADER_PARAM( CLIPLEVEL, SHADER_PARAM_TYPE_INTEGER, "0", "0=near clip, 1=far clip" )
     END_SHADER_PARAMS
 
     SHADER_INIT_PARAMS()
@@ -18,14 +18,12 @@ BEGIN_VS_SHADER( RADIOSITY_BLEND, "Two-level visibility-aware tetrahedral daylig
 
     SHADER_DRAW
     {
-        const int nClipLevel = clamp( params[ CLIPLEVEL ]->GetIntValue(), 0, 1 );
         SHADOW_STATE
         {
             pShaderShadow->SetDefaultState();
             pShaderShadow->EnableDepthTest( false ); pShaderShadow->EnableDepthWrites( false );
-            pShaderShadow->EnableAlphaWrites( nClipLevel == 0 );
-            if ( nClipLevel == 1 )
-                EnableAlphaBlending( SHADER_BLEND_ONE, SHADER_BLEND_ONE );
+            pShaderShadow->EnableAlphaWrites( true );
+            EnableAlphaBlending( SHADER_BLEND_ONE, SHADER_BLEND_ONE );
             pShaderShadow->EnableTexture( SHADER_SAMPLER0, true );
             pShaderShadow->EnableTexture( SHADER_SAMPLER1, true );
             pShaderShadow->EnableTexture( SHADER_SAMPLER2, true );
@@ -52,9 +50,18 @@ BEGIN_VS_SHADER( RADIOSITY_BLEND, "Two-level visibility-aware tetrahedral daylig
             DECLARE_DYNAMIC_VERTEX_SHADER( defconstruct_vs30 ); SET_DYNAMIC_VERTEX_SHADER( defconstruct_vs30 );
             ConVarRef bounceIntensity( "deferred_gi_bounce_intensity" );
             ConVarRef giQuality( "deferred_gi_quality" );
+            ConVarRef debugMode( "deferred_gi_debug" );
+            ConVarRef legacyDebugMode( "deferred_radiosity_debug" );
+            const int receiverDebugMode = debugMode.GetInt() > 0
+                ? clamp( debugMode.GetInt(), 0, 10 )
+                : ( legacyDebugMode.GetBool() ? 1 : 0 );
+            const bool bSecondBounce = bounceIntensity.GetFloat() > 0.0f && giQuality.GetInt() > 0 &&
+                ( receiverDebugMode == 0 || receiverDebugMode == 2 );
             DECLARE_DYNAMIC_PIXEL_SHADER( radiosity_blend_ps30 );
-            SET_DYNAMIC_PIXEL_SHADER_COMBO( SECOND_BOUNCE,
-                bounceIntensity.GetFloat() > 0.0f && giQuality.GetInt() > 0 ? 1 : 0 );
+            SET_DYNAMIC_PIXEL_SHADER_COMBO( SECOND_BOUNCE, bSecondBounce ? 1 : 0 );
+            SET_DYNAMIC_PIXEL_SHADER_COMBO( PROBE_INDEX, clamp(
+                pShaderAPI->GetIntRenderingParameter( INT_RENDERPARM_DEFERRED_RADIOSITY_CASCADE ), 0, 3 ) );
+            SET_DYNAMIC_PIXEL_SHADER_COMBO( DEBUG_MODE, receiverDebugMode );
             SET_DYNAMIC_PIXEL_SHADER( radiosity_blend_ps30 );
 
             const daylightGIData_t &giData = GetDeferredExt()->GetDaylightGIData();
@@ -75,8 +82,6 @@ BEGIN_VS_SHADER( RADIOSITY_BLEND, "Two-level visibility-aware tetrahedral daylig
             CommitBaseDeferredConstants_Origin( pShaderAPI, 0 );
 
             ConVarRef intensity( "deferred_gi_intensity" );
-            ConVarRef debugMode( "deferred_gi_debug" );
-            ConVarRef legacyDebugMode( "deferred_radiosity_debug" );
 
             const daylightGIClipDesc_t &clip = giData.clips[ clamp( giData.iActiveClip, 0, DAYLIGHT_GI_CLIP_COUNT - 1 ) ];
             const Vector &origin = clip.vecRadianceOrigin;
@@ -101,9 +106,6 @@ BEGIN_VS_SHADER( RADIOSITY_BLEND, "Two-level visibility-aware tetrahedral daylig
                 0.0f
             };
             pShaderAPI->SetPixelShaderConstant( 9, c9 );
-            const int receiverDebugMode = debugMode.GetInt() > 0
-                ? clamp( debugMode.GetInt(), 0, 10 )
-                : ( legacyDebugMode.GetBool() ? 1 : 0 );
             float c10[4] = { 0.85f,
                 0.55f,
                 (float)receiverDebugMode,

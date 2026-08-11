@@ -20,13 +20,15 @@ float3 DecodeRHNormal( float2 uv )
 
 #define RH_ACCUM_GI( UV, SW ) \
 { \
-    float2 q = saturate( UV ); float4 gi = tex2Dlod( sBase, float4( q, 0, 0 ) ); \
-    float valid = step( 0.1f, gi.a ) * step( gi.a, DEPTH_RECONSTRUCTION_LIMIT ); \
-    float dd = abs( gi.a - centerDepth ); float dw = exp2( -dd * g_Filter.x ); \
+    float2 q = saturate( UV ); float4 giAccum = tex2Dlod( sBase, float4( q, 0, 0 ) ); \
+    float sampleDepth = tex2Dlod( sDepth, float4( q, 0, 0 ) ).x; \
+    float valid = step( 1.0e-5f, giAccum.a ) * step( 0.1f, sampleDepth ) * step( sampleDepth, DEPTH_RECONSTRUCTION_LIMIT ); \
+    float3 gi = giAccum.rgb / max( giAccum.a, 1.0e-5f ); \
+    float dd = abs( sampleDepth - centerDepth ); float dw = exp2( -dd * g_Filter.x ); \
     float nw = pow( saturate( dot( centerNormal, DecodeRHNormal( q ) ) ), g_Filter.y ); \
-    float w = SW * dw * nw * valid; sum += gi.rgb * w; weight += w; \
+    float w = SW * dw * nw * valid; sum += gi * w; weight += w; \
     float err = dd + ( 1.0f - nw ) * max( g_Filter.z, 0.0f ) + ( 1.0f - valid ) * 65504.0f; \
-    float replace = step( err, fallbackError ); fallbackColour = lerp( fallbackColour, gi.rgb, replace ); fallbackError = lerp( fallbackError, err, replace ); \
+    float replace = step( err, fallbackError ); fallbackColour = lerp( fallbackColour, gi, replace ); fallbackError = lerp( fallbackError, err, replace ); \
 }
 
 float4 main( const PS_INPUT In ) : COLOR0
