@@ -78,100 +78,6 @@ float GI_ClipWeight( float3 worldPos, float3 activeUVW )
     return activeInside * farOuterFade * ( 1.0f - nearWeight );
 }
 
-float GI_ProbeVisibilitySample( float3 traceUVW )
-{
-    float4 field = RH_SampleShadowAtlas( sBlockerField, traceUVW );
-    float proximity = saturate( 1.0f - RH_BlockerDistanceCells( field ) / 0.55f );
-    float opacity = RH_BlockerOpacity( field );
-    float bias = saturate( g_RHSDFControl.y );
-    float hit = saturate( ( opacity * proximity - bias ) / max( 1.0f - bias, 0.05f ) );
-    return lerp( 1.0f, max( 1.0f - hit, saturate( g_RHShadow.w ) ),
-        RH_InsideVolume( traceUVW ) );
-}
-
-float GI_ProbeVisibility( float3 receiverBlockerUVW, float3 probeBlockerUVW )
-{
-    float3 segmentCells = ( probeBlockerUVW - receiverBlockerUVW ) * RH_SHADOW_VOLUME_SIZE_F;
-    float segmentLength = length( segmentCells );
-    if ( segmentLength < 0.20f )
-        return 1.0f;
-
-    float visibility = GI_ProbeVisibilitySample(
-        lerp( receiverBlockerUVW, probeBlockerUVW, 0.25f ) );
-    visibility *= GI_ProbeVisibilitySample(
-        lerp( receiverBlockerUVW, probeBlockerUVW, 0.50f ) );
-    visibility *= GI_ProbeVisibilitySample(
-        lerp( receiverBlockerUVW, probeBlockerUVW, 0.75f ) );
-
-    float visibilityStrength = saturate( g_RHSDFControl.x ) *
-        saturate( g_RHShadow.x ) * saturate( g_RHReceiver.x );
-    return lerp( 1.0f, visibility, visibilityStrength );
-}
-
-// Keep the complete probe gather in one helper instead of expanding a large
-// preprocessor macro four times. The legacy d3dx9_33 compiler used by Source's
-// shadercompile wrapper can otherwise fail internally before reporting a useful
-// diagnostic, even though newer standalone FXC versions accept the shader.
-void GI_AccumulateProbe(
-    float3 probeCell,
-    float baryWeight,
-    float4 diffuseBasis,
-    float3 worldPos,
-    float3 geometricNormal,
-    float3 receiverBlockerUVW,
-    float radianceCell,
-    inout float3 firstSum,
-    inout float3 secondSum,
-    inout float weightSum,
-    inout float confidenceSum,
-    inout float injectionVisibilitySum,
-    inout float rejectionSum,
-    inout float3 shDirectionSum,
-    inout float shDCSum )
-{
-    float3 nominalProbeUVW = ( probeCell + 0.5f ) / RH_VOLUME_SIZE_F;
-    float4 probeField = RH_SampleShadowAtlas( sBlockerField, nominalProbeUVW + g_RHShadowUVWOffset );
-    float blockerDistanceRadianceCells = RH_BlockerDistanceCells( probeField ) *
-        ( RH_VOLUME_SIZE_F / RH_SHADOW_VOLUME_SIZE_F );
-    float relocationCells = min( clamp( g_RHReceiver.w, 0.0f, 0.45f ),
-        max( g_RHReceiver.y - blockerDistanceRadianceCells, 0.0f ) );
-    float3 relocatedProbeUVW = nominalProbeUVW + RH_DecodeBlockerNormal( probeField.ba ) *
-        ( relocationCells / RH_VOLUME_SIZE_F );
-    float3 probeWorld = g_vecRHOrigin + relocatedProbeUVW * g_RHSettings.x;
-    float3 receiverToProbe = probeWorld - worldPos;
-    float frontFacing = smoothstep( -0.35f * radianceCell, 0.15f * radianceCell,
-        dot( receiverToProbe, geometricNormal ) );
-    float probeVisibility = GI_ProbeVisibility( receiverBlockerUVW,
-        relocatedProbeUVW + g_RHShadowUVWOffset );
-    float4 probeMeta = RH_SampleAtlasCell( sMeta, probeCell );
-    float probeValid = step( 1.0e-5f, probeMeta.z );
-    float probeConfidence = probeValid * max( RH_MetaConfidence( probeMeta ), saturate( g_RHQuality.w ) );
-    float positiveBaryWeight = max( baryWeight, 0.0f );
-    float interpolationWeight = positiveBaryWeight * probeConfidence;
-    float probeWeight = interpolationWeight * probeVisibility * frontFacing;
-    float4 firstR = RH_LimitRadianceSH( RH_SampleAtlasCell( sFirstR, probeCell ) );
-    float4 firstG = RH_LimitRadianceSH( RH_SampleAtlasCell( sFirstG, probeCell ) );
-    float4 firstB = RH_LimitRadianceSH( RH_SampleAtlasCell( sFirstB, probeCell ) );
-    firstSum += max( float3( dot( firstR, diffuseBasis ), dot( firstG, diffuseBasis ),
-        dot( firstB, diffuseBasis ) ), 0.0f ) * probeWeight;
-    shDirectionSum += ( firstR.xyz * 0.2126f + firstG.xyz * 0.7152f + firstB.xyz * 0.0722f ) * probeWeight;
-    shDCSum += max( firstR.w * 0.2126f + firstG.w * 0.7152f + firstB.w * 0.0722f, 0.0f ) * probeWeight;
-#if SECOND_BOUNCE
-    float4 secondR = RH_LimitRadianceSH( RH_SampleAtlasCell( sSecondR, probeCell ) );
-    float4 secondG = RH_LimitRadianceSH( RH_SampleAtlasCell( sSecondG, probeCell ) );
-    float4 secondB = RH_LimitRadianceSH( RH_SampleAtlasCell( sSecondB, probeCell ) );
-    secondSum += max( float3( dot( secondR, diffuseBasis ), dot( secondG, diffuseBasis ),
-        dot( secondB, diffuseBasis ) ), 0.0f ) * probeWeight;
-#endif
-    // Visibility attenuates radiance but is deliberately excluded from the
-    // interpolation denominator. Renormalising by visibility would cancel an
-    // indirect shadow whenever all four probes saw similar occlusion.
-    weightSum += interpolationWeight;
-    confidenceSum += positiveBaryWeight * probeConfidence;
-    injectionVisibilitySum += positiveBaryWeight * saturate( probeMeta.w );
-    rejectionSum += positiveBaryWeight * ( 1.0f - probeVisibility * frontFacing );
-}
-
 float4 main( const PS_INPUT In ) : COLOR0
 {
     float depth = tex2D( sDepth, In.vTexCoord ).x;
@@ -194,10 +100,13 @@ float4 main( const PS_INPUT In ) : COLOR0
     float3 fraction = saturate( gridPosition - baseCell );
 
     float3 cell0 = baseCell;
-    float3 cell1;
-    float3 cell2;
+    // Initialise every component before the nested tetrahedron selection.
+    // d3dx9_33 does not reliably prove that the branches below are exhaustive
+    // and can otherwise fail internally while validating temporary registers.
+    float3 cell1 = baseCell;
+    float3 cell2 = baseCell;
     float3 cell3 = baseCell + 1.0f;
-    float4 barycentric;
+    float4 barycentric = float4( 1.0f, 0.0f, 0.0f, 0.0f );
 
     // Six tetrahedra partition the voxel cube without introducing the diagonal
     // over-blur of trilinear eight-probe reconstruction.
@@ -266,10 +175,10 @@ float4 main( const PS_INPUT In ) : COLOR0
     // expanded gathers as one ps_3_0 program. Each dynamic permutation handles
     // one tetrahedral corner and the render loop combines the four numerators
     // and confidence denominators additively in the half-resolution target.
-    float3 probeCell;
-    float probeBaryWeight;
+    float3 probeCell = cell0;
+    float probeBaryWeight = barycentric.x;
 #if PROBE_INDEX == 0
-    probeCell = cell0; probeBaryWeight = barycentric.x;
+    // Probe zero is already the explicit default above.
 #elif PROBE_INDEX == 1
     probeCell = cell1; probeBaryWeight = barycentric.y;
 #elif PROBE_INDEX == 2
@@ -277,9 +186,90 @@ float4 main( const PS_INPUT In ) : COLOR0
 #else
     probeCell = cell3; probeBaryWeight = barycentric.w;
 #endif
-    GI_AccumulateProbe( probeCell, probeBaryWeight, diffuseBasis, worldPos, geometricNormal,
-        receiverBlockerUVW, radianceCell, firstSum, secondSum, weightSum,
-        confidenceSum, injectionVisibilitySum, rejectionSum, shDirectionSum, shDCSum );
+    // Keep the gather directly in main. There is only one probe per permutation,
+    // and avoiding a wide function call with eight inout accumulators prevents a
+    // d3dx9_33 optimiser hang inside Source's legacy shadercompile wrapper.
+    float3 nominalProbeUVW = ( probeCell + 0.5f ) / RH_VOLUME_SIZE_F;
+    float4 probeField = RH_SampleShadowAtlas( sBlockerField,
+        nominalProbeUVW + g_RHShadowUVWOffset );
+    float blockerDistanceRadianceCells = RH_BlockerDistanceCells( probeField ) *
+        ( RH_VOLUME_SIZE_F / RH_SHADOW_VOLUME_SIZE_F );
+    float relocationCells = min( clamp( g_RHReceiver.w, 0.0f, 0.45f ),
+        max( g_RHReceiver.y - blockerDistanceRadianceCells, 0.0f ) );
+    float3 relocatedProbeUVW = nominalProbeUVW + RH_DecodeBlockerNormal( probeField.ba ) *
+        ( relocationCells / RH_VOLUME_SIZE_F );
+    float3 probeWorld = g_vecRHOrigin + relocatedProbeUVW * g_RHSettings.x;
+    float3 receiverToProbe = probeWorld - worldPos;
+    float frontFacing = smoothstep( -0.35f * radianceCell, 0.15f * radianceCell,
+        dot( receiverToProbe, geometricNormal ) );
+    // Keep the complete segment trace in main. Nested visibility helpers make
+    // d3dx9_33's optimiser fail internally even though the resulting ps_3_0
+    // bytecode is valid. Direct expansion preserves all three SDF samples.
+    float3 probeBlockerUVW = relocatedProbeUVW + g_RHShadowUVWOffset;
+    float segmentLength = length( ( probeBlockerUVW - receiverBlockerUVW ) *
+        RH_SHADOW_VOLUME_SIZE_F );
+    float traceEnable = step( 0.20f, segmentLength );
+    float traceBias = saturate( g_RHSDFControl.y );
+    float traceMinimum = saturate( g_RHShadow.w );
+
+    float3 traceUVW0 = lerp( receiverBlockerUVW, probeBlockerUVW, 0.25f );
+    float4 traceField0 = RH_SampleShadowAtlas( sBlockerField, traceUVW0 );
+    float traceProximity0 = saturate( 1.0f - RH_BlockerDistanceCells( traceField0 ) / 0.55f );
+    float traceHit0 = saturate( ( RH_BlockerOpacity( traceField0 ) * traceProximity0 - traceBias ) /
+        max( 1.0f - traceBias, 0.05f ) );
+    float traceVisibility0 = lerp( 1.0f, max( 1.0f - traceHit0, traceMinimum ),
+        RH_InsideVolume( traceUVW0 ) );
+
+    float3 traceUVW1 = lerp( receiverBlockerUVW, probeBlockerUVW, 0.50f );
+    float4 traceField1 = RH_SampleShadowAtlas( sBlockerField, traceUVW1 );
+    float traceProximity1 = saturate( 1.0f - RH_BlockerDistanceCells( traceField1 ) / 0.55f );
+    float traceHit1 = saturate( ( RH_BlockerOpacity( traceField1 ) * traceProximity1 - traceBias ) /
+        max( 1.0f - traceBias, 0.05f ) );
+    float traceVisibility1 = lerp( 1.0f, max( 1.0f - traceHit1, traceMinimum ),
+        RH_InsideVolume( traceUVW1 ) );
+
+    float3 traceUVW2 = lerp( receiverBlockerUVW, probeBlockerUVW, 0.75f );
+    float4 traceField2 = RH_SampleShadowAtlas( sBlockerField, traceUVW2 );
+    float traceProximity2 = saturate( 1.0f - RH_BlockerDistanceCells( traceField2 ) / 0.55f );
+    float traceHit2 = saturate( ( RH_BlockerOpacity( traceField2 ) * traceProximity2 - traceBias ) /
+        max( 1.0f - traceBias, 0.05f ) );
+    float traceVisibility2 = lerp( 1.0f, max( 1.0f - traceHit2, traceMinimum ),
+        RH_InsideVolume( traceUVW2 ) );
+
+    float tracedVisibility = traceVisibility0 * traceVisibility1 * traceVisibility2;
+    float visibilityStrength = saturate( g_RHSDFControl.x ) * saturate( g_RHShadow.x ) *
+        saturate( g_RHReceiver.x ) * traceEnable;
+    float probeVisibility = lerp( 1.0f, tracedVisibility, visibilityStrength );
+    float4 probeMeta = RH_SampleAtlasCell( sMeta, probeCell );
+    float probeValid = step( 1.0e-5f, probeMeta.z );
+    float probeConfidence = probeValid * max( RH_MetaConfidence( probeMeta ),
+        saturate( g_RHQuality.w ) );
+    float positiveBaryWeight = max( probeBaryWeight, 0.0f );
+    float interpolationWeight = positiveBaryWeight * probeConfidence;
+    float probeWeight = interpolationWeight * probeVisibility * frontFacing;
+    float4 firstR = RH_LimitRadianceSH( RH_SampleAtlasCell( sFirstR, probeCell ) );
+    float4 firstG = RH_LimitRadianceSH( RH_SampleAtlasCell( sFirstG, probeCell ) );
+    float4 firstB = RH_LimitRadianceSH( RH_SampleAtlasCell( sFirstB, probeCell ) );
+    firstSum = max( float3( dot( firstR, diffuseBasis ), dot( firstG, diffuseBasis ),
+        dot( firstB, diffuseBasis ) ), 0.0f ) * probeWeight;
+    shDirectionSum = ( firstR.xyz * 0.2126f + firstG.xyz * 0.7152f +
+        firstB.xyz * 0.0722f ) * probeWeight;
+    shDCSum = max( firstR.w * 0.2126f + firstG.w * 0.7152f +
+        firstB.w * 0.0722f, 0.0f ) * probeWeight;
+#if SECOND_BOUNCE
+    float4 secondR = RH_LimitRadianceSH( RH_SampleAtlasCell( sSecondR, probeCell ) );
+    float4 secondG = RH_LimitRadianceSH( RH_SampleAtlasCell( sSecondG, probeCell ) );
+    float4 secondB = RH_LimitRadianceSH( RH_SampleAtlasCell( sSecondB, probeCell ) );
+    secondSum = max( float3( dot( secondR, diffuseBasis ), dot( secondG, diffuseBasis ),
+        dot( secondB, diffuseBasis ) ), 0.0f ) * probeWeight;
+#endif
+    // Visibility attenuates radiance but is deliberately excluded from the
+    // interpolation denominator. Renormalising by visibility would cancel an
+    // indirect shadow whenever all four probes saw similar occlusion.
+    weightSum = interpolationWeight;
+    confidenceSum = positiveBaryWeight * probeConfidence;
+    injectionVisibilitySum = positiveBaryWeight * saturate( probeMeta.w );
+    rejectionSum = positiveBaryWeight * ( 1.0f - probeVisibility * frontFacing );
 
     float3 indirectNumerator = firstSum;
 #if SECOND_BOUNCE
