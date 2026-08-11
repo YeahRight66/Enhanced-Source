@@ -1,0 +1,39 @@
+#include "common_vs_fxc.h"
+
+const float4 g_vViewportMad : register( SHADER_SPECIFIC_CONST_0 );
+
+struct VS_INPUT
+{
+    float4 vPos              : POSITION;
+    float2 vTexCoord         : TEXCOORD0;
+    float4 vWorldCenterAngle : TEXCOORD1;
+    float4 vColor            : COLOR0;
+};
+
+struct VS_OUTPUT
+{
+    float4 vProjPos          : POSITION;
+    float2 vTexCoord         : TEXCOORD0;
+    float4 vWorldCenterAngle : TEXCOORD1;
+    float4 vScreenPos        : TEXCOORD2;
+    float4 vColor            : COLOR0;
+};
+
+VS_OUTPUT main( const VS_INPUT In )
+{
+    VS_OUTPUT Out = (VS_OUTPUT)0;
+    Out.vProjPos = mul( In.vPos, cModelViewProj );
+
+    Out.vScreenPos.x = Out.vProjPos.x;
+    Out.vScreenPos.y = -Out.vProjPos.y;
+    Out.vScreenPos.xy = ( Out.vScreenPos.xy + Out.vProjPos.w ) * 0.5f;
+    Out.vScreenPos.zw = Out.vProjPos.zw;
+    Out.vScreenPos.xy =
+        ( ( Out.vScreenPos.xy / Out.vProjPos.w ) * g_vViewportMad.xy +
+          g_vViewportMad.zw ) * Out.vProjPos.w;
+
+    Out.vTexCoord = In.vTexCoord;
+    Out.vWorldCenterAngle = In.vWorldCenterAngle;
+    Out.vColor = In.vColor;
+    return Out;
+}

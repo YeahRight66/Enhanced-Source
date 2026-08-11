@@ -17,6 +17,9 @@ lightingpass_global_ps30.fxc
 lightingpass_point_ps30.fxc
 lightingpass_spot_ps30.fxc
 
+deferred_particlesphere_vs30.fxc
+deferred_particlesphere_ps30.fxc
+
 screenspace_shading_ps30.fxc
 screenspace_combine_ps30.fxc
 

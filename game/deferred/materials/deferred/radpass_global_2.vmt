@@ -3,9 +3,4 @@
 	"$SURFACEMODE"		"0"
 	"$SAMPLEPHASE"		"2"
 	"$RSMALBEDO"		"_rt_rh_rsm_albedo"
-	"$GEOMETRY"		"_rt_rh_geometry"
-	"$DISTANCE"		"_rt_rh_geometrydistance"
-	"$SHADOWDISTANCE"		"_rt_rh_shadowdistance"
-	"$SURFACEGUIDE"		"_rt_rh_surfaceguide"
-	"$OPENSKY"		"_rt_rh_opensky10"
 }

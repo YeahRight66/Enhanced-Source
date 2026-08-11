@@ -1,10 +1,4 @@
 "RADIOSITY_FILTER"
 {
-	"$SHR"		"_rt_rh_sh_r_00"
-	"$SHG"		"_rt_rh_sh_g_00"
-	"$SHB"		"_rt_rh_sh_b_00"
-	"$META"		"_rt_rh_meta_00"
-	"$VIS"		"_rt_rh_visibility"
-	"$GEOMETRY"		"_rt_rh_geometry"
 	"$FILTERPHASE"		"0"
 }

@@ -1,4 +1,4 @@
-//========= Copyright © 1996-2005, Valve Corporation, All rights reserved. ============//
+//========= Copyright (c) 1996-2005, Valve Corporation, All rights reserved. ============//
 //
 // Purpose: 
 //
@@ -80,6 +80,7 @@ private:
 	CParticleLightInfo m_AmbientLight;
 	CParticleLightInfo m_DirectionalLight;
 	bool			m_bUsingPixelShaders;
+	bool			m_bUsingDeferredLighting;
 };
 
 
@@ -179,14 +180,28 @@ inline void CParticleSphereRenderer::RenderParticle(
 	
 	ClampColor( vColor );
 
-	RenderParticle_Color255SizeNormalAngle(
-		pDraw,
-		vTransformedPos,
-		vColor,			// ambient color
-		flAlpha,		// alpha
-		flParticleSize,
-		vec3_origin,
-		flAngle );
+	if ( m_bUsingDeferredLighting )
+	{
+		RenderParticle_Color255SizeAngleWorldPos(
+			pDraw,
+			vTransformedPos,
+			vOriginalPos,
+			vColor,
+			flAlpha,
+			flParticleSize,
+			flAngle );
+	}
+	else
+	{
+		RenderParticle_Color255SizeNormalAngle(
+			pDraw,
+			vTransformedPos,
+			vColor,			// ambient color
+			flAlpha,		// alpha
+			flParticleSize,
+			vec3_origin,
+			flAngle );
+	}
 }
 
 inline void CParticleSphereRenderer::RenderParticle_AddColor( 
@@ -217,12 +232,26 @@ inline void CParticleSphereRenderer::RenderParticle_AddColor(
 	
 	ClampColor( vColor );
 
-	RenderParticle_Color255Size(
-		pDraw,
-		vTransformedPos,
-		vColor,			// ambient color
-		flAlpha,		// alpha
-		flParticleSize );
+	if ( m_bUsingDeferredLighting )
+	{
+		RenderParticle_Color255SizeAngleWorldPos(
+			pDraw,
+			vTransformedPos,
+			vOriginalPos,
+			vColor,
+			flAlpha,
+			flParticleSize,
+			0.0f );
+	}
+	else
+	{
+		RenderParticle_Color255Size(
+			pDraw,
+			vTransformedPos,
+			vColor,			// ambient color
+			flAlpha,		// alpha
+			flParticleSize );
+	}
 }
 
 

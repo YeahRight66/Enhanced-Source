@@ -1,4 +1,4 @@
-//========= Copyright © 1996-2005, Valve Corporation, All rights reserved. ============//
+//========= Copyright (c) 1996-2005, Valve Corporation, All rights reserved. ============//
 //
 // Purpose: 
 //
@@ -251,6 +251,59 @@ inline void RenderParticle_Color255SizeNormalAngle(
 	pBuilder->TexCoord2f( 0, pDraw->m_pSubTexture->m_tCoordMaxs[0], pDraw->m_pSubTexture->m_tCoordMaxs[1] );
 	pBuilder->Normal3fv( (float*)&vNormal );
  	pBuilder->AdvanceVertex();
+}
+
+
+// Deferred forward particles keep their billboard vertices in camera space,
+// just like the legacy particle manager expects, but need the particle centre
+// in world space to sample clipmapped lighting. TEXCOORD1 is constant across
+// the quad; its W component carries the billboard roll for normal rotation.
+inline void RenderParticle_Color255SizeAngleWorldPos(
+	ParticleDraw *pDraw,
+	const Vector &pos,
+	const Vector &worldPos,
+	const Vector &color,
+	const float alpha,
+	const float size,
+	const float angle )
+{
+	if ( alpha < 0.5f )
+		return;
+
+	CMeshBuilder *pBuilder = pDraw->GetMeshBuilder();
+	if ( !pBuilder )
+		return;
+
+	unsigned char ubColor[4];
+	ubColor[0] = (unsigned char)RoundFloatToInt( color.x );
+	ubColor[1] = (unsigned char)RoundFloatToInt( color.y );
+	ubColor[2] = (unsigned char)RoundFloatToInt( color.z );
+	ubColor[3] = (unsigned char)RoundFloatToInt( alpha );
+
+	const float ca = (float)cos( angle );
+	const float sa = (float)sin( angle );
+
+#define WRITE_DEFERRED_PARTICLE_VERTEX( px, py, tu, tv ) \
+	pBuilder->Position3f( (px), (py), pos.z ); \
+	pBuilder->Color4ubv( ubColor ); \
+	pBuilder->TexCoord2f( 0, (tu), (tv) ); \
+	pBuilder->TexCoord4f( 1, worldPos.x, worldPos.y, worldPos.z, angle ); \
+	pBuilder->AdvanceVertex()
+
+	WRITE_DEFERRED_PARTICLE_VERTEX(
+		pos.x + ( -ca + sa ) * size, pos.y + ( -sa - ca ) * size,
+		pDraw->m_pSubTexture->m_tCoordMins[0], pDraw->m_pSubTexture->m_tCoordMaxs[1] );
+	WRITE_DEFERRED_PARTICLE_VERTEX(
+		pos.x + ( -ca - sa ) * size, pos.y + ( -sa + ca ) * size,
+		pDraw->m_pSubTexture->m_tCoordMins[0], pDraw->m_pSubTexture->m_tCoordMins[1] );
+	WRITE_DEFERRED_PARTICLE_VERTEX(
+		pos.x + ( ca - sa ) * size, pos.y + ( sa + ca ) * size,
+		pDraw->m_pSubTexture->m_tCoordMaxs[0], pDraw->m_pSubTexture->m_tCoordMins[1] );
+	WRITE_DEFERRED_PARTICLE_VERTEX(
+		pos.x + ( ca + sa ) * size, pos.y + ( sa - ca ) * size,
+		pDraw->m_pSubTexture->m_tCoordMaxs[0], pDraw->m_pSubTexture->m_tCoordMaxs[1] );
+
+#undef WRITE_DEFERRED_PARTICLE_VERTEX
 }
 
 

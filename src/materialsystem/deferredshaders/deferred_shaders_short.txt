@@ -5,6 +5,9 @@ gbuffer_defshading_ps30.fxc
 screenspace_shading_ps30.fxc
 screenspace_combine_ps30.fxc
 
+deferred_particlesphere_vs30.fxc
+deferred_particlesphere_ps30.fxc
+
 radiosity_gen_global_ps30.fxc
 radiosity_filter_ps30.fxc
 radiosity_gen_vs30.fxc

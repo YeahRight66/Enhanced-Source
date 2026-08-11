@@ -1,4 +1,4 @@
-//========= Copyright © 1996-2005, Valve Corporation, All rights reserved. ============//
+//========= Copyright (c) 1996-2005, Valve Corporation, All rights reserved. ============//
 //
 // Purpose: Implements a particle system steam jet.
 //
@@ -9,9 +9,27 @@
 #include "baseparticleentity.h"
 #include "particles_simple.h"
 #include "filesystem.h"
+#include "deferred/cdeferred_manager_client.h"
 
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
+
+ConVar deferred_particle_lighting( "deferred_particle_lighting", "1", FCVAR_ARCHIVE,
+	"Enable deferred sun and GI lighting for supported forward particles." );
+ConVar deferred_particle_gi_intensity( "deferred_particle_gi_intensity", "1.0", FCVAR_ARCHIVE,
+	"Indirect-light multiplier for deferred particles." );
+ConVar deferred_particle_bounce_intensity( "deferred_particle_bounce_intensity", "1.0", FCVAR_ARCHIVE,
+	"Secondary-bounce multiplier for deferred particles." );
+ConVar deferred_particle_sun_intensity( "deferred_particle_sun_intensity", "1.0", FCVAR_ARCHIVE,
+	"Direct global-sun multiplier for deferred particles." );
+ConVar deferred_particle_normal_strength( "deferred_particle_normal_strength", "0.65", FCVAR_ARCHIVE,
+	"Directional response of particle sphere normals; zero is isotropic." );
+ConVar deferred_particle_legacy_intensity( "deferred_particle_legacy_intensity", "1.0", FCVAR_ARCHIVE,
+	"Compatibility contribution from env_particlelight and entity particle lighting." );
+ConVar deferred_particle_shadow_softness( "deferred_particle_shadow_softness", "1.5", FCVAR_ARCHIVE,
+	"CSM filter radius used by deferred particles." );
+ConVar deferred_particle_lighting_debug( "deferred_particle_lighting_debug", "0", FCVAR_CHEAT,
+	"Deferred particle debug: 1=GI, 2=sun, 3=clip weights, 4=decoded normal." );
 
 #ifdef HL2_EPISODIC
 	#define SMOKESTACK_MAX_MATERIALS 8
@@ -165,6 +183,7 @@ C_SmokeStack::C_SmokeStack()
 	m_pParticleMgr = NULL;
 	m_MaterialHandle[0] = INVALID_MATERIAL_HANDLE;
 	m_iMaterialModel = -1;
+	m_iMaxFrames = 0;
 	
 	m_SpreadSpeed = 15;
 	m_Speed = 30;
@@ -241,28 +260,41 @@ void C_SmokeStack::Start(CParticleMgr *pParticleMgr, IPrototypeArgAccess *pArgs)
 			pExt[0] = 0;
 	}
 
+	// Start with one controlled production case. Custom SmokeMaterial values
+	// keep their original VMT and renderer until explicitly opted into the new
+	// particle shader.
+	const bool bDeferredStockSmoke = GetDeferredManager()->IsDeferredRenderingEnabled() &&
+		!Q_stricmp( str, "particle/SmokeStack" );
+	if ( bDeferredStockSmoke )
+	{
+		Q_strncpy( str, "particle/SmokeStack_deferred", sizeof( str ) );
+	}
+
 	m_MaterialHandle[0] = m_ParticleEffect.FindOrAddMaterial( str );
 
 #ifdef HL2_EPISODIC
-	int iCount = 1;
-	char szNames[512];
-
-	int iLength = Q_strlen( str );
-	str[iLength-1] = '\0';
-
-	Q_snprintf( szNames, sizeof( szNames ), "%s%d.vmt", str, iCount );
-
-	while ( filesystem->FileExists( VarArgs( "materials/%s", szNames ) ) && iCount < SMOKESTACK_MAX_MATERIALS )
+	if ( !bDeferredStockSmoke )
 	{
-		char *pExt = Q_stristr( szNames, ".vmt" );
-		if ( pExt )
-			pExt[0] = 0;
+		int iCount = 1;
+		char szNames[512];
 
-		m_MaterialHandle[iCount] = m_ParticleEffect.FindOrAddMaterial( szNames );
-		iCount++;
+		int iLength = Q_strlen( str );
+		str[iLength-1] = '\0';
+
+		Q_snprintf( szNames, sizeof( szNames ), "%s%d.vmt", str, iCount );
+
+		while ( filesystem->FileExists( VarArgs( "materials/%s", szNames ) ) && iCount < SMOKESTACK_MAX_MATERIALS )
+		{
+			char *pExt = Q_stristr( szNames, ".vmt" );
+			if ( pExt )
+				pExt[0] = 0;
+
+			m_MaterialHandle[iCount] = m_ParticleEffect.FindOrAddMaterial( szNames );
+			iCount++;
+		}
+
+		m_iMaxFrames = iCount-1;
 	}
-		
-	m_iMaxFrames = iCount-1;
 #endif
 
 	m_ParticleSpawn.Init(m_Rate);

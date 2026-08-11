@@ -1,0 +1,17 @@
+"DeferredParticleSphere"
+{
+    "$bumpmap"                 "particle/SmokeStack"
+    "$particlealbedo"          "[0.68 0.68 0.68]"
+    "$depthblend"              "1"
+    "$depthblendscale"         "50"
+    "$translucent"             "1"
+    "$vertexcolor"             "1"
+    "$vertexalpha"             "1"
+
+    "Proxies"
+    {
+        "ParticleSphereProxy"
+        {
+        }
+    }
+}

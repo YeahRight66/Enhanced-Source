@@ -1,0 +1,270 @@
+// STATIC:  "DEPTHBLEND"     "0..1"
+// DYNAMIC: "PIXELFOGTYPE"   "0..1"
+// DYNAMIC: "GI_ENABLED"     "0..1"
+// DYNAMIC: "SECOND_BOUNCE"  "0..1"
+// DYNAMIC: "HAS_SHADOW"     "0..1"
+// SKIP: !$GI_ENABLED && $SECOND_BOUNCE
+
+#include "common_fog_ps_fxc.h"
+#include "common_deferred_fxc.h"
+#include "radiance_hints_common_fxc.h"
+
+sampler sParticle : register( s0 );
+#if DEPTHBLEND
+sampler sDepth : register( s1 );
+#endif
+
+#if GI_ENABLED
+sampler sNearFirstR : register( s2 );
+sampler sNearFirstG : register( s3 );
+sampler sNearFirstB : register( s4 );
+
+#if SECOND_BOUNCE
+sampler sNearSecondR : register( s5 );
+sampler sNearSecondG : register( s6 );
+sampler sNearSecondB : register( s7 );
+sampler sFarFirstR   : register( s8 );
+sampler sFarFirstG   : register( s9 );
+sampler sFarFirstB   : register( s10 );
+sampler sFarSecondR  : register( s11 );
+sampler sFarSecondG  : register( s12 );
+sampler sFarSecondB  : register( s13 );
+#else
+sampler sNearMeta  : register( s5 );
+sampler sFarFirstR : register( s6 );
+sampler sFarFirstG : register( s7 );
+sampler sFarFirstB : register( s8 );
+sampler sFarMeta   : register( s9 );
+#endif
+#endif
+
+#if HAS_SHADOW
+#if SECOND_BOUNCE
+sampler sSunShadow : register( s14 );
+#else
+sampler sSunShadow : register( s10 );
+#endif
+#endif
+
+const float4 g_DepthFeatheringConstants : register( c0 );
+const float3 g_CameraPosition            : register( c1 );
+
+const float4x3 g_matOrtho[2]       : register( c2 );
+const float4 g_vecUVTransform[2]   : register( c8 );
+const float3 g_vecSlopeData[2]     : register( c10 );
+const float4 g_vecFilterConfigA[2] : register( c12 );
+const float4 g_vecFilterConfigB[2] : register( c14 );
+
+const float3 g_SunDirection   : register( c16 );
+const float3 g_SunDiffuse     : register( c17 );
+const float3 g_AmbientHigh    : register( c18 );
+const float3 g_AmbientLowHalf : register( c19 );
+
+// xyz = clip origin, w = reciprocal extent.
+const float4 g_NearClip : register( c20 );
+const float4 g_FarClip  : register( c21 );
+// x = GI intensity, y = secondary bounce, z = normal response, w = sun intensity.
+const float4 g_LightingSettings : register( c22 );
+// x = near blend cells, y = far fade cells, z = volume size, w = legacy intensity.
+const float4 g_ClipSettings : register( c23 );
+// xyz = camera-right vector, w = master lighting enable.
+const float4 g_CameraRightLighting : register( c24 );
+// xyz = particle scattering albedo, w = debug mode.
+const float4 g_ParticleSettings : register( c25 );
+// x = particle CSM filter radius.
+const float4 g_ShadowSettings : register( c26 );
+const float3 g_LegacyLightPosition : register( c27 );
+const float3 g_LegacyLightColor    : register( c28 );
+
+const float4 g_FogParams : register( c40 );
+
+struct PS_INPUT
+{
+    float2 vTexCoord         : TEXCOORD0;
+    float4 vWorldCenterAngle : TEXCOORD1;
+    float4 vScreenPos        : TEXCOORD2;
+    float4 vColor            : COLOR0;
+};
+
+float ParticleEdgeCells( float3 uvw )
+{
+    float3 edge = min( uvw, 1.0f - uvw );
+    return max( min( edge.x, min( edge.y, edge.z ) ) * g_ClipSettings.z, 0.0f );
+}
+
+float ParticleSmoothWeight( float value )
+{
+    value = saturate( value );
+    return value * value * ( 3.0f - 2.0f * value );
+}
+
+float3 ParticleEvaluateIrradiance(
+    float4 shR, float4 shG, float4 shB, float3 worldNormal )
+{
+    shR = RH_LimitRadianceSH( shR );
+    shG = RH_LimitRadianceSH( shG );
+    shB = RH_LimitRadianceSH( shB );
+    float3 directional = RH_EvaluateDiffuse( shR, shG, shB, worldNormal );
+    float3 isotropic = max( float3( shR.w, shG.w, shB.w ) * 0.8862269255f, 0.0f );
+    return lerp( isotropic, directional, g_LightingSettings.z );
+}
+
+#if HAS_SHADOW
+float ParticleShadowCompare( float2 uv, float receiverDepth )
+{
+    return step( receiverDepth, tex2D( sSunShadow, uv ).r );
+}
+
+float ParticleCascadedShadow( float3 worldPos, float3 worldNormal, float normalDotLight )
+{
+    float3 nearShadow = ToShadowSpace_Ortho(
+        worldPos, normalDotLight, worldNormal, g_vecSlopeData[0], g_matOrtho[0] );
+    float3 farShadow = ToShadowSpace_Ortho(
+        worldPos, normalDotLight, worldNormal, g_vecSlopeData[1], g_matOrtho[1] );
+
+    float useFar = any( floor( ( nearShadow.xyz - 0.0015f ) * 1.003f ) ) ? 1.0f : 0.0f;
+    float outsideFar = any( floor( ( farShadow.xyz - 0.003f ) * 1.006f ) ) ? 1.0f : 0.0f;
+    float3 shadowPosition = lerp( nearShadow, farShadow, useFar );
+    float4 uvTransform = lerp( g_vecUVTransform[0], g_vecUVTransform[1], useFar );
+    float4 filterConfig = lerp( g_vecFilterConfigA[0], g_vecFilterConfigA[1], useFar );
+    shadowPosition.xy = shadowPosition.xy * uvTransform.zw + uvTransform.xy;
+
+    float2 radius = filterConfig.xy * max( g_ShadowSettings.x, 0.25f );
+    float receiverDepth = shadowPosition.z - 0.00035f;
+    float visibility =
+        ParticleShadowCompare( shadowPosition.xy + float2( -radius.x, -radius.y ), receiverDepth ) +
+        ParticleShadowCompare( shadowPosition.xy + float2(  radius.x, -radius.y ), receiverDepth ) +
+        ParticleShadowCompare( shadowPosition.xy + float2( -radius.x,  radius.y ), receiverDepth ) +
+        ParticleShadowCompare( shadowPosition.xy + float2(  radius.x,  radius.y ), receiverDepth );
+    visibility *= 0.25f;
+    return lerp( visibility, 1.0f, outsideFar );
+}
+#endif
+
+float4 main( const PS_INPUT In ) : COLOR0
+{
+    float4 particleSample = tex2D( sParticle, In.vTexCoord );
+    float alpha = particleSample.a * In.vColor.a;
+
+#if DEPTHBLEND
+    alpha *= DepthFeathering( sDepth, In.vScreenPos.xy / In.vScreenPos.w,
+        In.vScreenPos.z, In.vScreenPos.w, g_DepthFeatheringConstants );
+#endif
+
+    clip( alpha - ( 1.0f / 255.0f ) );
+
+    float3 tangentNormal = RH_SafeNormalize(
+        particleSample.rgb * 2.0f - 1.0f, float3( 0.0f, 0.0f, 1.0f ) );
+    tangentNormal.z = abs( tangentNormal.z );
+    float sineAngle;
+    float cosineAngle;
+    sincos( In.vWorldCenterAngle.w, sineAngle, cosineAngle );
+    tangentNormal.xy = RH_Rotate2D( tangentNormal.xy, sineAngle, cosineAngle );
+
+    float3 worldPos = In.vWorldCenterAngle.xyz;
+    float3 toCamera = RH_SafeNormalize(
+        g_CameraPosition - worldPos, float3( 0.0f, 0.0f, 1.0f ) );
+    float3 particleUp = RH_SafeNormalize(
+        cross( toCamera, g_CameraRightLighting.xyz ), float3( 0.0f, 0.0f, 1.0f ) );
+    float3 particleRight = RH_SafeNormalize(
+        cross( particleUp, toCamera ), g_CameraRightLighting.xyz );
+    float3 worldNormal = RH_SafeNormalize(
+        particleRight * tangentNormal.x + particleUp * tangentNormal.y +
+        toCamera * tangentNormal.z, toCamera );
+
+    float upAmount = saturate( worldNormal.z * 0.5f + 0.5f );
+    float3 fallbackAmbient = lerp( g_AmbientLowHalf, g_AmbientHigh, upAmount );
+    float3 indirectLighting = fallbackAmbient;
+    float nearWeight = 0.0f;
+    float farWeight = 0.0f;
+    float volumeCoverage = 0.0f;
+
+#if GI_ENABLED
+    float3 nearUVW = ( worldPos - g_NearClip.xyz ) * g_NearClip.w;
+    float3 farUVW = ( worldPos - g_FarClip.xyz ) * g_FarClip.w;
+    nearWeight = RH_InsideVolume( nearUVW ) * ParticleSmoothWeight(
+        ParticleEdgeCells( nearUVW ) / max( g_ClipSettings.x, 1.0f ) );
+    farWeight = RH_InsideVolume( farUVW ) * ParticleSmoothWeight(
+        ParticleEdgeCells( farUVW ) / max( g_ClipSettings.y, 1.0f ) ) * ( 1.0f - nearWeight );
+    volumeCoverage = saturate( nearWeight + farWeight );
+
+    float3 giLighting = 0.0f;
+    if ( nearWeight > 1.0e-5f )
+    {
+        float4 shR = RH_SampleAtlas( sNearFirstR, nearUVW );
+        float4 shG = RH_SampleAtlas( sNearFirstG, nearUVW );
+        float4 shB = RH_SampleAtlas( sNearFirstB, nearUVW );
+#if SECOND_BOUNCE
+        shR += RH_SampleAtlas( sNearSecondR, nearUVW ) * g_LightingSettings.y;
+        shG += RH_SampleAtlas( sNearSecondG, nearUVW ) * g_LightingSettings.y;
+        shB += RH_SampleAtlas( sNearSecondB, nearUVW ) * g_LightingSettings.y;
+        float confidence = 1.0f;
+#else
+        float confidence = RH_MetaConfidence( RH_SampleAtlas( sNearMeta, nearUVW ) );
+#endif
+        giLighting += ParticleEvaluateIrradiance( shR, shG, shB, worldNormal ) *
+            nearWeight * confidence;
+    }
+
+    if ( farWeight > 1.0e-5f )
+    {
+        float4 shR = RH_SampleAtlas( sFarFirstR, farUVW );
+        float4 shG = RH_SampleAtlas( sFarFirstG, farUVW );
+        float4 shB = RH_SampleAtlas( sFarFirstB, farUVW );
+#if SECOND_BOUNCE
+        shR += RH_SampleAtlas( sFarSecondR, farUVW ) * g_LightingSettings.y;
+        shG += RH_SampleAtlas( sFarSecondG, farUVW ) * g_LightingSettings.y;
+        shB += RH_SampleAtlas( sFarSecondB, farUVW ) * g_LightingSettings.y;
+        float confidence = 1.0f;
+#else
+        float confidence = RH_MetaConfidence( RH_SampleAtlas( sFarMeta, farUVW ) );
+#endif
+        giLighting += ParticleEvaluateIrradiance( shR, shG, shB, worldNormal ) *
+            farWeight * confidence;
+    }
+
+    indirectLighting = lerp( fallbackAmbient,
+        giLighting * g_LightingSettings.x, volumeCoverage );
+#endif
+
+    float normalDotSun = dot( worldNormal, g_SunDirection );
+    float sunResponse = lerp( 1.0f,
+        saturate( normalDotSun * 0.5f + 0.5f ), g_LightingSettings.z );
+    float sunVisibility = 1.0f;
+#if HAS_SHADOW
+    sunVisibility = ParticleCascadedShadow( worldPos, worldNormal, normalDotSun );
+#endif
+    float3 directLighting = g_SunDiffuse * g_LightingSettings.w *
+        sunResponse * sunVisibility;
+
+    float3 legacyDelta = g_LegacyLightPosition - worldPos;
+    float legacyDistanceSquared = max( dot( legacyDelta, legacyDelta ), 1.0f );
+    float legacyColorScale = max( g_LegacyLightColor.x,
+        max( g_LegacyLightColor.y, g_LegacyLightColor.z ) );
+    float3 legacyHue = g_LegacyLightColor / max( legacyColorScale, 0.01f );
+    float legacyAttenuation = saturate( legacyColorScale / legacyDistanceSquared );
+    float3 legacyDirection = RH_SafeNormalize( legacyDelta, toCamera );
+    float legacyResponse = lerp( 1.0f,
+        saturate( dot( worldNormal, legacyDirection ) * 0.5f + 0.5f ),
+        g_LightingSettings.z );
+    float3 legacyLighting = In.vColor.rgb +
+        g_ParticleSettings.rgb * legacyHue * legacyAttenuation * legacyResponse;
+
+    float3 outputColor = legacyLighting * g_ClipSettings.w;
+    if ( g_CameraRightLighting.w > 0.5f )
+        outputColor += g_ParticleSettings.rgb * ( indirectLighting + directLighting );
+
+    if ( g_ParticleSettings.w > 0.5f && g_ParticleSettings.w < 1.5f )
+        outputColor = indirectLighting;
+    else if ( g_ParticleSettings.w >= 1.5f && g_ParticleSettings.w < 2.5f )
+        outputColor = directLighting;
+    else if ( g_ParticleSettings.w >= 2.5f && g_ParticleSettings.w < 3.5f )
+        outputColor = float3( nearWeight, farWeight, volumeCoverage );
+    else if ( g_ParticleSettings.w >= 3.5f )
+        outputColor = worldNormal * 0.5f + 0.5f;
+
+    float fogFactor = CalcPixelFogFactor( PIXELFOGTYPE, g_FogParams,
+        g_CameraPosition, worldPos, In.vScreenPos.z );
+    return FinalOutput( float4( max( outputColor, 0.0f ), alpha ),
+        fogFactor, PIXELFOGTYPE, TONEMAP_SCALE_LINEAR );
+}

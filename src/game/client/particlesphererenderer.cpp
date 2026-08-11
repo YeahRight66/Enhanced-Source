@@ -1,4 +1,4 @@
-//========= Copyright © 1996-2005, Valve Corporation, All rights reserved. ============//
+//========= Copyright (c) 1996-2005, Valve Corporation, All rights reserved. ============//
 //
 // Purpose: 
 //
@@ -18,6 +18,7 @@ CParticleSphereRenderer::CParticleSphereRenderer()
 	memset( &m_DirectionalLight, 0, sizeof( m_DirectionalLight ) );
 
 	m_bUsingPixelShaders = false;
+	m_bUsingDeferredLighting = false;
 	m_iLastTickStartRenderCalled = -1;
 	m_pParticleMgr = NULL;
 }
@@ -34,6 +35,9 @@ void CParticleSphereRenderer::Init( CParticleMgr *pParticleMgr, IMaterial *pMate
 		m_bUsingPixelShaders = true;
 	else
 		m_bUsingPixelShaders = false;
+
+	m_bUsingDeferredLighting =
+		pMaterial && !Q_stricmp( pMaterial->GetShaderName(), "DeferredParticleSphere" );
 }
 
 

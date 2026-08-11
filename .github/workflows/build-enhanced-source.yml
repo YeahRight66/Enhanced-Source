@@ -1394,6 +1394,8 @@ jobs:
               "decalmodulate_ps20b.inc",
               "decalmodulate_vs30.inc",
               "decalmodulate_ps30.inc",
+              "deferred_particlesphere_vs30.inc",
+              "deferred_particlesphere_ps30.inc",
               "lightingpass_global_ps30.inc",
               "radiosity_blend_ps30.inc",
               "radiosity_filter_ps30.inc",
