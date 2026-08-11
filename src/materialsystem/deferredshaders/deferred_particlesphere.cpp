@@ -104,7 +104,6 @@ BEGIN_VS_SHADER( DEFERREDPARTICLESPHERE,
             SET_DYNAMIC_VERTEX_SHADER( deferred_particlesphere_vs30 );
 
             DECLARE_DYNAMIC_PIXEL_SHADER( deferred_particlesphere_ps30 );
-            SET_DYNAMIC_PIXEL_SHADER_COMBO( PIXELFOGTYPE, pShaderAPI->GetPixelFogCombo() );
             SET_DYNAMIC_PIXEL_SHADER_COMBO( GI_ENABLED, bGI ? 1 : 0 );
             SET_DYNAMIC_PIXEL_SHADER_COMBO( SECOND_BOUNCE, bSecondBounce ? 1 : 0 );
             SET_DYNAMIC_PIXEL_SHADER_COMBO( HAS_SHADOW, bShadow ? 1 : 0 );
